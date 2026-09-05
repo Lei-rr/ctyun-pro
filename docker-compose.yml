@@ -1,0 +1,15 @@
+services:
+  ctyun-pro:
+    build: .
+    image: ghcr.io/lei-rr/ctyun-pro:latest
+    container_name: ctyun-pro
+    restart: always
+    ports:
+      - "3088:3088"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - CTYUN_PORT=3088
+      - CTYUN_DATA_DIR=/app/data
+      - ADMIN_PASSWORD=
+      - OCR_URL=https://orc.1999111.xyz/ocr
