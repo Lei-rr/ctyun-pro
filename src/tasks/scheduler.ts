@@ -2,6 +2,7 @@ import type { AccountConfig } from '../config.js';
 import type { Logger } from '../core/logger.js';
 import { TaskRunner } from './task-runner.js';
 import { RedeemTask } from './redeem.js';
+import { sendWebhookNotification } from '../core/utils.js';
 import type { AccountManager } from '../core/account-manager.js';
 
 /**
@@ -71,13 +72,15 @@ export class TaskScheduler {
       const client = this.accountManager.getClient(name);
       if (!client || !client.loginInfo) continue;
 
-      // 1. 每日自动任务调度 (严格检查 enabled 开关)
+      // 1. 每日自动任务调度 (严格检查 enabled 开关与定时命中)
       const tConf = acc.taskConfig;
       if (!tConf || tConf.enabled === false) {
         // 用户未开启或关闭了每日任务总开关，绝不自动执行
       } else {
-        const targetTime = tConf.scheduleTime || '08:00';
-        if (tConf.lastRunDate !== today && currentHHmm >= targetTime) {
+        const targetTime = tConf.scheduleTime || '03:30';
+        // 准点命中判定：仅在到达设定时间的当分钟 (currentHHmm === targetTime) 且今日未执行时触发
+        // 若服务重启或时间已过 (currentHHmm > targetTime)，绝不补跑，避免重启误触
+        if (tConf.lastRunDate !== today && currentHHmm === targetTime) {
           try {
             this.logger.addLog('info', `[${name}] ⏰ 命中每日做任务定时 (${targetTime})，正在按策略自动执行...`);
             const dId = this.accountManager.getAccountState(name)?.desktops?.[0]?.desktopId;
@@ -87,16 +90,43 @@ export class TaskScheduler {
             acc.taskConfig = tConf;
             this.accountManager.saveToDisk();
             this.logger.addLog('success', `[${name}] 每日任务已执行: ${res.message}`);
+
+            // Webhook 通知
+            if (this.accountManager.webhookUrl) {
+              sendWebhookNotification(
+                this.accountManager.webhookUrl,
+                `天翼云电脑 - [${name}] 每日任务完成`,
+                `执行时间: ${targetTime}\n任务详情: ${res.message}`,
+              ).catch(() => {});
+            }
+
+            // 若开启了使用1小时挂机任务，自动连带触发智能补足时长挂机
+            if (tConf.keepAliveHang !== false) {
+              this.accountManager.manualHang(name).catch(() => {});
+            }
+
+            // 任务完成后异步拉取官方最新积分并刷新看板
+            this.accountManager.getPointsAndTasks(name)
+              .then(() => this.accountManager.notifyStatusChange())
+              .catch(() => {});
+
             this.accountManager.notifyStatusChange();
           } catch (e: any) {
             this.logger.addLog('warn', `[${name}] 自动任务执行跳过: ${e.message}`);
+            if (this.accountManager.webhookUrl) {
+              sendWebhookNotification(
+                this.accountManager.webhookUrl,
+                `天翼云电脑 - [${name}] 任务执行跳过`,
+                `原因: ${e.message}`,
+              ).catch(() => {});
+            }
           }
         }
       }
 
-      // 2. 自动兑换策略精准调度 (默认早晨 07:00 执行)
+      // 2. 自动兑换策略精准调度 (准点在 07:00 执行)
       const rConf = acc.redeemConfig;
-      if (rConf && rConf.enabled && rConf.lastRedeemDate !== today && currentHHmm >= '07:00') {
+      if (rConf && rConf.enabled && rConf.lastRedeemDate !== today && currentHHmm === '07:00') {
         let shouldRedeem = false;
         let reason = '';
 
@@ -150,8 +180,22 @@ export class TaskScheduler {
             rConf.lastRedeemDate = today;
             this.accountManager.saveToDisk();
             this.logger.addLog('success', `[${name}] 自动兑换成功: ${res.message}`);
+            if (this.accountManager.webhookUrl) {
+              sendWebhookNotification(
+                this.accountManager.webhookUrl,
+                `天翼云电脑 - [${name}] 自动兑换成功`,
+                `策略触发: ${reason}\n兑换结果: ${res.message}`,
+              ).catch(() => {});
+            }
           } catch (err: any) {
             this.logger.addLog('error', `[${name}] 自动兑换失败: ${err.message}`);
+            if (this.accountManager.webhookUrl) {
+              sendWebhookNotification(
+                this.accountManager.webhookUrl,
+                `天翼云电脑 - [${name}] 自动兑换异常`,
+                `策略: ${reason}\n错误: ${err.message}`,
+              ).catch(() => {});
+            }
           }
         }
       }

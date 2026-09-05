@@ -6,19 +6,17 @@ import {
   Monitor,
   Moon,
   Sun,
-  Plus,
   Server,
   Terminal,
   LogOut,
   Sliders,
+  Settings,
   CheckCircle2,
   RefreshCw,
   Sparkles,
   ChevronDown,
   Settings2,
   Shield,
-  Play,
-  Square,
 } from 'lucide-vue-next';
 import { Button } from '@/shared/ui/button';
 import { Badge } from '@/shared/ui/badge';
@@ -32,10 +30,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuLabel,
 } from '@/shared/ui/dropdown-menu';
 import { Toaster } from '@/shared/ui/sonner';
 import { ConfirmHost, confirmDialog } from '@/shared/ui/confirm';
+
+declare const __APP_VERSION__: string;
+const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'v1.1.2';
 import { toast } from 'vue-sonner';
 
 const store = useAppStore();
@@ -49,20 +49,26 @@ async function handleLogout() {
 
 // 当前移动端导航显示文本
 const currentNavTitle = computed(() => {
-  if (route.path === '/logs') return '保活日志';
-  return '账号与电脑';
+  if (route.path === '/logs') return '实时日志';
+  return '控制台';
 });
 
 // 全局设置弹窗
 const showSystemModal = ref(false);
 const sysKeepAlive = ref(60);
 const sysAdminPassword = ref('');
+const sysWebhookUrl = ref('');
 const sysLoading = ref(false);
 
-function openSystemModal() {
+function openConfigModal() {
   sysKeepAlive.value = store.keepAliveSeconds || 60;
   sysAdminPassword.value = '';
+  sysWebhookUrl.value = store.webhookUrl || '';
   showSystemModal.value = true;
+}
+
+function openSystemModal() {
+  openConfigModal();
 }
 
 async function saveSystemConfig() {
@@ -70,6 +76,7 @@ async function saveSystemConfig() {
   try {
     const payload: any = {
       keepAliveSeconds: Number(sysKeepAlive.value),
+      webhookUrl: sysWebhookUrl.value.trim(),
     };
     if (sysAdminPassword.value.trim()) {
       payload.adminPassword = sysAdminPassword.value.trim();
@@ -108,7 +115,7 @@ async function handleManualRedeemInModal() {
 
 let statusTimer: number | undefined;
 onMounted(async () => {
-  await store.checkAuthStatus();
+  // 路由守卫 router.beforeEach 已经执行过 checkAuthStatus，此处无需重复调用
   if (store.needAuth && !store.isAuthenticated) {
     router.replace('/login');
     return;
@@ -149,12 +156,12 @@ onUnmounted(() => {
             <nav class="hidden min-w-0 flex-1 items-center gap-0.5 overflow-x-auto lg:flex">
               <Button variant="ghost" as-child size="sm" class="h-9 shrink-0 px-3 text-[15px] cursor-pointer">
                 <RouterLink to="/" :class="route.path === '/' && 'bg-accent text-accent-foreground font-medium'">
-                  账号与电脑
+                  控制台
                 </RouterLink>
               </Button>
               <Button variant="ghost" as-child size="sm" class="h-9 shrink-0 px-3 text-[15px] cursor-pointer">
                 <RouterLink to="/logs" :class="route.path === '/logs' && 'bg-accent text-accent-foreground font-medium'">
-                  保活日志
+                  实时日志
                 </RouterLink>
               </Button>
             </nav>
@@ -171,12 +178,12 @@ onUnmounted(() => {
                 <DropdownMenuContent align="start" class="w-44">
                   <DropdownMenuItem as-child>
                     <RouterLink to="/" class="w-full cursor-pointer" :class="route.path === '/' && 'bg-accent font-medium'">
-                      账号与电脑
+                      控制台
                     </RouterLink>
                   </DropdownMenuItem>
                   <DropdownMenuItem as-child>
                     <RouterLink to="/logs" class="w-full cursor-pointer" :class="route.path === '/logs' && 'bg-accent font-medium'">
-                      保活日志
+                      实时日志
                     </RouterLink>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -185,16 +192,6 @@ onUnmounted(() => {
 
             <!-- 右侧工具栏 -->
             <div class="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
-              <!-- 添加账号快捷按钮 -->
-              <Button
-                size="sm"
-                class="gap-1.5 h-8 sm:h-9 text-[13px] sm:text-[14px] cursor-pointer shadow-xs"
-                @click="store.openAddModal()"
-              >
-                <Plus class="size-4" />
-                <span class="hidden sm:inline">添加账号</span>
-              </Button>
-
               <!-- 主题切换 -->
               <AppTooltip :content="store.isDark ? '切换为浅色模式' : '切换为深色模式'">
                 <Button variant="ghost" size="icon" class="size-9 cursor-pointer" @click="store.toggleTheme()">
@@ -203,32 +200,22 @@ onUnmounted(() => {
                 </Button>
               </AppTooltip>
 
-              <!-- 快捷管理下拉菜单 -->
+              <!-- 更多设置下拉菜单 -->
               <DropdownMenu>
                 <DropdownMenuTrigger as-child>
                   <Button variant="ghost" size="icon" class="size-9 cursor-pointer" title="更多功能">
                     <Settings2 class="size-4" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" class="w-48">
-                  <DropdownMenuLabel>快捷操作</DropdownMenuLabel>
-                  <DropdownMenuItem @click="store.triggerAll('start')" class="cursor-pointer">
-                    <Play class="size-3.5 mr-2 text-emerald-500 fill-current" />
-                    <span>全部启动保活</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem @click="store.triggerAll('stop')" class="cursor-pointer">
-                    <Square class="size-3.5 mr-2 text-muted-foreground fill-current" />
-                    <span>全部停止保活</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem @click="openSystemModal" class="cursor-pointer">
-                    <Sliders class="size-3.5 mr-2" />
-                    <span>全局系统设置</span>
+                <DropdownMenuContent align="end" class="w-44">
+                  <DropdownMenuItem @select="openConfigModal" class="gap-2 cursor-pointer">
+                    <Settings class="size-4" />
+                    <span>系统设置</span>
                   </DropdownMenuItem>
                   <template v-if="store.needAuth">
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem @click="handleLogout" class="text-destructive focus:text-destructive cursor-pointer">
-                      <LogOut class="size-3.5 mr-2" />
+                    <DropdownMenuItem @select="handleLogout" class="gap-2 text-destructive focus:text-destructive cursor-pointer">
+                      <LogOut class="size-4" />
                       <span>退出登录</span>
                     </DropdownMenuItem>
                   </template>
@@ -255,7 +242,7 @@ onUnmounted(() => {
             <div class="flex items-center gap-2 overflow-hidden text-ellipsis">
               <span class="font-semibold text-foreground/90">CTYUN-PRO</span>
               <Badge variant="outline" class="h-4.5 px-1.5 text-[10px] font-normal shrink-0 border-border/60">
-                v1.0.0
+                {{ appVersion }}
               </Badge>
               <span class="hidden sm:inline text-muted-foreground/70">· 天翼云电脑多账号保活与积分兑换系统</span>
             </div>
@@ -298,6 +285,7 @@ onUnmounted(() => {
             <Input
               type="text"
               v-model="store.formUser"
+              @input="store.onPhoneInput"
               placeholder="天翼云登录手机号"
               required
               class="h-9"
@@ -467,13 +455,6 @@ onUnmounted(() => {
               <div class="space-y-2 pt-1 text-xs">
                 <div class="flex items-center justify-between py-1">
                   <div>
-                    <span class="text-foreground font-medium">每日签到打卡</span>
-                    <span class="text-muted-foreground ml-1.5">(基础积分)</span>
-                  </div>
-                  <Switch v-model:checked="store.policyAutoSign" />
-                </div>
-                <div class="flex items-center justify-between py-1">
-                  <div>
                     <span class="text-foreground font-medium">登录 AI 云电脑</span>
                     <span class="text-emerald-500 font-medium ml-1.5">+100分</span>
                   </div>
@@ -486,13 +467,13 @@ onUnmounted(() => {
                   </div>
                   <Switch v-model:checked="store.policyAiChat" />
                 </div>
-                 <div class="flex items-center justify-between gap-4 rounded-md bg-emerald-500/10 px-3 py-2.5">
-                   <div class="min-w-0">
-                     <div class="text-foreground font-medium">使用 1 小时任务</div>
-                     <div class="text-xs text-muted-foreground">登录后自动通过纯协议会话累计，无需单独执行</div>
-                   </div>
-                   <span class="shrink-0 text-xs font-medium text-emerald-600 dark:text-emerald-400">自动执行</span>
-                 </div>
+                <div class="flex items-center justify-between py-1">
+                  <div>
+                    <span class="text-foreground font-medium">使用 1 小时智能补时挂机</span>
+                    <span class="text-emerald-500 font-medium ml-1.5">+100分</span>
+                  </div>
+                  <Switch v-model:checked="store.policyKeepAliveHang" />
+                </div>
               </div>
             </div>
           </div>
@@ -509,22 +490,50 @@ onUnmounted(() => {
 
             <div v-if="store.policyRedeemEnabled" class="pt-3 space-y-3 border-t border-border/40">
               <div class="space-y-1.5">
-                <label class="text-xs font-medium text-foreground">目标商品</label>
-                <select
-                  v-model="store.policyTargetProdId"
-                  class="w-full h-9 px-3 text-xs rounded-lg bg-background border border-input text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                >
-                  <option
-                    v-for="item in store.policyRewards"
-                    :key="item.prodId"
-                    :value="item.prodId"
+                <div class="flex items-center justify-between">
+                  <label class="text-xs font-medium text-foreground">目标商品</label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-2 text-[11px] gap-1 text-muted-foreground hover:text-foreground cursor-pointer"
+                    :disabled="store.policyRewardsLoading"
+                    @click="store.refreshPolicyRewards()"
+                    title="从天翼云官方商城同步最新商品目录"
                   >
-                    {{ item.prodName }} ({{ item.costPoints }} 积分)
-                  </option>
-                   <option v-if="store.policyRewards.length === 0" value="" disabled>
-                     暂无官方商品数据
-                   </option>
-                </select>
+                    <RefreshCw class="size-3" :class="{ 'animate-spin': store.policyRewardsLoading }" />
+                    <span>刷新商品</span>
+                  </Button>
+                </div>
+                <div class="flex items-center gap-2">
+                  <select
+                    v-model="store.policyTargetProdId"
+                    class="flex-1 h-9 px-3 text-xs rounded-lg bg-background border border-input text-foreground focus:outline-none focus:ring-1 focus:ring-ring min-w-0"
+                  >
+                    <option
+                      v-for="item in store.policyRewards"
+                      :key="item.prodId"
+                      :value="item.prodId"
+                    >
+                      {{ item.prodName }} ({{ item.costPoints }} 积分)
+                    </option>
+                    <option v-if="store.policyRewards.length === 0" value="" disabled>
+                      暂无官方商品数据
+                    </option>
+                  </select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    class="h-9 px-2.5 text-xs gap-1 cursor-pointer shrink-0 border-border/60"
+                    :disabled="store.policyRewardsLoading"
+                    @click="store.refreshPolicyRewards()"
+                    title="从天翼云官方商城同步最新商品"
+                  >
+                    <RefreshCw class="size-3.5" :class="{ 'animate-spin': store.policyRewardsLoading }" />
+                    <span>刷新</span>
+                  </Button>
+                </div>
               </div>
 
               <div class="space-y-1.5">
@@ -603,10 +612,10 @@ onUnmounted(() => {
         </template>
       </AppDialog>
 
-      <!-- 弹窗 3: 全局系统设置 (采用规范的 AppDialog) -->
+      <!-- 弹窗 3: 系统设置 (采用规范的 AppDialog) -->
       <AppDialog
         v-model:open="showSystemModal"
-        title="全局系统设置"
+        title="系统设置"
         description="配置项将自动持久化至 data/config.json"
         content-class="sm:max-w-md"
       >
@@ -617,6 +626,16 @@ onUnmounted(() => {
               type="password"
               v-model="sysAdminPassword"
               placeholder="设置新密码"
+              class="h-9"
+            />
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="text-xs font-medium text-foreground">Webhook 推送地址 (支持 Server酱 / Bark / 飞书 / 企微 / 钉钉)</label>
+            <Input
+              type="text"
+              v-model="sysWebhookUrl"
+              placeholder="https://..."
               class="h-9"
             />
           </div>

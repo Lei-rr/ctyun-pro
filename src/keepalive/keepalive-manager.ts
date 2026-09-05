@@ -9,6 +9,10 @@ export interface ManagedDesktopState {
   useStatusText: string;
   imageName?: string;
   flavorName?: string;
+  objType?: number;
+  objId?: string;
+  poolId?: string;
+  isPool?: boolean;
   status: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
   lastHeartbeat?: string;
 }
@@ -80,15 +84,61 @@ export class KeepAliveManager {
       const d = desktops[i];
       const state = desktopStates[i];
 
-      if (d.useStatusText !== '运行中') {
+      // 若云电脑未处于运行中（已关机/离线等），先自动下发官方开机指令并轮询等待开机就绪
+      const isRunning = d.useStatusText === '运行中' || d.useStatusText === '离线运行';
+      if (!isRunning) {
         this.logger.addLog(
           'warn',
-          `[${accountName}][${d.desktopCode || d.desktopId}] 状态: [${d.useStatusText}]，天翼云正在触发自动开机，准备握手连接...`,
+          `[${accountName}][${d.desktopCode || d.desktopId}] 当前状态: [${d.useStatusText}]，正在下发自动开机指令...`,
         );
+        try {
+          await client.operateDesktop(d.desktopId, 'on');
+        } catch (e: any) {
+          this.logger.addLog('warn', `[${accountName}] 自动开机提示: ${e.message}`);
+        }
+
+        // 异步等待云电脑开机完成（轮询检测官方状态，最多等待 5 分钟）
+        this.logger.addLog('info', `[${accountName}][${d.desktopCode || d.desktopId}] 等待云电脑开机就绪中 (最长 5 分钟)...`);
+        let ready = false;
+        for (let waitSec = 0; waitSec < 60; waitSec++) {
+          await new Promise((r) => setTimeout(r, 5000));
+          try {
+            const latestList = await client.getDesktopList();
+            const cur = latestList.find((item) => item.desktopId === d.desktopId);
+            if (cur && (cur.useStatusText === '运行中' || cur.useStatusText === '离线运行')) {
+              d.useStatusText = cur.useStatusText;
+              ready = true;
+              this.logger.addLog('success', `[${accountName}][${d.desktopCode || d.desktopId}] 云电脑已成功开机`);
+              break;
+            }
+          } catch {}
+        }
+        if (!ready) {
+          this.logger.addLog('warn', `[${accountName}][${d.desktopCode || d.desktopId}] 云电脑开机仍在进行中，稍后将自动接入保活`);
+        }
+      }
+
+      let info: DesktopInfo | null = null;
+      // 若刚触发开机或关机冷备，官方桌面可能需要数秒启动初始化，进行优雅重试
+      const maxRetries = 5;
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          info = await client.connectDesktop(d);
+          if (info && info.clinkLvsOutHost) break;
+        } catch (e: any) {
+          if (attempt === maxRetries) {
+            this.logger.addLog('warn', `[${accountName}] 暂时未能获取到云电脑连接信道，将在下个周期自动重试`);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 4000));
+        }
+      }
+
+      if (!info) {
+        continue;
       }
 
       try {
-        const info = await client.connectDesktop(d.desktopId);
         d.desktopInfo = info;
 
         const worker = new KeepAliveWorker({
@@ -97,8 +147,8 @@ export class KeepAliveManager {
           desktopInfo: info,
           loginInfo: client.loginInfo,
           deviceCode: client.getDeviceCode(),
-          onRefreshInfo: async (desktopId: string): Promise<DesktopInfo> => {
-            return await client.connectDesktop(desktopId);
+          onRefreshInfo: async (): Promise<DesktopInfo> => {
+            return await client.connectDesktop(d);
           },
           onLog: (level, msg) => this.logger.addLog(level, msg),
           onStatusChange: (status) => {

@@ -1,5 +1,6 @@
 import https from 'node:https';
 import type { CtYunClient } from '../core/client.js';
+import { safeFetch } from '../core/utils.js';
 
 function requestIpv4(
   urlStr: string,
@@ -7,10 +8,12 @@ function requestIpv4(
     method?: string;
     headers?: Record<string, string>;
     body?: string;
+    timeoutMs?: number;
   } = {},
 ): Promise<{ status: number; headers: Record<string, any>; json: () => Promise<any> }> {
   return new Promise((resolve, reject) => {
     const url = new URL(urlStr);
+    const timeoutMs = options.timeoutMs || 60000;
     const req = https.request(
       {
         hostname: url.hostname,
@@ -20,6 +23,7 @@ function requestIpv4(
         headers: options.headers || {},
         family: 4,
         rejectUnauthorized: false,
+        timeout: timeoutMs,
       },
       (res) => {
         let data = '';
@@ -39,6 +43,10 @@ function requestIpv4(
         });
       },
     );
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error(`请求超时 (${timeoutMs}ms): ${urlStr}`));
+    });
     req.on('error', reject);
     if (options.body) req.write(options.body);
     req.end();
@@ -59,7 +67,7 @@ export class AiChatTask {
       // 1. 换取 eaichat 单点登录 Ticket
       const serviceUrl = 'https://eaichat.ctyun.cn:443/chat/#/aichat';
       const ticketUrl = `${client.baseUrl}/api/auth/client/getTicket?service=${encodeURIComponent(serviceUrl)}`;
-      const tRes = await fetch(ticketUrl, { headers: client.getHeaders() });
+      const tRes = await safeFetch(ticketUrl, { headers: client.getHeaders() });
       const tJson = (await tRes.json()) as { code: number; data?: { ticket?: string } };
       const ticket = tJson.data?.ticket;
 

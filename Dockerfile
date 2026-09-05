@@ -21,8 +21,20 @@ ENV NODE_ENV=production
 ENV CTYUN_PORT=3088
 ENV CTYUN_DATA_DIR=/app/data
 ENV TZ=Asia/Shanghai
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
-RUN apk add --no-cache tzdata ca-certificates
+RUN apk add --no-cache \
+    tzdata \
+    ca-certificates \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ttf-freefont \
+    font-noto-cjk && \
+    cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo "Asia/Shanghai" > /etc/timezone
 
 COPY package*.json ./
 RUN npm install --omit=dev

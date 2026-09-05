@@ -12,4 +12,3 @@ services:
       - CTYUN_PORT=3088
       - CTYUN_DATA_DIR=/app/data
       - ADMIN_PASSWORD=
-      - OCR_URL=https://orc.1999111.xyz/ocr

@@ -19,6 +19,30 @@ async function main() {
     console.error('启动服务失败:', err.message);
     process.exit(1);
   }
+
+  // 优雅停机处理 (Graceful Shutdown)
+  let isShuttingDown = false;
+  const gracefulShutdown = async (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`\n[Process] 收到 ${signal} 信号，正在执行优雅停机...`);
+    try {
+      const manager = (server as any).manager;
+      if (manager && typeof manager.stopAll === 'function') {
+        console.log('[Process] 正在安全停止所有协议保活信道、挂机进程并保存状态...');
+        await manager.stopAll();
+      }
+      await server.close();
+      console.log('[Process] 优雅停机完毕，服务已安全退出。');
+      process.exit(0);
+    } catch (err: any) {
+      console.error('[Process] 停机流程异常:', err.message);
+      process.exit(1);
+    }
+  };
+
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 }
 
 process.on('uncaughtException', (err) => {

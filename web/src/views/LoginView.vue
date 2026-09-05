@@ -47,7 +47,7 @@ async function handleLogin() {
           </div>
           <CardTitle class="text-xl font-bold tracking-tight">登录 CTYUN-PRO</CardTitle>
           <CardDescription class="text-xs text-muted-foreground">
-            请输入天翼云电脑保活管理控制台访问口令
+            请输入 CTYUN-PRO 管理控制台访问口令
           </CardDescription>
         </CardHeader>
 

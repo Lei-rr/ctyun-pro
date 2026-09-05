@@ -92,6 +92,48 @@ export class Protocol {
     return this.buildMessage(112, body);
   }
   /**
+   * 收到服务端 REDQ 保活校验时，解析 RSA 公钥并完成动态响应
+   */
+  public static executeRedqEncryption(linkHeader: Buffer): Buffer {
+    return this.buildClinkTicket(linkHeader);
+  }
+
+  /**
+   * 解析服务端下发的 CLINK 协议消息
+   */
+  public static parseSendInfo(buffer: Buffer): Array<{ type: number; data: Buffer }> {
+    const results: Array<{ type: number; data: Buffer }> = [];
+    if (buffer.length < 6) return results;
+
+    let offset = 0;
+    while (offset + 6 <= buffer.length) {
+      const type = buffer.readUInt16LE(offset);
+      const size = buffer.readUInt32LE(offset + 2);
+      if (size < 0 || offset + 6 + size > buffer.length) {
+        break;
+      }
+      const data = buffer.subarray(offset + 6, offset + 6 + size);
+      results.push({ type, data });
+      offset += 6 + size;
+    }
+    return results;
+  }
+
+  /**
+   * 构建客户端二进制响应帧
+   */
+  public static buildSendInfoBuffer(type: number, data: Buffer, isBuildMsg = true): Buffer {
+    if (isBuildMsg) {
+      const body = Buffer.alloc(8 + data.length);
+      body.writeUInt32LE(data.length, 0);
+      body.writeUInt32LE(8, 4);
+      data.copy(body, 8);
+      return this.buildMessage(type, body);
+    }
+    return this.buildMessage(type, data);
+  }
+
+  /**
    * 计算 MD5 16 进制小写
    */
   public static md5(str: string): string {

@@ -19,15 +19,23 @@ export class Logger {
   }
 
   public addLog(level: 'info' | 'warn' | 'error' | 'success', message: string): void {
-    const last = this.logs[this.logs.length - 1];
-    // 连续相同的日志智能折叠（增加 count，刷新最新时间戳，避免高频刷屏）
-    if (last && last.level === level && last.message === message) {
-      last.count = (last.count || 1) + 1;
-      last.time = Logger.formatCstTime();
-      for (const listener of this.listeners) {
-        listener({ ...last });
+    // 智能折叠：在最近 10 条日志中查找相同内容与级别的记录
+    const searchLimit = Math.max(0, this.logs.length - 10);
+    for (let i = this.logs.length - 1; i >= searchLimit; i--) {
+      const item = this.logs[i];
+      if (item.level === level && item.message === message) {
+        item.count = (item.count || 1) + 1;
+        item.time = Logger.formatCstTime();
+        // 如果不是最后一条，移至末尾，保证最新活动的一条始终排在最底部！
+        if (i !== this.logs.length - 1) {
+          this.logs.splice(i, 1);
+          this.logs.push(item);
+        }
+        for (const listener of this.listeners) {
+          listener({ ...item });
+        }
+        return;
       }
-      return;
     }
 
     const item: LogItem = {
@@ -52,6 +60,9 @@ export class Logger {
 
   public clearLogs(): void {
     this.logs = [];
+    for (const listener of this.listeners) {
+      listener({ id: 0, time: '', level: 'info', message: '__CLEAR__' });
+    }
   }
 
   public subscribe(listener: (log: LogItem) => void): () => void {

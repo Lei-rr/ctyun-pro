@@ -48,13 +48,24 @@ onMounted(() => {
            store.logs = (data.logs || []).slice(-200);
         } else if (data.type === 'log') {
           const incoming = data.log;
-          const last = store.logs[store.logs.length - 1];
-          if (last && (last.id === incoming.id || (last.message === incoming.message && last.level === incoming.level))) {
-            last.count = incoming.count || (last.count || 1) + 1;
-            last.time = incoming.time;
-          } else {
+          let found = false;
+          const searchLimit = Math.max(0, store.logs.length - 10);
+          for (let i = store.logs.length - 1; i >= searchLimit; i--) {
+            const item = store.logs[i];
+            if (item.id === incoming.id || (item.message === incoming.message && item.level === incoming.level)) {
+              item.count = incoming.count || (item.count || 1) + 1;
+              item.time = incoming.time;
+              if (i !== store.logs.length - 1) {
+                store.logs.splice(i, 1);
+                store.logs.push(item);
+              }
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
             store.logs.push(incoming);
-             if (store.logs.length > 200) store.logs.splice(0, store.logs.length - 200);
+            if (store.logs.length > 200) store.logs.splice(0, store.logs.length - 200);
           }
         }
         scrollToBottom();
@@ -78,10 +89,8 @@ onUnmounted(() => {
           <span class="relative inline-flex size-2 rounded-full bg-emerald-500"></span>
         </span>
         <span class="font-medium text-foreground">
-          {{ store.isWsConnected ? 'WS 全双工实时推流已就绪' : '实时推流已就绪' }}
+          实时日志
         </span>
-        <span class="hidden sm:inline text-muted-foreground/60">·</span>
-        <span class="hidden sm:inline">智能环形缓冲</span>
         <Badge variant="secondary" class="h-5 px-1.5 text-[10px] font-mono shrink-0 ml-1">
            {{ store.logs.length }} / 200 条
         </Badge>

@@ -1,6 +1,9 @@
-import type { CtYunClient } from '../core/client.js';
-import { SignTask, type PointsSummary } from './sign.js';
+import { CtYunClient } from '../core/client.js';
+import { Protocol } from '../core/protocol.js';
 import { AiChatTask } from './ai-chat.js';
+import { SignTask, type PointsSummary } from './sign.js';
+import { safeFetch } from '../core/utils.js';
+import type { TaskConfig } from '../config.js';
 
 /**
  * 每日任务协调执行器
@@ -24,7 +27,13 @@ export class TaskRunner {
         return { success: false, message: '未找到可用云电脑，无法激活桌面会话' };
       }
 
-      // 1. 调用主站官方 connect 激活桌面会话
+      // 1. 调用官方状态预检与会话激活接口
+      try {
+        await safeFetch(`${client.baseUrl}/api/desktop/client/status?desktopId=${dId}&specifiedCertCategory=1`, {
+          headers: client.getHeaders(),
+        });
+      } catch {}
+
       const connBody = new URLSearchParams({
         objId: dId,
         objType: '0',
@@ -37,12 +46,13 @@ export class TaskRunner {
         deviceName: 'Chrome浏览器',
         deviceType: '60',
         deviceModel: 'Windows NT 10.0; Win64; x64',
-        appVersion: '3.2.0',
+        appVersion: '3.7.0',
         sysVersion: 'Windows NT 10.0; Win64; x64',
-        clientVersion: '103020001',
+        clientVersion: '3.7.0',
+        specifiedCertCategory: '1',
       });
 
-      const connectRes = await fetch(`${client.baseUrl}/api/desktop/client/connect`, {
+      const connectRes = await safeFetch(`${client.baseUrl}/api/desktop/client/connect`, {
         method: 'POST',
         headers: {
           ...client.getHeaders(),
@@ -70,10 +80,10 @@ export class TaskRunner {
           tenantId: client.loginInfo.tenantId,
           deviceCode: client.getDeviceCode(),
           deviceOsType: 'web',
-          deviceOsVersion: 'Mozilla/5.0',
+          deviceOsVersion: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           deviceModel: 'PC',
-          clientVersionCode: '103020001',
-          clientVersionName: '1.3.2',
+          clientVersionCode: '3.7.0',
+          clientVersionName: '3.7.0',
           opLocalTimeStamp: Date.now(),
           appType: 6,
           desktopId: dId,
@@ -94,10 +104,10 @@ export class TaskRunner {
           tenantId: client.loginInfo.tenantId,
           deviceCode: client.getDeviceCode(),
           deviceOsType: 'web',
-          deviceOsVersion: 'Mozilla/5.0',
+          deviceOsVersion: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           deviceModel: 'PC',
-          clientVersionCode: '103020001',
-          clientVersionName: '1.3.2',
+          clientVersionCode: '3.7.0',
+          clientVersionName: '3.7.0',
           opLocalTimeStamp: Date.now(),
           appType: 6,
           desktopId: dId,
@@ -110,7 +120,7 @@ export class TaskRunner {
         },
       ];
 
-      const eventRes = await fetch(
+      const eventRes = await safeFetch(
         `${client.baseUrl}/api/cdserv/client/dataservice/api/dataEvent/sendBatch`,
         {
           method: 'POST',
@@ -141,12 +151,7 @@ export class TaskRunner {
   public static async executeDailyTasks(
     client: CtYunClient,
     desktopId?: string,
-    taskConfig?: {
-      enabled?: boolean;
-      autoSign?: boolean;
-      loginDesktop?: boolean;
-      aiChat?: boolean;
-    },
+    taskConfig?: TaskConfig,
   ): Promise<{ success: boolean; message: string }> {
     if (taskConfig && taskConfig.enabled === false) {
       return { success: true, message: '每日任务总开关已关闭，跳过执行' };
@@ -166,19 +171,7 @@ export class TaskRunner {
       results.push('登录云电脑: 已按配置跳过');
     }
 
-    // 2. 触发官方每日签到
-    if (!taskConfig || taskConfig.autoSign !== false) {
-      try {
-        const signRes = await SignTask.signIn(client);
-        results.push(signRes.message);
-      } catch (e: any) {
-        results.push(`签到异常: ${e.message}`);
-      }
-    } else {
-      results.push('签到: 已按配置跳过');
-    }
-
-    // 3. 触发官方「与AI对话1次」任务 (+100积分)
+    // 2. 触发官方「与AI对话1次」任务 (+100积分)
     if (!taskConfig || taskConfig.aiChat !== false) {
       try {
         const chatRes = await AiChatTask.execute(client);
@@ -188,6 +181,15 @@ export class TaskRunner {
       }
     } else {
       results.push('AI对话: 已按配置跳过');
+    }
+
+    // 3. 触发官方「使用 1 小时」智能补足挂机任务 (+100分)
+    if (!taskConfig || taskConfig.keepAliveHang !== false) {
+      try {
+        results.push('已在后台派发智能挂机补时');
+      } catch (e: any) {
+        results.push(`智能挂机异常: ${e.message}`);
+      }
     }
 
     return {

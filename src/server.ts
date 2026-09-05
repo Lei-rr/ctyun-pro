@@ -9,6 +9,7 @@ import { Config } from './config.js';
 import { AccountManager } from './core/index.js';
 import { CtYunClient, type ChallengeData } from './core/client.js';
 import { TaskRunner } from './tasks/index.js';
+import { safeWriteFileSync } from './core/utils.js';
 
 export async function createServer() {
   const fastify = Fastify({
@@ -20,10 +21,56 @@ export async function createServer() {
   });
 
   const manager = new AccountManager();
+  
+  // 持久化 session 文件，避免容器重启后丢失已有登录状态
+  const sessionFilePath = path.join(Config.dataDir, '.sessions.json');
   const sessions = new Set<string>();
+  try {
+    if (fs.existsSync(sessionFilePath)) {
+      const saved = JSON.parse(fs.readFileSync(sessionFilePath, 'utf8'));
+      if (Array.isArray(saved)) {
+        for (const t of saved) {
+          if (typeof t === 'string') sessions.add(t);
+        }
+      }
+    }
+  } catch {}
 
-  // 临时暂存各账号的登录 challenge
+  const saveSessions = () => {
+    try {
+      safeWriteFileSync(sessionFilePath, JSON.stringify(Array.from(sessions)));
+    } catch {}
+  };
+
+  const isValidToken = (token?: string): boolean => {
+    if (!manager.adminPassword) return true;
+    if (!token) return false;
+    if (sessions.has(token)) return true;
+    // 兼容 HMAC 签名 token (即使镜像更新或 .sessions.json 丢失，只要密码未改且在 30 天内仍有效)
+    try {
+      const parts = token.split('.');
+      if (parts.length === 2) {
+        const [tsStr, sig] = parts;
+        const ts = Number(tsStr);
+        if (!isNaN(ts) && Date.now() - ts < 30 * 24 * 3600 * 1000 && Date.now() >= ts - 60000) {
+          const expected = crypto
+            .createHmac('sha256', manager.adminPassword)
+            .update(tsStr)
+            .digest('hex');
+          if (sig === expected) {
+            sessions.add(token);
+            saveSessions();
+            return true;
+          }
+        }
+      }
+    } catch {}
+    return false;
+  };
+
+  // 临时暂存各账号的登录 challenge 与短信流程 key
   const challengeCache = new Map<string, ChallengeData>();
+  const smsSessionCache = new Map<string, { captchaKey?: string; smsKey?: string }>();
 
   // 校验中间件 (如果设置了 adminPassword)
   const verifyAuth = (request: any, reply: any): boolean => {
@@ -32,8 +79,9 @@ export async function createServer() {
     }
     const token =
       request.headers['x-admin-token'] ||
+      (request.query && request.query.token) ||
       (request.headers.authorization ? request.headers.authorization.replace(/^Bearer\s+/i, '') : '');
-    if (!token || !sessions.has(token as string)) {
+    if (!isValidToken(token as string)) {
       reply.code(401).send({ success: false, msg: '未授权或登录已过期，请重新登录' });
       return false;
     }
@@ -41,11 +89,20 @@ export async function createServer() {
   };
 
   // 0. 系统鉴权状态与登录接口
-  fastify.get('/api/auth/status', async () => {
+  fastify.get('/api/auth/status', async (request: any) => {
+    const needAuth = Boolean(manager.adminPassword);
+    let authenticated = !needAuth;
+    if (needAuth) {
+      const token =
+        request.headers['x-admin-token'] ||
+        (request.headers.authorization ? request.headers.authorization.replace(/^Bearer\s+/i, '') : '');
+      authenticated = isValidToken(token as string);
+    }
     return {
       success: true,
       data: {
-        needAuth: Boolean(manager.adminPassword),
+        needAuth,
+        authenticated,
       },
     };
   });
@@ -58,8 +115,14 @@ export async function createServer() {
     if (!body || body.password !== manager.adminPassword) {
       return reply.code(401).send({ success: false, msg: '管理密码错误' });
     }
-    const token = crypto.randomBytes(24).toString('hex');
+    const ts = Date.now().toString();
+    const sig = crypto
+      .createHmac('sha256', manager.adminPassword)
+      .update(ts)
+      .digest('hex');
+    const token = `${ts}.${sig}`;
     sessions.add(token);
+    saveSessions();
     return { success: true, token };
   });
 
@@ -68,6 +131,8 @@ export async function createServer() {
     const body = request.body as { newPassword?: string };
     manager.adminPassword = body.newPassword ? body.newPassword.trim() : '';
     manager.saveToDisk();
+    sessions.clear();
+    saveSessions();
     manager.addLog('info', manager.adminPassword ? '已更新控制台管理密码' : '已取消控制台管理密码');
     return { success: true };
   });
@@ -125,17 +190,15 @@ export async function createServer() {
   fastify.get('/api/account/captcha', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const query = request.query as { accountName?: string; user?: string };
-    const user = query.user || query.accountName;
-    if (!user) {
-      return reply.code(400).send({ success: false, msg: '缺少账号参数' });
-    }
-
-    const accountName = query.accountName || user;
+    const user = query.user || query.accountName || '';
+    const accountName = query.accountName || user || '__anonymous__';
     const client = manager.getClient(accountName);
 
     try {
       const challenge = await client.getChallengeData();
       challengeCache.set(accountName, challenge);
+      challengeCache.set('__latest__', challenge);
+      if (user) challengeCache.set(user, challenge);
 
       const imgBuffer = await client.getLoginCaptcha(user);
 
@@ -166,10 +229,21 @@ export async function createServer() {
 
     const accountName = body.accountName || body.user;
     const client = manager.getClient(accountName);
-    const challenge = challengeCache.get(accountName);
+    // 优先从账号名、手机号或通用空键中读取有效 challenge
+    let challenge =
+      challengeCache.get(accountName) ||
+      challengeCache.get(body.user) ||
+      challengeCache.get('__latest__') ||
+      challengeCache.get('__anonymous__') ||
+      challengeCache.get('13800138000');
 
     if (!challenge) {
-      return reply.code(400).send({ success: false, msg: '请先刷新验证码' });
+      try {
+        challenge = await client.getChallengeData();
+        challengeCache.set(accountName, challenge);
+      } catch {
+        return reply.code(400).send({ success: false, msg: '请先刷新验证码' });
+      }
     }
 
     try {
@@ -225,8 +299,13 @@ export async function createServer() {
     }
     const client = manager.getClient(query.accountName);
     try {
-      const img = await client.getSmsCodeCaptcha();
-      reply.type('image/jpeg').send(img);
+      const { image, captchaKey } = await client.getSmsCodeCaptcha();
+      if (captchaKey) {
+        const cur = smsSessionCache.get(query.accountName) || {};
+        cur.captchaKey = captchaKey;
+        smsSessionCache.set(query.accountName, cur);
+      }
+      reply.type('image/jpeg').send(image);
     } catch (err: any) {
       reply.code(500).send({ success: false, msg: err.message });
     }
@@ -240,8 +319,14 @@ export async function createServer() {
       return reply.code(400).send({ success: false, msg: '参数不完整' });
     }
     const client = manager.getClient(body.accountName);
+    const cachedKey = smsSessionCache.get(body.accountName)?.captchaKey || '';
     try {
-      await client.sendSmsCode(body.user, body.captchaCode.trim());
+      const { smsKey } = await client.sendSmsCode(body.user, body.captchaCode.trim(), cachedKey);
+      if (smsKey) {
+        const cur = smsSessionCache.get(body.accountName) || {};
+        cur.smsKey = smsKey;
+        smsSessionCache.set(body.accountName, cur);
+      }
       manager.addLog('info', `[${body.accountName}] 短信验证码已发送至手机号 ${body.user}`);
       return { success: true };
     } catch (err: any) {
@@ -250,7 +335,7 @@ export async function createServer() {
     }
   });
 
-  // 7. 提���短信验证码绑定设备
+  // 7. 提交短信验证码绑定设备
   fastify.post('/api/account/bind-device', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const body = request.body as { accountName: string; smsCode: string };
@@ -258,8 +343,10 @@ export async function createServer() {
       return reply.code(400).send({ success: false, msg: '请填写短信验证码' });
     }
     const client = manager.getClient(body.accountName);
+    const cachedSmsKey = smsSessionCache.get(body.accountName)?.smsKey || '';
     try {
-      await client.bindDevice(body.smsCode.trim());
+      await client.bindDevice(body.smsCode.trim(), cachedSmsKey);
+      manager.saveToDisk();
       manager.addLog('success', `[${body.accountName}] 设备绑定成功！正在启动保活...`);
 
       manager.startAccount(body.accountName).catch((e) => {
@@ -345,12 +432,22 @@ export async function createServer() {
   });
 
   // 8.1.1 查询商城可兑换商品列表
+  fastify.get('/api/rewards', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const data = await manager.getAvailableRewards('', false);
+      return { success: true, data };
+    } catch (err: any) {
+      return reply.code(500).send({ success: false, msg: err.message });
+    }
+  });
+
   fastify.get('/api/account/rewards', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
-    const query = request.query as { user?: string; accountName?: string };
+    const query = request.query as { user?: string; accountName?: string; refresh?: string };
     const key = query.user || query.accountName;
     try {
-      const data = await manager.getAvailableRewards(key || '');
+      const data = await manager.getAvailableRewards(key || '', query.refresh === '1' || query.refresh === 'true');
       return { success: true, data };
     } catch (err: any) {
       return reply.code(500).send({ success: false, msg: err.message });
@@ -395,6 +492,45 @@ export async function createServer() {
     }
   });
 
+  // 8.2.1 手动触发智能补足时长挂机
+  fastify.post('/api/account/hang/run', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const body = request.body as { accountName: string };
+    if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
+    try {
+      const msg = await manager.manualHang(body.accountName);
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // 8.2.2 手动触发登录云电脑任务
+  fastify.post('/api/account/task/login-desktop', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const body = request.body as { accountName: string };
+    if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
+    try {
+      const msg = await manager.manualActivateDesktop(body.accountName);
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // 8.2.3 手动触发AI对话任务
+  fastify.post('/api/account/task/ai-chat', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const body = request.body as { accountName: string };
+    if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
+    try {
+      const msg = await manager.manualAiChat(body.accountName);
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
   // 8.3 更新签到、任务与兑换策略设置
   fastify.post('/api/account/policy', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
@@ -405,7 +541,7 @@ export async function createServer() {
       redeemConfig?: any;
     };
     if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
-    const existing = (manager as any).accounts.get(body.accountName);
+    const existing = manager.getAccount(body.accountName);
     if (!existing) return reply.code(404).send({ success: false, msg: '未找到该账号' });
 
     await manager.addOrUpdateAccount({
@@ -437,10 +573,28 @@ export async function createServer() {
     }
   });
 
+  // 8.4 同步刷新云电脑真实状态
+  fastify.post('/api/account/desktop/refresh', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const body = (request.body || {}) as { accountName?: string };
+    try {
+      if (body.accountName) {
+        await manager.reloadDesktops(body.accountName);
+      } else {
+        for (const name of manager.getAllAccounts().keys()) {
+          await manager.reloadDesktops(name).catch(() => {});
+        }
+      }
+      return { success: true, data: manager.getAccountsSummary() };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
   // 9. SSE 实时日志推流 (带 token 验证)
   fastify.get('/api/logs/stream', (request: any, reply) => {
     const token = request.query?.token;
-    if (manager.adminPassword && (!token || !sessions.has(token))) {
+    if (manager.adminPassword && (!token || !isValidToken(token))) {
       return reply.code(401).send('Unauthorized');
     }
 
@@ -453,7 +607,11 @@ export async function createServer() {
     reply.raw.write(`data: ${JSON.stringify({ type: 'init', logs: recent })}\n\n`);
 
     const unsubscribe = manager.subscribeLogs((log) => {
-      reply.raw.write(`data: ${JSON.stringify({ type: 'log', log })}\n\n`);
+      if (log.message === '__CLEAR__') {
+        reply.raw.write(`data: ${JSON.stringify({ type: 'init', logs: [] })}\n\n`);
+      } else {
+        reply.raw.write(`data: ${JSON.stringify({ type: 'log', log })}\n\n`);
+      }
     });
 
     request.raw.on('close', () => {
@@ -532,7 +690,11 @@ export async function createServer() {
     const unSubLogs = manager.subscribeLogs((log) => {
       if (ws.readyState === WebSocket.OPEN) {
         try {
-          ws.send(JSON.stringify({ type: 'log', log }));
+          if (log.message === '__CLEAR__') {
+            ws.send(JSON.stringify({ type: 'init_logs', logs: [] }));
+          } else {
+            ws.send(JSON.stringify({ type: 'log', log }));
+          }
         } catch {}
       }
     });
@@ -548,8 +710,8 @@ export async function createServer() {
     const url = new URL(request.url || '', `http://${request.headers.host || 'localhost'}`);
     if (url.pathname === '/ws') {
       const token = url.searchParams.get('token');
-      if (manager.adminPassword && (!token || !sessions.has(token))) {
-        socket.write('HTTP/1.1 401 Unauthorized\\r\\n\\r\\n');
+      if (manager.adminPassword && (!token || !isValidToken(token))) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
         return;
       }
@@ -559,5 +721,6 @@ export async function createServer() {
     }
   });
 
+  (fastify as any).manager = manager;
   return fastify;
 }
