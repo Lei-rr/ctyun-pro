@@ -126,6 +126,8 @@ docker compose up -d
 
 #### 1. 系统依赖安装命令（按系统选择）：
 
+> 💡 **提示**：智能挂机补时功能依赖系统底层 Chromium 浏览器。若日志提示 `系统未找到可用 Chromium 浏览器内核`，直接复制执行下方对应系统的命令即可解决：
+
 - **Ubuntu / Debian**：
   ```bash
   # 1. 安装 Chromium 浏览器
@@ -149,6 +151,12 @@ docker compose up -d
 - **Alpine Linux**：
   ```bash
   apk add --no-cache nodejs npm chromium
+  ```
+
+- **检查验证**：
+  ```bash
+  which chromium || which chromium-browser || which google-chrome
+  # 输出任意路径（如 /usr/bin/chromium）即代表环境就绪
   ```
 
 #### 2. 编译与启动服务：
