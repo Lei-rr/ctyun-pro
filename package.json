@@ -1,6 +1,6 @@
 {
   "name": "ctyun-pro",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "天翼云电脑智能保活管理系统 Pro (纯协议长连接保活 | 智能补足挂机引擎 | 多账号免密集中调度 | 现代化 Web 控制台)",
   "type": "module",
   "workspaces": [

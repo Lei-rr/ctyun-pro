@@ -49,6 +49,41 @@ const renameOldName = ref('');
 const renameInputVal = ref('');
 const renameLoading = ref(false);
 
+// 电源控制确认弹窗
+const showPowerModal = ref(false);
+const powerTarget = ref<{
+  accountName: string;
+  desktopId: string;
+  action: 'on' | 'shutdown' | 'reset';
+  desktopName?: string;
+} | null>(null);
+const powerLoading = ref(false);
+
+function openPowerConfirm(accountName: string, desktopId: string, action: 'on' | 'shutdown' | 'reset', desktopName?: string) {
+  powerTarget.value = {
+    accountName,
+    desktopId,
+    action,
+    desktopName,
+  };
+  showPowerModal.value = true;
+}
+
+async function confirmPowerOperate() {
+  if (!powerTarget.value) return;
+  powerLoading.value = true;
+  try {
+    await store.operateDesktopPower(
+      powerTarget.value.accountName,
+      powerTarget.value.desktopId,
+      powerTarget.value.action
+    );
+    showPowerModal.value = false;
+  } finally {
+    powerLoading.value = false;
+  }
+}
+
 function openRename(name: string) {
   renameOldName.value = name;
   renameInputVal.value = name;
@@ -452,36 +487,38 @@ onUnmounted(() => {
                     </TableCell>
                     <TableCell class="py-2.5 text-right whitespace-nowrap pr-2">
                       <div class="inline-flex items-center gap-1 justify-end">
+                        <!-- 关机状态：显示开机图标 -->
                         <Button
-                           v-if="!(desktop.useStatusText === '运行中' && desktop.status === 'connected')"
+                          v-if="!(desktop.useStatusText === '运行中' && desktop.status === 'connected')"
                           variant="ghost"
                           size="icon"
                           class="size-7 text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10 cursor-pointer"
                           title="开机"
-                          @click="store.operateDesktopPower(account.name, desktop.desktopId, 'on')"
+                          @click="openPowerConfirm(account.name, desktop.desktopId, 'on', desktop.desktopName || desktop.desktopCode)"
                         >
                           <Power class="size-3.5" />
                         </Button>
-                        <Button
-                          v-else
-                          variant="ghost"
-                          size="icon"
-                          class="size-7 text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 cursor-pointer"
-                          title="重启"
-                          @click="store.operateDesktopPower(account.name, desktop.desktopId, 'reset')"
-                        >
-                          <RotateCw class="size-3.5" />
-                        </Button>
-                        <Button
-                           v-if="desktop.useStatusText === '运行中' && desktop.status === 'connected'"
-                          variant="ghost"
-                          size="icon"
-                          class="size-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
-                          title="关机"
-                          @click="store.operateDesktopPower(account.name, desktop.desktopId, 'shutdown')"
-                        >
-                          <Power class="size-3.5" />
-                        </Button>
+                        <!-- 运行中状态：并列显示 重启 与 关机 图标 -->
+                        <template v-else>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            class="size-7 text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 cursor-pointer"
+                            title="重启"
+                            @click="openPowerConfirm(account.name, desktop.desktopId, 'reset', desktop.desktopName || desktop.desktopCode)"
+                          >
+                            <RotateCw class="size-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            class="size-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                            title="关机"
+                            @click="openPowerConfirm(account.name, desktop.desktopId, 'shutdown', desktop.desktopName || desktop.desktopCode)"
+                          >
+                            <Power class="size-3.5" />
+                          </Button>
+                        </template>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -560,24 +597,38 @@ onUnmounted(() => {
                   </span>
                 </div>
                 <div class="inline-flex items-center gap-1">
+                  <!-- 关机状态：显示开机图标 -->
                   <Button
-                     v-if="!(desktop.useStatusText === '运行中' && desktop.status === 'connected')"
-                    variant="outline"
-                    size="sm"
-                    class="h-6 px-2 text-[11px] text-emerald-600 dark:text-emerald-400 cursor-pointer"
-                    @click="store.operateDesktopPower(account.name, desktop.desktopId, 'on')"
+                    v-if="!(desktop.useStatusText === '运行中' && desktop.status === 'connected')"
+                    variant="ghost"
+                    size="icon"
+                    class="size-7 text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10 cursor-pointer"
+                    title="开机"
+                    @click="openPowerConfirm(account.name, desktop.desktopId, 'on', desktop.desktopName || desktop.desktopCode)"
                   >
-                    开机
+                    <Power class="size-3.5" />
                   </Button>
-                   <Button
-                     v-if="desktop.useStatusText === '运行中' && desktop.status === 'connected'"
-                    variant="outline"
-                    size="sm"
-                    class="h-6 px-2 text-[11px] text-destructive cursor-pointer"
-                    @click="store.operateDesktopPower(account.name, desktop.desktopId, 'shutdown')"
-                  >
-                    关机
-                  </Button>
+                  <!-- 运行中状态：并列显示 重启 与 关机 图标 -->
+                  <template v-else>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-7 text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 cursor-pointer"
+                      title="重启"
+                      @click="openPowerConfirm(account.name, desktop.desktopId, 'reset', desktop.desktopName || desktop.desktopCode)"
+                    >
+                      <RotateCw class="size-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                      title="关机"
+                      @click="openPowerConfirm(account.name, desktop.desktopId, 'shutdown', desktop.desktopName || desktop.desktopCode)"
+                    >
+                      <Power class="size-3.5" />
+                    </Button>
+                  </template>
                 </div>
               </div>
 
@@ -786,6 +837,73 @@ onUnmounted(() => {
         <div class="flex items-center justify-end w-full">
           <Button class="w-24 h-9 shadow-xs cursor-pointer" @click="showPointsModal = false">
             关闭
+          </Button>
+        </div>
+      </template>
+    </AppDialog>
+    <!-- 弹窗 3: 电源操作二次确认弹窗 (AppDialog) -->
+    <AppDialog
+      v-model:open="showPowerModal"
+      :title="powerTarget?.action === 'on' ? '确认开机' : powerTarget?.action === 'reset' ? '确认重启' : '确认关机'"
+      :description="`您正在对云电脑进行电源管理操作，请确认：`"
+      content-class="sm:max-w-sm"
+    >
+      <div v-if="powerTarget" class="py-2 space-y-3">
+        <div class="p-3 rounded-lg bg-muted/50 border border-border/50 text-xs space-y-1.5">
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">所属账号:</span>
+            <span class="font-medium text-foreground">{{ powerTarget.accountName }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">实例标识:</span>
+            <span class="font-mono text-foreground">{{ powerTarget.desktopName || powerTarget.desktopId }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-muted-foreground">执行动作:</span>
+            <span
+              class="font-semibold"
+              :class="{
+                'text-emerald-600 dark:text-emerald-400': powerTarget.action === 'on',
+                'text-amber-600 dark:text-amber-400': powerTarget.action === 'reset',
+                'text-destructive': powerTarget.action === 'shutdown',
+              }"
+            >
+              {{ powerTarget.action === 'on' ? '开机' : powerTarget.action === 'reset' ? '重启云电脑' : '强制关机' }}
+            </span>
+          </div>
+        </div>
+
+        <p class="text-xs text-muted-foreground">
+          <template v-if="powerTarget.action === 'on'">
+            开机指令下发后，系统将自动轮询实例状态并在开机就绪后自动接入保活。
+          </template>
+          <template v-else-if="powerTarget.action === 'reset'">
+            重启可能导致正在运行的保活或任务断开，系统将在重启就绪后自动重新连接。
+          </template>
+          <template v-else>
+            关机后保活通道将自动断开，云电脑将停止产生计费或运行。
+          </template>
+        </p>
+      </div>
+
+      <template #footer>
+        <div class="flex gap-2 w-full">
+          <Button
+            type="button"
+            variant="outline"
+            @click="showPowerModal = false"
+            class="flex-1 h-9 cursor-pointer"
+          >
+            取消
+          </Button>
+          <Button
+            type="button"
+            :variant="powerTarget?.action === 'shutdown' ? 'destructive' : 'default'"
+            :disabled="powerLoading"
+            class="flex-1 h-9 shadow-xs cursor-pointer"
+            @click="confirmPowerOperate"
+          >
+            {{ powerLoading ? '正在下发...' : '确认执行' }}
           </Button>
         </div>
       </template>

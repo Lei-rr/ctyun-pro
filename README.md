@@ -35,7 +35,7 @@
   - 自动读取官方真实累计时长，精准计算并补齐剩余分钟数；
   - 多账号共享单例 Chromium 进程，通过独立上下文（`BrowserContext`）严格隔离；
   - 挂机前自动让出保活信道，挂机完成后无缝恢复长连接保活。
-- 🖥️ **实例管理与电源控制**：天翼云电脑实例列表查询、实时状态同步，支持一键远程开机、关机与重启。开机状态自动异步轮询，就绪后秒级恢复保活。
+- 🖥️ **实例管理与电源控制**：天翼云电脑实例列表查询、实时状态同步，支持纯图标一键远程开机、关机与重启，并提供高可用防误触弹窗二次确认。开机状态自动异步轮询，就绪后秒级恢复保活。
 - ⏰ **全自动任务打卡**：支持配置每日定时执行：
   - 登录云电脑会话激活（+100 积分）；
   - 云智助手 AI 对话打卡（+100 积分）；
@@ -120,7 +120,38 @@ docker compose up -d
 
 ### 方式三：源码运行
 
-环境要求：**Node.js 20+**
+环境要求：
+- **Node.js 20+**
+- **Chromium / Chrome 浏览器内核**（若使用智能补足挂机功能必须安装）
+
+#### 1. 系统依赖安装命令（按系统选择）：
+
+- **Ubuntu / Debian**：
+  ```bash
+  # 1. 安装 Chromium 浏览器
+  sudo apt-get update && sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
+
+  # 2. 安装 Node.js 20 (若未安装)
+  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+  sudo apt-get install -y nodejs
+  ```
+
+- **CentOS / Rocky Linux / AlmaLinux**：
+  ```bash
+  # 1. 安装 Chromium 浏览器
+  sudo dnf install -y epel-release && sudo dnf install -y chromium
+
+  # 2. 安装 Node.js 20 (若未安装)
+  curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+  sudo dnf install -y nodejs
+  ```
+
+- **Alpine Linux**：
+  ```bash
+  apk add --no-cache nodejs npm chromium
+  ```
+
+#### 2. 编译与启动服务：
 
 ```bash
 # 1. 克隆代码仓库
