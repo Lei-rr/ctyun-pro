@@ -141,6 +141,10 @@ export class AccountManager {
     for (const [name, acc] of this.accounts.entries()) {
       const state = this.accountStates.get(name);
       if (state) {
+        if (acc.loginInfo?.mobilephone) {
+          state.user = acc.loginInfo.mobilephone;
+          acc.user = acc.loginInfo.mobilephone;
+        }
         if (!acc.taskConfig) {
           acc.taskConfig = {
             enabled: acc.autoSign ?? true,
@@ -330,12 +334,21 @@ export class AccountManager {
       this.clients.set(trimmed, client);
     }
 
+    const pts = this.todayPointsCache.get(oldName);
+    if (pts) {
+      this.todayPointsCache.delete(oldName);
+      this.todayPointsCache.set(trimmed, pts);
+    }
+
     this.saveToDisk();
     this.notifyStatusChange();
     this.logger.addLog('info', `[${oldName}] 备注名称已修改为 [${trimmed}]`);
 
     if (acc.loginInfo) {
       this.reloadDesktops(trimmed).catch(() => {});
+      this.getPointsAndTasks(trimmed)
+        .then(() => this.notifyStatusChange())
+        .catch(() => {});
     }
   }
 
@@ -414,7 +427,8 @@ export class AccountManager {
   }
 
   public async addOrUpdateAccount(config: AccountConfig): Promise<void> {
-    const name = config.name || config.user;
+    const user = config.loginInfo?.mobilephone || config.user;
+    const name = config.name || user;
     const deviceCode = config.deviceCode || Config.resolveDeviceCode(name);
     const existingAcc = this.accounts.get(name);
     const taskConfig = config.taskConfig || existingAcc?.taskConfig || {
@@ -428,14 +442,14 @@ export class AccountManager {
     if (!taskConfig.scheduleTime) {
       taskConfig.scheduleTime = getRandomScheduleTime();
     }
-    const fullAcc: AccountConfig = { ...config, name, deviceCode, taskConfig };
+    const fullAcc: AccountConfig = { ...config, name, user, deviceCode, taskConfig };
 
     this.accounts.set(name, fullAcc);
     let state = this.accountStates.get(name);
     if (!state) {
       state = {
         name,
-        user: config.user,
+        user,
         deviceCode,
         status: config.loginInfo ? 'online' : 'login_needed',
         loginInfo: config.loginInfo,
@@ -447,7 +461,7 @@ export class AccountManager {
       };
       this.accountStates.set(name, state);
     } else {
-      state.user = config.user;
+      state.user = user;
       state.deviceCode = deviceCode;
       state.autoSign = config.autoSign ?? state.autoSign;
       state.lastSignDate = config.lastSignDate ?? state.lastSignDate;
@@ -469,6 +483,12 @@ export class AccountManager {
 
     if (config.loginInfo) {
       await this.reloadDesktops(name);
+      try {
+        await this.getPointsAndTasks(name);
+      } catch (e: any) {
+        this.logger.addLog('warn', `[${name}] 同步今日积分提示: ${e.message}`);
+      }
+      this.notifyStatusChange();
     }
   }
 
@@ -800,7 +820,12 @@ export class AccountManager {
     }
 
     for (const acc of rawAccounts) {
-      const name = acc.name || acc.user;
+      const user = acc.loginInfo?.mobilephone || acc.user;
+      let name = acc.name || user;
+      // 如果此前自动生成的默认名称形如 '用户0130824707'，自动纠偏为手机号码
+      if ((name === acc.user || /^用户\d+$/.test(name)) && acc.loginInfo?.mobilephone) {
+        name = acc.loginInfo.mobilephone;
+      }
       const deviceCode = Config.resolveDeviceCode(name, acc.deviceCode);
       const taskConfig = acc.taskConfig || {
         enabled: true,
@@ -813,7 +838,7 @@ export class AccountManager {
       if (!taskConfig.scheduleTime) {
         taskConfig.scheduleTime = getRandomScheduleTime();
       }
-      const fullAcc: AccountConfig = { ...acc, name, deviceCode, taskConfig };
+      const fullAcc: AccountConfig = { ...acc, name, user, deviceCode, taskConfig };
       this.accounts.set(name, fullAcc);
 
       const client = this.getClient(name);
@@ -823,7 +848,7 @@ export class AccountManager {
 
       const state: ManagedAccount = {
         name,
-        user: acc.user,
+        user,
         deviceCode: acc.deviceCode || client.getDeviceCode(),
         status: acc.loginInfo ? 'online' : 'login_needed',
         loginInfo: acc.loginInfo,

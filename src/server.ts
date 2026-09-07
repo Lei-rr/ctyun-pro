@@ -286,24 +286,22 @@ export async function createServer() {
         manager.addLog('info', `[${accountName}] 扫码授权成功，正在换取登录凭证...`);
         const loginInfo = await client.loginByToken(statusData.loginToken);
 
+        const finalUser = loginInfo.mobilephone || loginInfo.userName || loginInfo.userAccount || accountName;
         const finalAccountName =
           (query.accountName || '').trim() ||
-          loginInfo.userName ||
-          loginInfo.mobilephone ||
-          loginInfo.userAccount ||
-          accountName;
+          finalUser;
 
-        manager.addOrUpdateAccount({
+        await manager.addOrUpdateAccount({
           name: finalAccountName,
-          user: loginInfo.userName || loginInfo.mobilephone || loginInfo.userAccount || finalAccountName,
+          user: finalUser,
           deviceCode: client.getDeviceCode(),
           loginInfo: loginInfo,
           autoStart: true,
         });
 
-        manager.addLog('success', `[${finalAccountName}] 扫码登录成功！正在启动云电脑保活...`);
+        manager.addLog('success', `[${finalAccountName}] 扫码登录成功！已就绪并同步积分与保活`);
         manager.startAccount(finalAccountName).catch((e) => {
-          manager.addLog('error', `[${finalAccountName}] 启动保活失败: ${e.message}`);
+          manager.addLog('warn', `[${finalAccountName}] 启动保活提示: ${e.message}`);
         });
 
         return {

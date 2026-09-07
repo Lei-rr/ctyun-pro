@@ -321,7 +321,7 @@ onUnmounted(() => {
                 >
                   <Pencil class="size-3.5" />
                 </button>
-                <span class="text-xs text-muted-foreground font-mono">({{ account.user }})</span>
+                <span class="text-xs text-muted-foreground font-mono">({{ account.loginInfo?.mobilephone || account.user }})</span>
                 <Badge
                   variant="secondary"
                   class="h-5 shrink-0 px-2 text-[11px] font-normal flex items-center gap-1.5"
