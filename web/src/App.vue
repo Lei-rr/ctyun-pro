@@ -578,7 +578,7 @@ onUnmounted(() => {
         :description="`配置账号 [${store.policyAccount}] 的每日自动任务与积分兑换`"
         content-class="sm:max-w-md"
       >
-        <div class="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+        <div class="space-y-4">
           <!-- 模块 1: 每日定时任务 -->
           <div class="p-4 rounded-xl bg-muted/40 border border-border/40 space-y-3.5">
             <div class="flex items-center justify-between">
