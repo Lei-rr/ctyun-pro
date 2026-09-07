@@ -41,7 +41,8 @@ jobs:
           mkdir -p release-bin
           bun build --compile src/index.ts --outfile release-bin/ctyun-pro-linux-amd64
           bun build --compile --target=bun-linux-arm64 src/index.ts --outfile release-bin/ctyun-pro-linux-arm64
-          chmod +x release-bin/*
+          bun build --compile --target=bun-windows-x64 src/index.ts --outfile release-bin/ctyun-pro-windows-x64.exe
+          chmod +x release-bin/ctyun-pro-linux*
 
       - name: Upload Release Binaries
         uses: softprops/action-gh-release@v2
@@ -49,6 +50,7 @@ jobs:
           files: |
             release-bin/ctyun-pro-linux-amd64
             release-bin/ctyun-pro-linux-arm64
+            release-bin/ctyun-pro-windows-x64.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

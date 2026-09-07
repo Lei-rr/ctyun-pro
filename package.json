@@ -17,7 +17,7 @@
     "build:server": "rm -rf dist && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --packages=external --outfile=dist/server.js",
     "build:web": "npm --workspace web run build",
     "build:embedded": "tsx scripts/build-embedded.ts",
-    "build:bin": "npm run build:web && npm run build:embedded && mkdir -p dist && bun build --compile src/index.ts --outfile dist/ctyun-pro-linux-amd64 && bun build --compile --target=bun-linux-arm64 src/index.ts --outfile dist/ctyun-pro-linux-arm64",
+    "build:bin": "npm run build:web && npm run build:embedded && mkdir -p dist && bun build --compile src/index.ts --outfile dist/ctyun-pro-linux-amd64 && bun build --compile --target=bun-linux-arm64 src/index.ts --outfile dist/ctyun-pro-linux-arm64 && bun build --compile --target=bun-windows-x64 src/index.ts --outfile dist/ctyun-pro-windows-x64.exe",
     "version:patch": "npm version patch --no-git-tag-version && cd web && npm version patch --no-git-tag-version && cd ..",
     "start": "node dist/server.js"
   },

@@ -84,29 +84,22 @@ _✨ 天翼云电脑多账号纯协议持久保活 · 智能补足挂机引擎 �
 
 ## 🚀 部署教程
 
-### 方式一：Linux 单文件原生二进制（零 Docker 依赖，极速秒启 ⚡）
+### 方式一：独立原生可执行文件（免 Docker，极速秒启 ⚡）
 
-针对不想安装 Docker、或低内存（512MB/1GB）VPS 用户，官方原生提供编译好的独立单可执行文件，内嵌完整 Web 控制台：
+针对不想安装 Docker、Windows 家用挂机或低内存（512MB/1GB）VPS 用户，官方原生提供编译好的独立单文件，内置完整 Web 控制台：
 
-1. **下载对应架构的二进制文件**（从 [GitHub Releases](https://github.com/Lei-rr/ctyun-pro/releases) 获取）：
-   ```bash
-   # x86_64 架构（标准 Linux 服务器 / AMD / Intel）
-   wget https://github.com/Lei-rr/ctyun-pro/releases/latest/download/ctyun-pro-linux-amd64 -O ctyun-pro
-   chmod +x ctyun-pro
-
-   # ARM64 架构（树莓派 / 甲骨文 ARM / 华为鲲鹏 / 苹果 M 系列 Linux）
-   wget https://github.com/Lei-rr/ctyun-pro/releases/latest/download/ctyun-pro-linux-arm64 -O ctyun-pro
-   chmod +x ctyun-pro
-   ```
-
-2. **启动服务**：
-   ```bash
-   # 直接运行（默认端口 3088，数据自动保存在 ./data 目录）
-   ./ctyun-pro
-
-   # 或自定义端口后台运行：
-   PORT=3088 nohup ./ctyun-pro > ctyun.log 2>&1 &
-   ```
+- **🪟 Windows 用户**：
+  从 [GitHub Releases](https://github.com/Lei-rr/ctyun-pro/releases) 下载 `ctyun-pro-windows-x64.exe`，直接双击运行即可，浏览器打开 `http://127.0.0.1:3088`。
+- **🐧 Linux x86_64 服务器（AMD / Intel）**：
+  ```bash
+  wget https://github.com/Lei-rr/ctyun-pro/releases/latest/download/ctyun-pro-linux-amd64 -O ctyun-pro
+  chmod +x ctyun-pro && ./ctyun-pro
+  ```
+- **📱 Linux ARM64 服务器（树莓派 / 甲骨文 ARM / 华为鲲鹏）**：
+  ```bash
+  wget https://github.com/Lei-rr/ctyun-pro/releases/latest/download/ctyun-pro-linux-arm64 -O ctyun-pro
+  chmod +x ctyun-pro && ./ctyun-pro
+  ```
 
 ---
 
