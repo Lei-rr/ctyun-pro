@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { toast } from 'vue-sonner';
 import { confirmDelete } from '@/shared/ui/confirm';
 import { router } from '@/router';
@@ -287,9 +287,16 @@ export const useAppStore = defineStore('app', () => {
     isWsConnected.value = false;
   }
 
-  // 4. 账号添加与登录 (官方原生图形验证码直连呈现)
+  // 4. 账号添加与登录 (官方原生图形验证码直连呈现与扫码登录)
   const showModal = ref(false);
   const modalStep = ref<'login' | 'sms'>('login');
+  const loginMode = ref<'qrcode' | 'password'>('qrcode');
+  const qrCodeId = ref('');
+  const qrImage = ref('');
+  const qrStatus = ref<'loading' | 'created' | 'scaned' | 'expire' | 'authorize'>('loading');
+  const qrLoading = ref(false);
+  let qrPollTimer: any = null;
+
   const formUser = ref('');
   const formName = ref('');
   const formPassword = ref('');
@@ -303,6 +310,100 @@ export const useAppStore = defineStore('app', () => {
   const smsCaptchaCode = ref('');
   const smsVerificationCode = ref('');
   const smsSentSuccess = ref(false);
+
+  function stopQrPolling() {
+    if (qrPollTimer) {
+      clearInterval(qrPollTimer);
+      qrPollTimer = null;
+    }
+  }
+
+  watch(showModal, (val) => {
+    if (!val) stopQrPolling();
+  });
+
+  async function initQrLogin() {
+    stopQrPolling();
+    qrLoading.value = true;
+    qrStatus.value = 'loading';
+    qrImage.value = '';
+    modalError.value = '';
+    try {
+      const res = await fetch('/api/account/qrcode/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(adminToken.value ? { 'x-admin-token': adminToken.value } : {}),
+        },
+        body: JSON.stringify({ accountName: formName.value.trim() }),
+      });
+      const json = await res.json();
+      if (!json.success || !json.data?.qrCodeId) {
+        throw new Error(json.msg || '获取二维码失败');
+      }
+      qrCodeId.value = json.data.qrCodeId;
+      qrImage.value = json.data.qrImage;
+      qrStatus.value = 'created';
+      startQrPolling();
+    } catch (e: any) {
+      modalError.value = e.message || '生成二维码失败';
+      qrStatus.value = 'expire';
+    } finally {
+      qrLoading.value = false;
+    }
+  }
+
+  function startQrPolling() {
+    stopQrPolling();
+    qrPollTimer = setInterval(async () => {
+      if (!showModal.value || loginMode.value !== 'qrcode' || !qrCodeId.value) {
+        stopQrPolling();
+        return;
+      }
+      try {
+        const url = `/api/account/qrcode/status?qrCodeId=${encodeURIComponent(
+          qrCodeId.value,
+        )}&accountName=${encodeURIComponent(formName.value.trim())}`;
+        const res = await fetch(url, {
+          headers: {
+            ...(adminToken.value ? { 'x-admin-token': adminToken.value } : {}),
+          },
+        });
+        const json = await res.json();
+        if (json.success) {
+          if (json.codeStatus === 'scaned') {
+            qrStatus.value = 'scaned';
+          } else if (json.codeStatus === 'expire') {
+            qrStatus.value = 'expire';
+            stopQrPolling();
+          } else if (json.codeStatus === 'authorize') {
+            qrStatus.value = 'authorize';
+            stopQrPolling();
+            toast.success(`[${json.accountName || '新账号'}] 扫码登录成功！已自动开启保活`);
+            showModal.value = false;
+            await fetchStatus();
+          }
+        }
+      } catch {}
+    }, 1500);
+  }
+
+  function switchLoginMode(mode: 'qrcode' | 'password') {
+    loginMode.value = mode;
+    modalError.value = '';
+    if (mode === 'qrcode') {
+      if (!qrImage.value || qrStatus.value === 'expire') {
+        initQrLogin();
+      } else {
+        startQrPolling();
+      }
+    } else {
+      stopQrPolling();
+      if (!captchaImgUrl.value && formUser.value.trim().length >= 11) {
+        refreshLoginCaptcha();
+      }
+    }
+  }
 
   let lastFetchedPhone = '';
   function onPhoneInput() {
@@ -321,6 +422,7 @@ export const useAppStore = defineStore('app', () => {
 
   function openAddModal(accName?: string, userPhone?: string) {
     modalStep.value = 'login';
+    loginMode.value = 'qrcode';
     formUser.value = userPhone || '';
     formName.value = accName || '';
     formPassword.value = '';
@@ -332,6 +434,7 @@ export const useAppStore = defineStore('app', () => {
     smsVerificationCode.value = '';
     smsCaptchaCode.value = '';
     showModal.value = true;
+    initQrLogin();
     if (formUser.value.trim().length >= 11) {
       lastFetchedPhone = formUser.value.trim();
       refreshLoginCaptcha();
@@ -870,6 +973,15 @@ export const useAppStore = defineStore('app', () => {
     onlineDesktops,
     showModal,
     modalStep,
+    loginMode,
+    qrCodeId,
+    qrImage,
+    qrStatus,
+    qrLoading,
+    initQrLogin,
+    startQrPolling,
+    stopQrPolling,
+    switchLoginMode,
     formUser,
     formName,
     formPassword,

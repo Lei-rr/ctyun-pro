@@ -66,6 +66,8 @@ export interface LoginInfo {
   userId: number;
   tenantId: number;
   userName: string;
+  mobilephone?: string;
+  email?: string;
 }
 
 export interface DesktopInfo {
@@ -214,6 +216,105 @@ export class CtYunClient {
       throw new Error(json.msg || '登录失败');
     }
 
+    this.loginInfo = json.data;
+    return json.data;
+  }
+
+  /**
+   * 3.1 获取扫码登录二维码数据 (对齐官方自研二维码接口)
+   */
+  public async genQrCode(): Promise<{ qrCodeId: string; qrUrl: string }> {
+    const res = await safeFetch(`${CtYunClient.BASE_URL}/api/auth/client/qrCode/genData`, {
+      method: 'POST',
+      headers: {
+        ...this.getHeaders(),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    });
+    const json = (await res.json()) as {
+      code: number;
+      msg?: string;
+      data?: {
+        qrCodeId: string;
+        qrCodeEndpoint?: string | null;
+        serverHost?: string;
+      };
+    };
+    if (json.code !== 0 || !json.data?.qrCodeId) {
+      throw new Error(json.msg || '获取二维码失败');
+    }
+    const qrCodeId = json.data.qrCodeId;
+    let qrUrl = '';
+    if (json.data.qrCodeEndpoint) {
+      const endpoint = json.data.qrCodeEndpoint;
+      const sep = endpoint.includes('?') ? '&' : '?';
+      qrUrl = `${endpoint}${sep}qrCodeId=${encodeURIComponent(qrCodeId)}&loginMode=1`;
+    } else {
+      qrUrl = `https://desk.ctyun.cn/selforder/#/login-confirm?qrCodeId=${encodeURIComponent(qrCodeId)}&loginMode=1`;
+    }
+    return { qrCodeId, qrUrl };
+  }
+
+  /**
+   * 3.2 轮询扫码状态
+   */
+  public async getQrCodeStatus(qrCodeId: string): Promise<{
+    codeStatus: 'created' | 'scaned' | 'expire' | 'authorize';
+    loginToken?: string;
+  }> {
+    const res = await safeFetch(
+      `${CtYunClient.BASE_URL}/api/auth/client/qrCode/getStatus?qrCodeId=${encodeURIComponent(qrCodeId)}`,
+      {
+        headers: {
+          ...this.getHeaders(),
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      },
+    );
+    const json = (await res.json()) as {
+      code: number;
+      msg?: string;
+      data?: {
+        codeId: string;
+        codeStatus: 'created' | 'scaned' | 'expire' | 'authorize';
+        loginToken?: string;
+      };
+    };
+    if (json.code !== 0 || !json.data) {
+      throw new Error(json.msg || '查询扫码状态失败');
+    }
+    return {
+      codeStatus: json.data.codeStatus,
+      loginToken: json.data.loginToken || undefined,
+    };
+  }
+
+  /**
+   * 3.3 使用扫码授权后的 loginToken 换取正式登录态
+   */
+  public async loginByToken(accessToken: string): Promise<LoginInfo> {
+    const res = await safeFetch(`${CtYunClient.BASE_URL}/api/auth/client/tokenLogin`, {
+      method: 'POST',
+      headers: {
+        ...this.getHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accessToken,
+        osType: 'Windows',
+        deviceModel: 'Windows NT 10.0; Win64; x64',
+        appVersion: '3.2.0',
+        deviceCode: this.deviceCode,
+        deviceName: 'Chrome浏览器',
+        deviceType: CtYunClient.DEVICE_TYPE,
+        sysVersion: 'Windows NT 10.0; Win64; x64',
+        clientVersion: CtYunClient.VERSION,
+      }),
+    });
+    const json = (await res.json()) as { code: number; msg?: string; data: LoginInfo };
+    if (json.code !== 0 && json.code !== 200) {
+      throw new Error(json.msg || '扫码登录验证失败');
+    }
     this.loginInfo = json.data;
     return json.data;
   }

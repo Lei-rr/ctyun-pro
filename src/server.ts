@@ -5,6 +5,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { WebSocketServer, WebSocket } from 'ws';
+import QRCode from 'qrcode';
 import { Config } from './config.js';
 import { AccountManager } from './core/index.js';
 import { CtYunClient, type ChallengeData } from './core/client.js';
@@ -237,6 +238,89 @@ export async function createServer() {
       };
     } catch (err: any) {
       reply.code(500).send({ success: false, msg: err.message });
+    }
+  });
+
+  // 3.1 生成扫码登录二维码
+  fastify.post('/api/account/qrcode/create', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const body = (request.body as any) || {};
+    const accountName = (body.accountName || '').trim() || `user_${Date.now().toString().slice(-4)}`;
+    const client = manager.getClient(accountName);
+    try {
+      const { qrCodeId, qrUrl } = await client.genQrCode();
+      const qrImage = await QRCode.toDataURL(qrUrl, {
+        width: 200,
+        margin: 1,
+        color: {
+          dark: '#000000',
+          light: '#ffffff',
+        },
+      });
+      return {
+        success: true,
+        data: {
+          accountName,
+          qrCodeId,
+          qrUrl,
+          qrImage,
+        },
+      };
+    } catch (err: any) {
+      return reply.code(500).send({ success: false, msg: err.message || '生成二维码失败' });
+    }
+  });
+
+  // 3.2 轮询扫码状态并自动完成登录授权
+  fastify.get('/api/account/qrcode/status', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const query = request.query as { qrCodeId?: string; accountName?: string };
+    if (!query.qrCodeId) {
+      return reply.code(400).send({ success: false, msg: '缺少 qrCodeId 参数' });
+    }
+    const accountName = (query.accountName || '').trim() || 'default';
+    const client = manager.getClient(accountName);
+    try {
+      const statusData = await client.getQrCodeStatus(query.qrCodeId);
+      if (statusData.codeStatus === 'authorize' && statusData.loginToken) {
+        manager.addLog('info', `[${accountName}] 扫码授权成功，正在换取登录凭证...`);
+        const loginInfo = await client.loginByToken(statusData.loginToken);
+
+        const finalAccountName =
+          (query.accountName || '').trim() ||
+          loginInfo.userName ||
+          loginInfo.mobilephone ||
+          loginInfo.userAccount ||
+          accountName;
+
+        manager.addOrUpdateAccount({
+          name: finalAccountName,
+          user: loginInfo.userName || loginInfo.mobilephone || loginInfo.userAccount || finalAccountName,
+          deviceCode: client.getDeviceCode(),
+          loginInfo: loginInfo,
+          autoStart: true,
+        });
+
+        manager.addLog('success', `[${finalAccountName}] 扫码登录成功！正在启动云电脑保活...`);
+        manager.startAccount(finalAccountName).catch((e) => {
+          manager.addLog('error', `[${finalAccountName}] 启动保活失败: ${e.message}`);
+        });
+
+        return {
+          success: true,
+          codeStatus: 'authorize',
+          accountName: finalAccountName,
+          loginInfo,
+          msg: '登录成功',
+        };
+      }
+
+      return {
+        success: true,
+        codeStatus: statusData.codeStatus,
+      };
+    } catch (err: any) {
+      return reply.send({ success: false, msg: err.message });
     }
   });
 
