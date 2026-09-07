@@ -186,6 +186,7 @@ export class HangTask {
         totalProgress = hangTask.totalProgress || 3600;
         if (hangTask.isCompleted || currentProgress >= (totalProgress - REDUNDANCY_SECONDS)) {
           logger.addLog('success', `[${accountName}] 今日「使用1小时」挂机任务已达成 (${currentProgress}/${totalProgress}秒)！+100 积分已入账，无需重复挂机`);
+          onProgress?.(currentProgress, totalProgress);
           return { success: true, message: `今日挂机任务已达成 (${currentProgress}/${totalProgress}秒)` };
         }
       }

@@ -523,6 +523,12 @@ export class AccountManager {
           const desktopStates = state?.desktops || [];
           await this.keepAliveManager.syncWorkersForAccount(accountName, client, list, desktopStates);
         } catch {}
+
+        // 挂机完成后自动拉取官方最新积分并刷新今日积分看板缓存
+        try {
+          await this.getPointsAndTasks(accountName);
+        } catch {}
+
         this.notifyStatusChange();
       }
     })();
