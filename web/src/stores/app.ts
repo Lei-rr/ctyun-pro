@@ -794,7 +794,7 @@ export const useAppStore = defineStore('app', () => {
           autoSign: policyTaskEnabled.value && policyAutoSign.value,
           taskConfig: {
             enabled: policyTaskEnabled.value,
-            scheduleTime: policyScheduleTime.value || '08:00',
+            scheduleTime: policyScheduleTime.value || getRandomScheduleTime(),
             autoSign: policyAutoSign.value,
             loginDesktop: policyLoginDesktop.value,
             aiChat: policyAiChat.value,

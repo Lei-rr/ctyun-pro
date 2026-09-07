@@ -141,14 +141,21 @@ export class AccountManager {
     for (const [name, acc] of this.accounts.entries()) {
       const state = this.accountStates.get(name);
       if (state) {
+        if (!acc.taskConfig) {
+          acc.taskConfig = {
+            enabled: acc.autoSign ?? true,
+            autoSign: true,
+            loginDesktop: true,
+            aiChat: true,
+            keepAliveHang: true,
+            scheduleTime: getRandomScheduleTime(),
+          };
+        } else if (!acc.taskConfig.scheduleTime) {
+          acc.taskConfig.scheduleTime = getRandomScheduleTime();
+        }
         state.autoSign = acc.autoSign ?? false;
         state.lastSignDate = acc.lastSignDate;
-        state.taskConfig = acc.taskConfig || {
-          enabled: acc.autoSign ?? true,
-          autoSign: true,
-          loginDesktop: true,
-          aiChat: true,
-        };
+        state.taskConfig = acc.taskConfig;
         state.redeemConfig = acc.redeemConfig;
         state.hangStatus = HangTask.getHangInfo(name) || undefined;
         state.todayPoints = this.todayPointsCache.get(name)?.todayPoints ?? 0;
@@ -409,7 +416,19 @@ export class AccountManager {
   public async addOrUpdateAccount(config: AccountConfig): Promise<void> {
     const name = config.name || config.user;
     const deviceCode = config.deviceCode || Config.resolveDeviceCode(name);
-    const fullAcc: AccountConfig = { ...config, name, deviceCode };
+    const existingAcc = this.accounts.get(name);
+    const taskConfig = config.taskConfig || existingAcc?.taskConfig || {
+      enabled: true,
+      autoSign: true,
+      loginDesktop: true,
+      aiChat: true,
+      keepAliveHang: true,
+      scheduleTime: getRandomScheduleTime(),
+    };
+    if (!taskConfig.scheduleTime) {
+      taskConfig.scheduleTime = getRandomScheduleTime();
+    }
+    const fullAcc: AccountConfig = { ...config, name, deviceCode, taskConfig };
 
     this.accounts.set(name, fullAcc);
     let state = this.accountStates.get(name);
@@ -422,13 +441,7 @@ export class AccountManager {
         loginInfo: config.loginInfo,
         autoSign: config.autoSign ?? true,
         lastSignDate: config.lastSignDate,
-        taskConfig: config.taskConfig || {
-          enabled: true,
-          autoSign: true,
-          loginDesktop: true,
-          aiChat: true,
-          scheduleTime: getRandomScheduleTime(),
-        },
+        taskConfig,
         redeemConfig: config.redeemConfig,
         desktops: [],
       };
@@ -438,7 +451,7 @@ export class AccountManager {
       state.deviceCode = deviceCode;
       state.autoSign = config.autoSign ?? state.autoSign;
       state.lastSignDate = config.lastSignDate ?? state.lastSignDate;
-      state.taskConfig = config.taskConfig ?? state.taskConfig;
+      state.taskConfig = taskConfig;
       state.redeemConfig = config.redeemConfig ?? state.redeemConfig;
       if (config.loginInfo) {
         state.loginInfo = config.loginInfo;
@@ -789,7 +802,18 @@ export class AccountManager {
     for (const acc of rawAccounts) {
       const name = acc.name || acc.user;
       const deviceCode = Config.resolveDeviceCode(name, acc.deviceCode);
-      const fullAcc: AccountConfig = { ...acc, name, deviceCode };
+      const taskConfig = acc.taskConfig || {
+        enabled: true,
+        autoSign: true,
+        loginDesktop: true,
+        aiChat: true,
+        keepAliveHang: true,
+        scheduleTime: getRandomScheduleTime(),
+      };
+      if (!taskConfig.scheduleTime) {
+        taskConfig.scheduleTime = getRandomScheduleTime();
+      }
+      const fullAcc: AccountConfig = { ...acc, name, deviceCode, taskConfig };
       this.accounts.set(name, fullAcc);
 
       const client = this.getClient(name);
@@ -805,13 +829,7 @@ export class AccountManager {
         loginInfo: acc.loginInfo,
         autoSign: acc.autoSign ?? true,
         lastSignDate: acc.lastSignDate,
-        taskConfig: acc.taskConfig || {
-          enabled: true,
-          autoSign: true,
-          loginDesktop: true,
-          aiChat: true,
-          scheduleTime: '08:00',
-        },
+        taskConfig,
         redeemConfig: acc.redeemConfig,
         desktops: [],
       };

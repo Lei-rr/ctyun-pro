@@ -341,7 +341,7 @@ onUnmounted(() => {
                   <span>{{ account.hangStatus?.running ? '挂机中' : (account.status === 'online' ? '保活中' : account.status === 'idle' ? '就绪' : account.status === 'error' ? '异常' : '需认证') }}</span>
                 </Badge>
                  <Badge v-if="account.taskConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
-                   每日任务 ({{ account.taskConfig?.scheduleTime || '08:00' }})
+                   每日任务 ({{ account.taskConfig?.scheduleTime || '随机时间' }})
                  </Badge>
                  <Badge v-if="account.redeemConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
                    自动兑换
