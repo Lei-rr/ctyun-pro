@@ -84,7 +84,33 @@ _✨ 天翼云电脑多账号纯协议持久保活 · 智能补足挂机引擎 �
 
 ## 🚀 部署教程
 
-### 方式一：Docker 一键部署（强烈推荐 👍）
+### 方式一：Linux 单文件原生二进制（零 Docker 依赖，极速秒启 ⚡）
+
+针对不想安装 Docker、或低内存（512MB/1GB）VPS 用户，官方原生提供编译好的独立单可执行文件，内嵌完整 Web 控制台：
+
+1. **下载对应架构的二进制文件**（从 [GitHub Releases](https://github.com/Lei-rr/ctyun-pro/releases) 获取）：
+   ```bash
+   # x86_64 架构（标准 Linux 服务器 / AMD / Intel）
+   wget https://github.com/Lei-rr/ctyun-pro/releases/latest/download/ctyun-pro-linux-amd64 -O ctyun-pro
+   chmod +x ctyun-pro
+
+   # ARM64 架构（树莓派 / 甲骨文 ARM / 华为鲲鹏 / 苹果 M 系列 Linux）
+   wget https://github.com/Lei-rr/ctyun-pro/releases/latest/download/ctyun-pro-linux-arm64 -O ctyun-pro
+   chmod +x ctyun-pro
+   ```
+
+2. **启动服务**：
+   ```bash
+   # 直接运行（默认端口 3088，数据自动保存在 ./data 目录）
+   ./ctyun-pro
+
+   # 或自定义端口后台运行：
+   PORT=3088 nohup ./ctyun-pro > ctyun.log 2>&1 &
+   ```
+
+---
+
+### 方式二：Docker 一键部署（官方推荐 👍）
 
 无需在宿主机安装任何浏览器依赖，拉取镜像即可开箱即用：
 
@@ -101,7 +127,7 @@ docker run -d \
 
 ---
 
-### 方式二：Docker Compose 编排部署
+### 方式三：Docker Compose 编排部署
 
 在宿主机创建 `docker-compose.yml` 文件：
 
@@ -129,7 +155,7 @@ docker compose up -d
 
 ---
 
-### 方式三：源码本地编译运行
+### 方式四：源码本地编译运行
 
 #### 1. 系统依赖安装（按需执行）
 智能补足挂机引擎依赖系统底层 Chromium 浏览器。如果在执行智能挂机时提示内核缺失，执行下方对应发行版命令即可：

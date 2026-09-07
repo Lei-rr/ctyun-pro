@@ -9,6 +9,49 @@ on:
   workflow_dispatch:
 
 jobs:
+  binaries:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Web & Embedded Assets
+        run: |
+          npm --workspace web run build
+          npx tsx scripts/build-embedded.ts
+
+      - name: Compile Standalone Binaries
+        run: |
+          mkdir -p release-bin
+          bun build --compile src/index.ts --outfile release-bin/ctyun-pro-linux-amd64
+          bun build --compile --target=bun-linux-arm64 src/index.ts --outfile release-bin/ctyun-pro-linux-arm64
+          chmod +x release-bin/*
+
+      - name: Upload Release Binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-bin/ctyun-pro-linux-amd64
+            release-bin/ctyun-pro-linux-arm64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   docker:
     runs-on: ubuntu-latest
     permissions:

@@ -1,6 +1,6 @@
 {
   "name": "ctyun-pro",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "天翼云电脑智能保活管理系统 Pro (纯协议长连接保活 | 智能补足挂机引擎 | 多账号免密集中调度 | 现代化 Web 控制台)",
   "type": "module",
   "workspaces": [
@@ -13,9 +13,11 @@
     "dev": "tsx watch src/index.ts",
     "dev:server": "tsx watch src/index.ts",
     "dev:web": "npm --workspace web run dev",
-    "build": "npm run build:server && npm run build:web",
+    "build": "npm run build:web && npm run build:embedded && npm run build:server",
     "build:server": "rm -rf dist && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --packages=external --outfile=dist/server.js",
     "build:web": "npm --workspace web run build",
+    "build:embedded": "tsx scripts/build-embedded.ts",
+    "build:bin": "npm run build:web && npm run build:embedded && mkdir -p dist && bun build --compile src/index.ts --outfile dist/ctyun-pro-linux-amd64 && bun build --compile --target=bun-linux-arm64 src/index.ts --outfile dist/ctyun-pro-linux-arm64",
     "version:patch": "npm version patch --no-git-tag-version && cd web && npm version patch --no-git-tag-version && cd ..",
     "start": "node dist/server.js"
   },
