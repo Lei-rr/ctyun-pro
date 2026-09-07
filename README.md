@@ -84,28 +84,9 @@ _✨ 天翼云电脑多账号纯协议持久保活 · 智能补足挂机引擎 �
 
 ## 🚀 部署教程
 
-### 方式一：独立原生可执行文件（免 Docker，极速秒启 ⚡）
+### 方式一：Docker 一键部署（首选推荐 👍）
 
-针对不想安装 Docker、Windows 家用挂机或低内存（512MB/1GB）VPS 用户，官方原生提供编译好的独立单文件，内置完整 Web 控制台：
-
-- **🪟 Windows 用户**：
-  从 [GitHub Releases](https://github.com/Lei-rr/ctyun-pro/releases) 下载 `ctyun-pro-windows-x64.exe`，直接双击运行即可，浏览器打开 `http://127.0.0.1:3088`。
-- **🐧 Linux x86_64 服务器（AMD / Intel）**：
-  ```bash
-  wget https://github.com/Lei-rr/ctyun-pro/releases/latest/download/ctyun-pro-linux-amd64 -O ctyun-pro
-  chmod +x ctyun-pro && ./ctyun-pro
-  ```
-- **📱 Linux ARM64 服务器（树莓派 / 甲骨文 ARM / 华为鲲鹏）**：
-  ```bash
-  wget https://github.com/Lei-rr/ctyun-pro/releases/latest/download/ctyun-pro-linux-arm64 -O ctyun-pro
-  chmod +x ctyun-pro && ./ctyun-pro
-  ```
-
----
-
-### 方式二：Docker 一键部署（官方推荐 👍）
-
-无需在宿主机安装任何浏览器依赖，拉取镜像即可开箱即用：
+无需在宿主机安装任何浏览器依赖，镜像已内置完整运行环境，开箱即用：
 
 ```bash
 docker run -d \
@@ -120,7 +101,7 @@ docker run -d \
 
 ---
 
-### 方式三：Docker Compose 编排部署
+### 方式二：Docker Compose 编排部署（次选推荐 📦）
 
 在宿主机创建 `docker-compose.yml` 文件：
 
@@ -145,6 +126,39 @@ services:
 ```bash
 docker compose up -d
 ```
+
+---
+
+### 方式三：一键安装脚本（支持 systemd 开机自启 & 独立二进制 ⚡）
+
+针对不想安装 Docker、低内存（512MB/1GB）VPS 或 Windows 用户，官方原生提供编译好的独立单文件（内嵌完整 Web 控制台，零外部依赖）：
+
+#### 1. Linux 一键自动安装与开机自启（推荐）
+在终端直接执行下方命令，脚本会自动识别系统架构（x86_64 / ARM64）、下载最新单文件并注册配置为 **systemd 开机自启**服务：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Lei-rr/ctyun-pro/main/install.sh | bash
+```
+
+常用服务管理命令：
+```bash
+systemctl start ctyun-pro    # 启动服务
+systemctl stop ctyun-pro     # 停止服务
+systemctl restart ctyun-pro  # 重启服务
+systemctl status ctyun-pro   # 查看状态
+journalctl -u ctyun-pro -f   # 查看实时日志
+```
+
+#### 2. Windows / 手动单文件直接运行
+- **🪟 Windows 用户**：
+  从 [GitHub Releases](https://github.com/Lei-rr/ctyun-pro/releases) 下载 `ctyun-pro-windows-x64.exe`，直接双击运行即可，浏览器打开 `http://127.0.0.1:3088`。
+- **🐧 手动运行 Linux 独立二进制**：
+  ```bash
+  # x86_64
+  wget https://github.com/Lei-rr/ctyun-pro/releases/latest/download/ctyun-pro-linux-amd64 -O ctyun-pro && chmod +x ctyun-pro && ./ctyun-pro
+  # ARM64
+  wget https://github.com/Lei-rr/ctyun-pro/releases/latest/download/ctyun-pro-linux-arm64 -O ctyun-pro && chmod +x ctyun-pro && ./ctyun-pro
+  ```
 
 ---
 
