@@ -9,7 +9,7 @@ import { Config } from './config.js';
 import { AccountManager } from './core/index.js';
 import { CtYunClient, type ChallengeData } from './core/client.js';
 import { TaskRunner } from './tasks/index.js';
-import { safeWriteFileSync } from './core/utils.js';
+import { safeWriteFileSync, sendWebhookNotification } from './core/utils.js';
 import { EMBEDDED_WEB_FILES } from './embedded-web.js';
 
 export async function createServer() {
@@ -172,6 +172,32 @@ export async function createServer() {
     manager.saveToDisk();
     manager.addLog('info', '系统全局配置已持久化至 data/config.json');
     return { success: true };
+  });
+
+  // 1.2 测试 Webhook 推送连通性
+  fastify.post('/api/config/webhook/test', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const body = (request.body as any) || {};
+    const targetUrl = (body.webhookUrl || manager.webhookUrl || '').trim();
+    if (!targetUrl) {
+      return reply.send({ success: false, msg: '请先填写 Webhook 推送地址' });
+    }
+
+    const nowStr = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    const success = await sendWebhookNotification(
+      targetUrl,
+      'CTYUN-PRO - Webhook 通知测试',
+      `恭喜！您的 Webhook 消息通知配置成功！\n\n• 测试结果: 成功连通 ✅\n• 发送时间: ${nowStr}\n• 监控范围: 智能挂机达标、Token过期告警、每日运行战报已接入。`,
+    );
+
+    if (success) {
+      return reply.send({ success: true, msg: '测试消息已成功送达，请前往对应渠道查收！' });
+    } else {
+      return reply.send({
+        success: false,
+        msg: '测试推送失败，请检查 Webhook 地址格式或宿主机网络连通性',
+      });
+    }
   });
 
   // 2. 更新保活周期

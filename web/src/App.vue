@@ -59,6 +59,7 @@ const sysKeepAlive = ref(60);
 const sysAdminPassword = ref('');
 const sysWebhookUrl = ref('');
 const sysLoading = ref(false);
+const testWebhookLoading = ref(false);
 
 function openConfigModal() {
   sysKeepAlive.value = store.keepAliveSeconds || 60;
@@ -69,6 +70,32 @@ function openConfigModal() {
 
 function openSystemModal() {
   openConfigModal();
+}
+
+async function handleTestWebhook() {
+  const url = sysWebhookUrl.value.trim();
+  if (!url) {
+    toast.error('请先在输入框中填入 Webhook 地址');
+    return;
+  }
+  testWebhookLoading.value = true;
+  try {
+    const res = await fetch('/api/config/webhook/test', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(store.adminToken ? { 'x-admin-token': store.adminToken } : {}),
+      },
+      body: JSON.stringify({ webhookUrl: url }),
+    });
+    const json = await res.json();
+    if (!json.success) throw new Error(json.msg || '测试推送失败');
+    toast.success(json.msg || '测试消息已成功送达！');
+  } catch (e: any) {
+    toast.error(e.message || '测试推送失败');
+  } finally {
+    testWebhookLoading.value = false;
+  }
 }
 
 async function saveSystemConfig() {
@@ -631,13 +658,25 @@ onUnmounted(() => {
           </div>
 
           <div class="space-y-1.5">
-            <label class="text-xs font-medium text-foreground">Webhook 推送地址 (支持 Server酱 / Bark / 飞书 / 企微 / 钉钉)</label>
-            <Input
-              type="text"
-              v-model="sysWebhookUrl"
-              placeholder="https://..."
-              class="h-9"
-            />
+            <label class="text-xs font-medium text-foreground">Webhook 推送地址 (支持 Server酱 / Bark / PushPlus / 企微 / 飞书 / 钉钉)</label>
+            <div class="flex gap-2">
+              <Input
+                type="text"
+                v-model="sysWebhookUrl"
+                placeholder="https://..."
+                class="h-9 flex-1"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                :disabled="testWebhookLoading"
+                @click="handleTestWebhook"
+                class="h-9 px-3 shrink-0 cursor-pointer text-xs"
+              >
+                {{ testWebhookLoading ? '测试中...' : '测试' }}
+              </Button>
+            </div>
           </div>
 
           <div class="pt-2 flex gap-2.5">

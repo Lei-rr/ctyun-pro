@@ -162,7 +162,7 @@ export class HangTask {
     client: CtYunClient,
     logger: Logger,
     onProgress?: (cur: number, total: number) => void,
-  ): Promise<{ success: boolean; message: string }> {
+  ): Promise<{ success: boolean; message: string; isCompleted?: boolean }> {
     if (!client.loginInfo) {
       return { success: false, message: '账号未登录，无法执行挂机任务' };
     }
@@ -323,23 +323,28 @@ export class HangTask {
       // 等待 3 秒让天翼云官方网关完成结算写入
       await new Promise((r) => setTimeout(r, 3000));
 
+      let hangResultMsg = '预定挂机时长已满足，任务已完成';
+      let isCompletedTarget = false;
       try {
         const finalSum = await SignTask.getPointsAndTasks(client);
         const t = finalSum.tasks.find((task) => task.name.includes('使用1小时') || task.name.includes('使用'));
         if (t) {
           const cur = t.currentProgress || 0;
           if (cur >= (totalProgress - REDUNDANCY_SECONDS) || t.isCompleted) {
-            logger.addLog('success', `[${accountName}] 🎉 官方结算确认达标 (${cur}/${totalProgress}秒)！+100 积分已到账`);
+            isCompletedTarget = true;
+            hangResultMsg = `官方结算确认达标 (${cur}/${totalProgress}秒)！+100 积分已到账`;
+            logger.addLog('success', `[${accountName}] 🎉 ${hangResultMsg}`);
           } else {
-            logger.addLog('info', `[${accountName}] 官方网关已结算当前累计 ${cur}/${totalProgress}秒`);
+            hangResultMsg = `官方网关已结算当前累计 ${cur}/${totalProgress}秒`;
+            logger.addLog('info', `[${accountName}] ${hangResultMsg}`);
           }
         }
       } catch {}
 
-      return { success: true, message: '挂机任务已完成' };
+      return { success: true, message: hangResultMsg, isCompleted: isCompletedTarget };
     } catch (err: any) {
       logger.addLog('error', `[${accountName}] 云电脑智能挂机异常: ${err.message}`);
-      return { success: false, message: err.message };
+      return { success: false, message: err.message, isCompleted: false };
     } finally {
       activeHangTasks.delete(accountName);
       if (browserContextHandle) {

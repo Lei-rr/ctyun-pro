@@ -68,7 +68,22 @@ export async function sendWebhookNotification(
       return true;
     }
 
-    // 2. Server 酱 / pushdeer (支持 title / desp)
+    // 2. PushPlus (pushplus.plus)
+    if (url.includes('pushplus.plus')) {
+      await safeFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          content: content.replace(/\n/g, '<br/>'),
+          template: 'html',
+        }),
+        timeoutMs: 8000,
+      });
+      return true;
+    }
+
+    // 3. Server 酱 / pushdeer (支持 title / desp)
     if (url.includes('serverchan') || url.includes('sctapi.ftqq.com') || url.includes('pushdeer')) {
       await safeFetch(url, {
         method: 'POST',

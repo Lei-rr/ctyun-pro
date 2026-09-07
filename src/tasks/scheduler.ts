@@ -14,6 +14,7 @@ export class TaskScheduler {
   private logger: Logger;
   private timer: NodeJS.Timeout | null = null;
   private lastCheckedMinute = '';
+  private lastDigestDate = '';
 
   constructor(accountManager: AccountManager, logger: Logger) {
     this.accountManager = accountManager;
@@ -198,6 +199,44 @@ export class TaskScheduler {
             }
           }
         }
+      }
+    }
+
+    // 3. 每日早报汇总推送 (Daily Digest，固定在每日 09:00 推送一条汇总通知)
+    if (this.accountManager.webhookUrl && this.lastDigestDate !== today && currentHHmm === '09:00') {
+      this.lastDigestDate = today;
+      try {
+        const reportLines: string[] = [];
+        let totalGeneral = 0;
+        let onlineCount = 0;
+
+        for (const [name, acc] of accounts.entries()) {
+          const state = this.accountManager.getAccountState(name);
+          const isOnline = state?.status === 'online';
+          if (isOnline) onlineCount++;
+
+          let pointInfo = '';
+          try {
+            const sum = await this.accountManager.getPointsAndTasks(name);
+            const total = (sum.generalPoints || 0) + (sum.phonePoints || 0);
+            totalGeneral += total;
+            const hangTask = sum.tasks.find((t) => t.name.includes('使用1小时') || t.name.includes('使用'));
+            const hangStatusText = hangTask?.isCompleted ? '已达标(100分) ✅' : `${hangTask?.currentProgress || 0}秒`;
+            pointInfo = `总积分: ${total} | 挂机: ${hangStatusText}`;
+          } catch {
+            pointInfo = '积分查询暂缓';
+          }
+
+          const signMark = acc.lastSignDate === today ? '已打卡' : '待执行';
+          const statusIcon = isOnline ? '🟢' : '🔴';
+          reportLines.push(`${statusIcon} [${name}]: ${signMark} | ${pointInfo}`);
+        }
+
+        const title = `CTYUN-PRO - 每日运行早报 (${today})`;
+        const content = `今日监控概览：\n• 在线账号: ${onlineCount}/${accounts.size}\n• 总积分池: ${totalGeneral} 积分\n• 报告时间: ${currentHHmm}\n\n账号明细：\n${reportLines.join('\n')}\n\n系统已全自动维持保活长连接中。`;
+        sendWebhookNotification(this.accountManager.webhookUrl, title, content).catch(() => {});
+      } catch (err: any) {
+        this.logger.addLog('warn', `每日早报推送异常: ${err.message}`);
       }
     }
   }

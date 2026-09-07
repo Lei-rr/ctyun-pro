@@ -9,7 +9,7 @@ import { SignTask, type PointsSummary } from '../tasks/sign.js';
 import { RedeemTask, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../tasks/redeem.js';
 import { AiChatTask } from '../tasks/ai-chat.js';
 import { HangTask } from '../tasks/hang.js';
-import { safeWriteFileSync } from './utils.js';
+import { safeWriteFileSync, sendWebhookNotification } from './utils.js';
 
 export interface ManagedAccount {
   name: string;
@@ -50,6 +50,7 @@ export class AccountManager {
   public webhookUrl = '';
   public rewardsCache: RewardItem[] = [...DEFAULT_LOCAL_REWARDS];
   private todayPointsCache: Map<string, { todayPoints: number; updatedAt: number }> = new Map();
+  private expiredNotifiedAccounts: Set<string> = new Set();
 
   constructor() {
     this.keepAliveManager = new KeepAliveManager(this.logger, () => this.notifyStatusChange());
@@ -345,8 +346,30 @@ export class AccountManager {
       state.status = 'error';
       state.lastError = err.message;
       this.logger.addLog('error', `[${accountName}] 拉取云电脑失败: ${err.message}`);
+
+      // 检测是否为 Token 过期或未登录
+      const errMsg = (err.message || '').toLowerCase();
+      if (
+        errMsg.includes('登录') ||
+        errMsg.includes('token') ||
+        errMsg.includes('401') ||
+        errMsg.includes('过期') ||
+        errMsg.includes('失效') ||
+        errMsg.includes('重新登录')
+      ) {
+        state.status = 'login_needed';
+        if (this.webhookUrl && !this.expiredNotifiedAccounts.has(accountName)) {
+          this.expiredNotifiedAccounts.add(accountName);
+          const title = `天翼云电脑 - [${accountName}] 登录态失效告警 🚨`;
+          const content = `账号: ${accountName}\n错误: ${err.message}\n状态: 登录凭证已失效或被踢出，已暂停自动任务。\n请尽快登录 Web 控制台重新扫码登录！`;
+          sendWebhookNotification(this.webhookUrl, title, content).catch(() => {});
+        }
+      }
       return;
     }
+
+    // 成功拉取列表说明 Token 正常有效，重置告警去重状态
+    this.expiredNotifiedAccounts.delete(accountName);
 
     if (!list || list.length === 0) {
       this.logger.addLog('warn', `[${accountName}] 该账号下未找到可用云电脑`);
@@ -509,12 +532,14 @@ export class AccountManager {
 
     // 后台异步触发智能补足挂机
     (async () => {
+      let hangResult: { success: boolean; message: string; isCompleted?: boolean } | null = null;
       try {
-        await HangTask.executeSmartHang(accountName, client, this.logger, () => {
+        hangResult = await HangTask.executeSmartHang(accountName, client, this.logger, () => {
           this.notifyStatusChange();
         });
       } catch (e: any) {
         this.logger.addLog('warn', `[${accountName}] 智能挂机提示: ${e.message}`);
+        hangResult = { success: false, message: e.message };
       } finally {
         // 挂机完成（或异常退出）后：恢复底层 7x24 小时持久保活长连接
         try {
@@ -525,9 +550,22 @@ export class AccountManager {
         } catch {}
 
         // 挂机完成后自动拉取官方最新积分并刷新今日积分看板缓存
+        let finalPoints = 0;
         try {
-          await this.getPointsAndTasks(accountName);
+          const sum = await this.getPointsAndTasks(accountName);
+          finalPoints = sum.generalPoints + sum.phonePoints;
         } catch {}
+
+        // Webhook 推送挂机结果通知
+        if (this.webhookUrl && hangResult) {
+          const title = hangResult.success
+            ? (hangResult.isCompleted
+                ? `天翼云电脑 - [${accountName}] 智能挂机已达标 🎉`
+                : `天翼云电脑 - [${accountName}] 智能挂机完成`)
+            : `天翼云电脑 - [${accountName}] 智能挂机异常 ⚠️`;
+          const content = `账号: ${accountName}\n挂机结果: ${hangResult.message}\n最新总积分: ${finalPoints || '已刷新'}\n完成时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+          sendWebhookNotification(this.webhookUrl, title, content).catch(() => {});
+        }
 
         this.notifyStatusChange();
       }
