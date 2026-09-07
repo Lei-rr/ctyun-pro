@@ -836,6 +836,7 @@ export class AccountManager {
       this.accountStates.set(name, state);
     }
 
+    this.saveToDisk();
     this.logger.addLog('info', `已加载本地配置文件 (${this.accounts.size} 个账号)`);
 
       for (const [name, acc] of this.accounts.entries()) {
