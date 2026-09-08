@@ -75,22 +75,28 @@ jobs:
 
       - name: Log in to Aliyun ACR
         env:
+          ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
           ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
         run: |
+          ALIYUN_USER="${ALIYUN_USERNAME:-guoleipro}"
           if [ -n "$ALIYUN_PASSWORD" ]; then
-            echo "$ALIYUN_PASSWORD" | docker login --username guoleipro --password-stdin crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com
+            if echo "$ALIYUN_PASSWORD" | docker login --username "$ALIYUN_USER" --password-stdin crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com; then
+              echo "ALIYUN_LOGGED_IN=true" >> $GITHUB_ENV
+              echo "Successfully logged into Aliyun ACR as $ALIYUN_USER"
+            else
+              echo "::warning::Aliyun ACR login failed with user $ALIYUN_USER. Please verify ACR 访问凭证密码."
+            fi
           else
             echo "ALIYUN_PASSWORD is not set, skipping Aliyun ACR push."
           fi
 
       - name: Determine Image Repositories
         id: repos
-        env:
-          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
         run: |
           IMAGES="ghcr.io/${{ github.repository }}"
-          if [ -n "$ALIYUN_PASSWORD" ]; then
+          if [ "$ALIYUN_LOGGED_IN" = "true" ]; then
             IMAGES="${IMAGES}"$'\n'"crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro"
+            echo "Push target includes Aliyun ACR."
           fi
           echo "images<<EOF" >> $GITHUB_OUTPUT
           echo "$IMAGES" >> $GITHUB_OUTPUT
