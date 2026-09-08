@@ -40,8 +40,8 @@ _✨ 天翼云电脑多账号纯协议持久保活 · 智能补足挂机引擎 �
 
 > [!NOTE]
 > 🐳 **官方 Docker 镜像地址**：
-> - **GitHub 官方源（海外/默认）**：`ghcr.io/lei-rr/ctyun-pro:latest` 或 `ghcr.io/lei-rr/ctyun-pro:v1.3.1`
-> - **阿里云高速源（国内推荐 ⚡）**：`crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:latest`  
+> - **GitHub 官方源（海外/默认）**：`ghcr.io/lei-rr/ctyun-pro:latest` 或 `ghcr.io/lei-rr/ctyun-pro:v1.3.2`
+> - **阿里云高速源（国内推荐 ⚡）**：`crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:latest` 或 `crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:v1.3.2`  
 > 镜像内已预置全套中文字体与 Chromium 无头浏览器内核，无需在宿主机额外配置浏览器环境，开箱即用！
 
 > [!WARNING]
@@ -81,6 +81,7 @@ _✨ 天翼云电脑多账号纯协议持久保活 · 智能补足挂机引擎 �
 + [x] **设备安全白名单认证**：原生对接天翼云官方设备安全认证体系，已绑定熟设备秒级静默登录，新设备首次登录自动拉起短信二次认证。
 + [x] **今日积分实时看板**：控制台仪表盘实时统计当日积分获取总额，开机自动预载，挂机完成秒级跳变刷新。
 + [x] **全渠道 Webhook 通知**：支持配置企业微信机器人、钉钉机器人、飞书机器人、Server酱、Bark 与通用 Webhook，任务完成或异常即时通知。
++ [x] **全自动 CI/CD 与多镜像仓库矩阵分发**：GitHub Actions 原生全自动交叉编译 Linux (x86_64/ARM64) 与 Windows 独立单文件二进制；Docker 镜像多通道并行分发至 GitHub Packages (GHCR) 与阿里云 ACR 国内高速节点，国内服务器免翻墙秒级部署。
 + [x] **生产级高可用架构**：采用原子化临时文件落盘（拒绝断电配置损坏）、优雅停机资源回收与 60s 网络超时保护。
 + [x] **现代化精致控制台**：基于 Vue 3 + Tailwind CSS + Radix UI 设计规范，支持深色高对比度主题切换、多账号日志智能折叠与置底。
 
@@ -121,7 +122,10 @@ docker run -d \
 ```yaml
 services:
   ctyun-pro:
+    # 方式 A：GitHub 官方源
     image: ghcr.io/lei-rr/ctyun-pro:latest
+    # 方式 B：国内服务器阿里云高速源（取消下行注释即可使用）
+    # image: crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:latest
     container_name: ctyun-pro
     restart: unless-stopped
     ports:
