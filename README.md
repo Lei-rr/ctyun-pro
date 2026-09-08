@@ -39,7 +39,9 @@ _✨ 天翼云电脑多账号纯协议持久保活 · 智能补足挂机引擎 �
 </div>
 
 > [!NOTE]
-> 🐳 **官方 Docker 镜像地址**：`ghcr.io/lei-rr/ctyun-pro:latest` 或指定版本 `ghcr.io/lei-rr/ctyun-pro:v1.3.1`  
+> 🐳 **官方 Docker 镜像地址**：
+> - **GitHub 官方源（海外/默认）**：`ghcr.io/lei-rr/ctyun-pro:latest` 或 `ghcr.io/lei-rr/ctyun-pro:v1.3.1`
+> - **阿里云高速源（国内推荐 ⚡）**：`crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:latest`  
 > 镜像内已预置全套中文字体与 Chromium 无头浏览器内核，无需在宿主机额外配置浏览器环境，开箱即用！
 
 > [!WARNING]
@@ -91,12 +93,21 @@ _✨ 天翼云电脑多账号纯协议持久保活 · 智能补足挂机引擎 �
 无需在宿主机安装任何浏览器依赖，镜像已内置完整运行环境，开箱即用：
 
 ```bash
+# 方式 A：GitHub 官方源
 docker run -d \
   --name ctyun-pro \
   --restart unless-stopped \
   -p 3088:3088 \
   -v /data/ctyun-pro:/app/data \
   ghcr.io/lei-rr/ctyun-pro:latest
+
+# 方式 B：国内服务器高速源（阿里云镜像，免翻墙秒级下载）
+docker run -d \
+  --name ctyun-pro \
+  --restart unless-stopped \
+  -p 3088:3088 \
+  -v /data/ctyun-pro:/app/data \
+  crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:latest
 ```
 
 启动成功后，使用浏览器访问：`http://你的服务器IP:3088`

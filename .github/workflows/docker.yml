@@ -73,11 +73,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Aliyun ACR
+        if: ${{ secrets.ALIYUN_PASSWORD != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com
+          username: ${{ secrets.ALIYUN_USERNAME || 'guoleipro' }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Determine Image Repositories
+        id: repos
+        run: |
+          IMAGES="ghcr.io/${{ github.repository }}"
+          if [ -n "${{ secrets.ALIYUN_PASSWORD }}" ]; then
+            IMAGES="${IMAGES}"$'\n'"crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro"
+          fi
+          echo "images<<EOF" >> $GITHUB_OUTPUT
+          echo "$IMAGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.repos.outputs.images }}
           tags: |
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
