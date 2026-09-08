@@ -78,11 +78,16 @@ jobs:
           ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
           ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
         run: |
-          ALIYUN_USER="${ALIYUN_USERNAME:-guoleipro}"
-          if [ -n "$ALIYUN_PASSWORD" ]; then
-            if echo "$ALIYUN_PASSWORD" | docker login --username "$ALIYUN_USER" --password-stdin crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com; then
+          ALIYUN_USER="$(echo -n "${ALIYUN_USERNAME:-guoleipro}" | xargs)"
+          ALIYUN_PWD="$(echo -n "$ALIYUN_PASSWORD" | tr -d '\r\n')"
+          if [ -n "$ALIYUN_PWD" ]; then
+            echo "Aliyun ACR auth attempt: user_len=${#ALIYUN_USER}, pwd_len=${#ALIYUN_PWD}"
+            if echo "$ALIYUN_PWD" | docker login --username "$ALIYUN_USER" --password-stdin crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com; then
               echo "ALIYUN_LOGGED_IN=true" >> $GITHUB_ENV
               echo "Successfully logged into Aliyun ACR as $ALIYUN_USER"
+            elif echo "$ALIYUN_PWD" | docker login --username "$ALIYUN_USER" --password-stdin registry.cn-hangzhou.aliyuncs.com; then
+              echo "ALIYUN_LOGGED_IN=true" >> $GITHUB_ENV
+              echo "Successfully logged into Aliyun ACR (standard endpoint) as $ALIYUN_USER"
             else
               echo "::warning::Aliyun ACR login failed with user $ALIYUN_USER. Please verify ACR 访问凭证密码."
             fi
