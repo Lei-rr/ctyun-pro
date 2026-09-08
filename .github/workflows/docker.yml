@@ -74,18 +74,22 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Aliyun ACR
-        if: ${{ secrets.ALIYUN_PASSWORD != '' }}
-        uses: docker/login-action@v3
-        with:
-          registry: crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com
-          username: ${{ secrets.ALIYUN_USERNAME || 'guoleipro' }}
-          password: ${{ secrets.ALIYUN_PASSWORD }}
+        env:
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
+        run: |
+          if [ -n "$ALIYUN_PASSWORD" ]; then
+            echo "$ALIYUN_PASSWORD" | docker login --username guoleipro --password-stdin crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com
+          else
+            echo "ALIYUN_PASSWORD is not set, skipping Aliyun ACR push."
+          fi
 
       - name: Determine Image Repositories
         id: repos
+        env:
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
         run: |
           IMAGES="ghcr.io/${{ github.repository }}"
-          if [ -n "${{ secrets.ALIYUN_PASSWORD }}" ]; then
+          if [ -n "$ALIYUN_PASSWORD" ]; then
             IMAGES="${IMAGES}"$'\n'"crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro"
           fi
           echo "images<<EOF" >> $GITHUB_OUTPUT
