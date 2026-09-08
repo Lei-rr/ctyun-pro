@@ -614,6 +614,19 @@ export async function createServer() {
     }
   });
 
+  // 8.2.1.1 手动中止智能挂机
+  fastify.post('/api/account/hang/stop', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const body = request.body as { accountName: string };
+    if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
+    try {
+      await manager.stopHang(body.accountName);
+      return { success: true, msg: '已成功中止挂机任务，并恢复保活长连接' };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
   // 8.2.2 手动触发登录云电脑任务
   fastify.post('/api/account/task/login-desktop', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;

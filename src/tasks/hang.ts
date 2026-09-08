@@ -10,7 +10,8 @@ class BrowserPool {
   private static launchPromise: Promise<any> | null = null;
 
   public static async acquireContext(): Promise<{ context: any; close: () => Promise<void> }> {
-    if (!this.browserInstance) {
+    if (!this.browserInstance || !this.browserInstance.isConnected?.()) {
+      this.browserInstance = null;
       if (!this.launchPromise) {
         this.launchPromise = (async () => {
           let puppeteer: any;
@@ -42,10 +43,14 @@ class BrowserPool {
             headless: 'new',
             args: [
               '--no-sandbox',
+              '--disable-setuid-sandbox',
               '--disable-gpu',
               '--disable-dev-shm-usage',
               '--disable-software-rasterizer',
-              '--window-size=1280,720',
+              '--disable-background-timer-throttling',
+              '--disable-backgrounding-occluded-windows',
+              '--disable-renderer-backgrounding',
+              '--window-size=1280,800',
               '--mute-audio',
             ],
           });
@@ -139,12 +144,15 @@ export class HangTask {
       cur = Math.min(t.totalProgress || 3600, (t.baseProgress ?? cur) + elapsed);
       t.currentProgress = cur;
     }
+    const message = t.connectedAt
+      ? `智能挂机中 (${cur}/${t.totalProgress || 3600}秒)`
+      : t.message;
     return {
       running: true,
       startTime: t.startTime,
       currentProgress: cur,
       totalProgress: t.totalProgress,
-      message: t.message,
+      message,
     };
   }
 
@@ -225,6 +233,10 @@ export class HangTask {
       const page = await browserContextHandle.context.newPage();
       page.setDefaultNavigationTimeout(60000);
       page.setDefaultTimeout(60000);
+      await page.setViewport({ width: 1280, height: 800 });
+      await page.setUserAgent(
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+      );
 
       const loginInfo = client.loginInfo;
       const deviceCode = client.getDeviceCode();
@@ -240,47 +252,65 @@ export class HangTask {
       const cdp = await page.target().createCDPSession();
       await cdp.send('Page.enable');
       await cdp.send('Page.navigate', { url: 'https://pc.ctyun.cn/#/desktop-list' });
+      logger.addLog('info', `[${accountName}] 已开启无头浏览器会话，等待天翼云电脑实例列表就绪...`);
 
-      // 轮询等待进入AI云电脑按钮渲染完成（最长等待 30 秒）
-      let foundBtn = false;
-      for (let i = 0; i < 30; i++) {
+      // 轮询检测进入按钮或自动切入桌面路由（最长等待 60 秒）
+      let desktopEntered = false;
+      for (let i = 0; i < 60; i++) {
+        if (isTerminated) break;
         await new Promise((r) => setTimeout(r, 1000));
-        foundBtn = await page.evaluate(() => {
-          const doc = (globalThis as any).document;
-          if (!doc) return false;
-          const els = Array.from(doc.querySelectorAll('*')) as any[];
-          return els.some(
-            (el) => (el.innerText || '').trim() === '进入AI云电脑' && (!el.children || el.children.length === 0),
-          );
-        });
-        if (foundBtn) break;
-      }
-
-      if (!foundBtn) {
-        throw new Error('未找到进入AI云电脑按钮，或账号名下暂无可用实例');
-      }
-
-      // 通过原生元素 Handle 模拟真实点击
-      const btnHandle = await page.evaluateHandle(() => {
-        const doc = (globalThis as any).document;
-        const els = Array.from(doc.querySelectorAll('*')) as any[];
-        for (const el of els) {
-          if ((el.innerText || '').trim() === '进入AI云电脑' && (!el.children || el.children.length === 0)) {
-            return el;
+        const check = await page.evaluate(() => {
+          const loc = (globalThis as any).location;
+          const href = loc?.href || '';
+          if (href.includes('desktop?id=')) {
+            return { entered: true, clicked: false };
           }
-        }
-        return null;
-      });
+          const doc = (globalThis as any).document;
+          if (!doc) return { entered: false, clicked: false };
 
-      await (btnHandle as any).click();
+          // 1. 严格定位进入云电脑按钮容器 (对齐 ctyun-auto 工业级标准实现)
+          const enters = Array.from(
+            doc.querySelectorAll('div.desktopcom-enter, .desktopcom-enter'),
+          ) as any[];
+          const target =
+            enters.find((el: any) => (el.innerText || '').includes('进入AI云电脑') || (el.innerText || '').includes('进入')) ||
+            enters[0];
+          if (target) {
+            target.click();
+            return { entered: false, clicked: true };
+          }
 
-      // 轮询等待成功切入官方桌面路由 (https://pc.ctyun.cn/#/desktop?id=...)
-      for (let i = 0; i < 20; i++) {
-        await new Promise((r) => setTimeout(r, 1000));
-        const href = await page.evaluate(() => (globalThis as any).location?.href || '');
-        if (href.includes('desktop?id=')) {
+          return { entered: false, clicked: false };
+        });
+
+        if (check.entered) {
+          desktopEntered = true;
           break;
         }
+        if (check.clicked) {
+          logger.addLog('info', `[${accountName}] 已检测到并点击进入云电脑按钮，正在等待桌面会话建立...`);
+          break;
+        }
+      }
+
+      // 等待成功切入官方桌面路由 (https://pc.ctyun.cn/#/desktop?id=...)
+      if (!desktopEntered && !isTerminated) {
+        for (let i = 0; i < 30; i++) {
+          await new Promise((r) => setTimeout(r, 1000));
+          const href = await page.evaluate(() => (globalThis as any).location?.href || '');
+          if (href.includes('desktop?id=')) {
+            desktopEntered = true;
+            break;
+          }
+        }
+      }
+
+      if (isTerminated) {
+        return { success: true, message: '挂机任务已主动终止' };
+      }
+
+      if (!desktopEntered) {
+        throw new Error('未找到进入AI云电脑按钮，或账号名下暂无可用实例');
       }
 
       logger.addLog('success', `[${accountName}] 成功接入云电脑会话，开始智能挂机`);
@@ -299,6 +329,9 @@ export class HangTask {
       const checkIntervalSec = 5; // 每 5 秒推演刷新一次内部进度
 
       while (!isTerminated && elapsedSeconds < remainingSeconds) {
+        if (page.isClosed()) {
+          throw new Error('云电脑桌面会话页面意外关闭');
+        }
         await new Promise((r) => setTimeout(r, checkIntervalSec * 1000));
         elapsedSeconds += checkIntervalSec;
 

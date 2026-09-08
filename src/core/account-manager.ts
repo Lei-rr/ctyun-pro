@@ -607,6 +607,28 @@ export class AccountManager {
     return '已在后台启动智能挂机，正在动态核验并补足挂机时长';
   }
 
+  public async stopHang(accountName: string): Promise<void> {
+    const acc = this.accounts.get(accountName);
+    const client = this.getClient(accountName);
+    if (!acc || !client) throw new Error(`未找到账号: ${accountName}`);
+
+    await HangTask.stopHang(accountName);
+    this.logger.addLog('info', `[${accountName}] 用户已手动中止挂机任务`);
+
+    const state = this.accountStates.get(accountName);
+    if (state) {
+      state.hangStatus = undefined;
+    }
+
+    try {
+      const list = await client.getDesktopList();
+      const desktopStates = state?.desktops || [];
+      await this.keepAliveManager.syncWorkersForAccount(accountName, client, list, desktopStates);
+    } catch {}
+
+    this.notifyStatusChange();
+  }
+
   public async manualSignIn(accountName: string): Promise<string> {
     const acc = this.accounts.get(accountName);
     const client = this.getClient(accountName);

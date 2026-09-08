@@ -863,6 +863,25 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
+  async function manualStopHang(accountName: string) {
+    try {
+      const res = await fetch('/api/account/hang/stop', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ accountName }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success(json.msg || '已中止挂机任务');
+      } else {
+        toast.error(json.msg || '中止挂机失败');
+      }
+      fetchStatus();
+    } catch (e: any) {
+      toast.error(e.message || '请求异常');
+    }
+  }
+
   async function manualLoginDesktopTask(accountName: string) {
     try {
       const res = await fetch('/api/account/task/login-desktop', {
@@ -1051,6 +1070,7 @@ export const useAppStore = defineStore('app', () => {
     savePolicy,
     manualRunTasks,
     manualActivateDesktop,
+    manualStopHang,
     manualLoginDesktopTask,
     manualAiChatTask,
     manualSignIn,

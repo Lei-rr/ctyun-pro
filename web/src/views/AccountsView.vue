@@ -169,6 +169,14 @@ async function runHangInModal() {
   }
 }
 
+async function stopHangInModal() {
+  if (!pointsAccountName.value) return;
+  await store.manualStopHang(pointsAccountName.value);
+  if (pointsAccountName.value) {
+    pointsData.value = await store.fetchPointsAndTasks(pointsAccountName.value);
+  }
+}
+
 async function runLoginTaskInModal() {
   if (!pointsAccountName.value || loginRunning.value) return;
   loginRunning.value = true;
@@ -547,6 +555,16 @@ onUnmounted(() => {
                           ({{ Math.floor(((account.hangStatus.currentProgress || 0) / (account.hangStatus.totalProgress || 3600)) * 100) }}%)
                           · 剩余约 {{ Math.ceil(Math.max(0, (account.hangStatus.totalProgress || 3600) - (account.hangStatus.currentProgress || 0)) / 60) }} 分钟
                         </span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          class="h-6 px-2 text-xs text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0 cursor-pointer ml-auto"
+                          @click="store.manualStopHang(account.name)"
+                          title="中止当前挂机任务并恢复保活"
+                        >
+                          <Square class="size-3 mr-1 fill-current" />
+                          中止挂机
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -642,7 +660,16 @@ onUnmounted(() => {
                     <span class="size-1.5 rounded-full bg-neutral-900 dark:bg-neutral-100 animate-pulse"></span>
                     挂机进度
                   </span>
-                  <span>{{ account.hangStatus.currentProgress || 0 }}/{{ account.hangStatus.totalProgress || 3600 }}秒 ({{ Math.floor(((account.hangStatus.currentProgress || 0) / (account.hangStatus.totalProgress || 3600)) * 100) }}%)</span>
+                  <div class="flex items-center gap-2">
+                    <span>{{ account.hangStatus.currentProgress || 0 }}/{{ account.hangStatus.totalProgress || 3600 }}秒 ({{ Math.floor(((account.hangStatus.currentProgress || 0) / (account.hangStatus.totalProgress || 3600)) * 100) }}%)</span>
+                    <button
+                      type="button"
+                      class="text-xs text-destructive hover:underline cursor-pointer"
+                      @click="store.manualStopHang(account.name)"
+                    >
+                      中止
+                    </button>
+                  </div>
                 </div>
                 <div class="h-1 w-full bg-neutral-200 dark:bg-neutral-800 rounded-full overflow-hidden">
                   <div
@@ -767,10 +794,21 @@ onUnmounted(() => {
             <div class="text-[11px] text-muted-foreground flex items-center justify-between font-mono pt-1">
               <span>{{ task.name.includes('使用') ? `已累计挂机: ${Math.floor(task.currentProgress / 60)} / ${Math.floor(task.totalProgress / 60)} 分钟 (${task.currentProgress}/${task.totalProgress}秒)` : `完成度: ${task.currentProgress} / ${task.totalProgress}` }}</span>
               <div class="flex items-center gap-2">
-                <!-- 1. 使用1小时任务：智能补足时长 -->
+                <!-- 1. 使用1小时任务：智能补足时长 / 中止挂机 -->
                 <template v-if="task.name.includes('使用')">
                   <Button
-                    v-if="!task.isCompleted && task.currentProgress < (task.totalProgress - 5)"
+                    v-if="store.accounts.find((a) => a.name === pointsAccountName)?.hangStatus?.running"
+                    variant="outline"
+                    size="sm"
+                    class="h-6 px-2 text-[10px] gap-1 cursor-pointer border-destructive/40 text-destructive hover:bg-destructive/10"
+                    @click="stopHangInModal"
+                    title="立即中止挂机任务并恢复保活"
+                  >
+                    <Square class="size-2.5 fill-current" />
+                    中止挂机
+                  </Button>
+                  <Button
+                    v-else-if="!task.isCompleted && task.currentProgress < (task.totalProgress - 5)"
                     variant="outline"
                     size="sm"
                     class="h-6 px-2 text-[10px] gap-1 cursor-pointer border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
