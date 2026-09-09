@@ -37,7 +37,7 @@ import { Toaster } from '@/shared/ui/sonner';
 import { ConfirmHost, confirmDialog } from '@/shared/ui/confirm';
 
 declare const __APP_VERSION__: string;
-const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'v1.3.3';
+const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'v1.3.4';
 import { toast } from 'vue-sonner';
 
 const store = useAppStore();
