@@ -26,18 +26,27 @@ export class SignTask {
    * 触发官方真实签到打卡接口 (对齐官方 yz-index 与 marketing/userPoints/receivePointsV2 真实体系)
    */
   public static async signIn(client: CtYunClient): Promise<{ success: boolean; message: string }> {
-    // 1. 获取包含打卡任务在内的官方完整任务列表
-    const taskRes = await safeFetch(
-      'https://desk.ctyun.cn/selforder/api/marketing/userPoints/getTaskList?displayTypes=2',
-      { headers: client.getHeaders() },
-    );
-    if (!taskRes.ok) {
-      throw new Error(`请求官方任务中心失败: HTTP ${taskRes.status}`);
+    // 1. 获取包含打卡任务在内的官方完整任务列表 (带重试)
+    let taskJson: any = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const taskRes = await safeFetch(
+          'https://desk.ctyun.cn/selforder/api/marketing/userPoints/getTaskList?displayTypes=2',
+          { headers: client.getHeaders() },
+        );
+        if (taskRes.ok) {
+          const json = (await taskRes.json()) as { code: number; msg?: string; data?: any[] };
+          if (json.code === 0 && Array.isArray(json.data)) {
+            taskJson = json;
+            break;
+          }
+        }
+      } catch {}
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 1500));
     }
 
-    const taskJson = (await taskRes.json()) as { code: number; msg?: string; data?: any[] };
-    if (taskJson.code !== 0 || !Array.isArray(taskJson.data)) {
-      throw new Error(taskJson.msg || '获取官方任务列表失败');
+    if (!taskJson) {
+      throw new Error('获取官方任务列表失败（重试3次未成功）');
     }
 
     // 2. 精准匹配官方连续签到打卡任务 (eventType === 9)
@@ -67,12 +76,27 @@ export class SignTask {
       taskDefId,
     )}&progress=${targetProgress}`;
 
-    const recRes = await safeFetch(receiveUrl, { headers: client.getHeaders() });
-    if (!recRes.ok) {
-      throw new Error(`调用官方签到打卡接口失败: HTTP ${recRes.status}`);
+    let recJson: any = null;
+    let lastRecErr = '';
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const recRes = await safeFetch(receiveUrl, { headers: client.getHeaders() });
+        if (recRes.ok) {
+          recJson = (await recRes.json()) as { code: number; msg?: string; data?: any };
+          break;
+        } else {
+          lastRecErr = `HTTP ${recRes.status}`;
+        }
+      } catch (e: any) {
+        lastRecErr = e.message;
+      }
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 1500));
     }
 
-    const recJson = (await recRes.json()) as { code: number; msg?: string; data?: any };
+    if (!recJson) {
+      throw new Error(`调用官方签到打卡接口失败: ${lastRecErr || '网络异常'}`);
+    }
+
     if (recJson.code === 0) {
       const reward = checkInTask.pointsList?.[0]?.value || 10;
       return {

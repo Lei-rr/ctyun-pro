@@ -168,33 +168,52 @@ export class TaskScheduler {
 
         if (shouldRedeem) {
           this.logger.addLog('info', `[${name}] ${reason}，准备自动下单兑换...`);
-          try {
-            const targetDesktopId = rConf.targetDesktopId || this.accountManager.getAccountState(name)?.desktops?.[0]?.desktopId;
-            if (!targetDesktopId) throw new Error('名下未找到绑定的云电脑');
-            const res = await RedeemTask.placeOrder(
-              client,
-              targetDesktopId,
-              rConf.targetProdId,
-              rConf.costPoints,
-              rConf.prodType,
-            );
-            rConf.lastRedeemDate = today;
-            this.accountManager.saveToDisk();
-            this.logger.addLog('success', `[${name}] 自动兑换成功: ${res.message}`);
-            if (this.accountManager.webhookUrl) {
-              sendWebhookNotification(
-                this.accountManager.webhookUrl,
-                `天翼云电脑 - [${name}] 自动兑换成功`,
-                `策略触发: ${reason}\n兑换结果: ${res.message}`,
-              ).catch(() => {});
+          const targetDesktopId = rConf.targetDesktopId || this.accountManager.getAccountState(name)?.desktops?.[0]?.desktopId;
+          if (!targetDesktopId) {
+            this.logger.addLog('warn', `[${name}] 自动兑换跳过: 名下未找到绑定的云电脑`);
+            continue;
+          }
+
+          let redeemSuccess = false;
+          let lastRedeemMsg = '';
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              if (attempt > 1) {
+                this.logger.addLog('info', `[${name}] 正在进行第 ${attempt}/3 次自动兑换重试...`);
+                await new Promise((r) => setTimeout(r, 3000));
+              }
+              const res = await RedeemTask.placeOrder(
+                client,
+                targetDesktopId,
+                rConf.targetProdId,
+                rConf.costPoints,
+                rConf.prodType,
+              );
+              rConf.lastRedeemDate = today;
+              this.accountManager.saveToDisk();
+              this.logger.addLog('success', `[${name}] 自动兑换成功: ${res.message}`);
+              if (this.accountManager.webhookUrl) {
+                sendWebhookNotification(
+                  this.accountManager.webhookUrl,
+                  `天翼云电脑 - [${name}] 自动兑换成功`,
+                  `策略触发: ${reason}\n兑换结果: ${res.message}`,
+                ).catch(() => {});
+              }
+              redeemSuccess = true;
+              break;
+            } catch (e: any) {
+              lastRedeemMsg = e.message;
+              this.logger.addLog('warn', `[${name}] 第 ${attempt} 次自动兑换未成功: ${e.message}`);
             }
-          } catch (err: any) {
-            this.logger.addLog('error', `[${name}] 自动兑换失败: ${err.message}`);
+          }
+
+          if (!redeemSuccess) {
+            this.logger.addLog('error', `[${name}] 自动兑换失败（重试3次）: ${lastRedeemMsg}`);
             if (this.accountManager.webhookUrl) {
               sendWebhookNotification(
                 this.accountManager.webhookUrl,
-                `天翼云电脑 - [${name}] 自动兑换异常`,
-                `策略: ${reason}\n错误: ${err.message}`,
+                `天翼云电脑 - [${name}] 自动兑换失败`,
+                `策略触发: ${reason}\n失败原因: ${lastRedeemMsg}`,
               ).catch(() => {});
             }
           }

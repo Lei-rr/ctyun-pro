@@ -161,11 +161,27 @@ export class TaskRunner {
 
     // 1. 激活官方桌面会话，推进「登录AI云电脑」任务 (+100分)
     if (!taskConfig || taskConfig.loginDesktop !== false) {
-      try {
-        const actRes = await TaskRunner.activateDesktopSession(client, desktopId);
-        results.push(actRes.message);
-      } catch (e: any) {
-        results.push(`会话激活异常: ${e.message}`);
+      let actSuccess = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const actRes = await TaskRunner.activateDesktopSession(client, desktopId);
+          if (actRes.success) {
+            results.push(actRes.message);
+            actSuccess = true;
+            break;
+          }
+          if (attempt === 3) {
+            results.push(actRes.message);
+          } else {
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+        } catch (e: any) {
+          if (attempt === 3) {
+            results.push(`会话激活异常: ${e.message}`);
+          } else {
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+        }
       }
     } else {
       results.push('登录云电脑: 已按配置跳过');
@@ -173,11 +189,27 @@ export class TaskRunner {
 
     // 2. 触发官方「与AI对话1次」任务 (+100积分)
     if (!taskConfig || taskConfig.aiChat !== false) {
-      try {
-        const chatRes = await AiChatTask.execute(client);
-        results.push(chatRes.message);
-      } catch (e: any) {
-        results.push(`AI对话异常: ${e.message}`);
+      let chatSuccess = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const chatRes = await AiChatTask.execute(client);
+          if (chatRes.success) {
+            results.push(chatRes.message);
+            chatSuccess = true;
+            break;
+          }
+          if (attempt === 3) {
+            results.push(chatRes.message);
+          } else {
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+        } catch (e: any) {
+          if (attempt === 3) {
+            results.push(`AI对话异常: ${e.message}`);
+          } else {
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+        }
       }
     } else {
       results.push('AI对话: 已按配置跳过');
