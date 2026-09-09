@@ -21,11 +21,47 @@ class BrowserPool {
             throw new Error('未安装 puppeteer-core 依赖');
           }
 
-          const browserPaths = [
-            '/usr/bin/chromium-browser',
-            '/usr/bin/chromium',
-            '/usr/bin/google-chrome',
-          ];
+          const browserPaths: string[] = [];
+
+          if (process.platform === 'win32') {
+            const progFiles86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+            const progFiles = process.env.ProgramFiles || 'C:\\Program Files';
+            const localAppData = process.env.LOCALAPPDATA || '';
+
+            // 优先探测 Windows 原生自带的 Microsoft Edge (Chromium内核，无需额外安装)
+            browserPaths.push(
+              `${progFiles86}\\Microsoft\\Edge\\Application\\msedge.exe`,
+              `${progFiles}\\Microsoft\\Edge\\Application\\msedge.exe`,
+            );
+            // 其次探测系统安装的 Google Chrome
+            browserPaths.push(
+              `${progFiles}\\Google\\Chrome\\Application\\chrome.exe`,
+              `${progFiles86}\\Google\\Chrome\\Application\\chrome.exe`,
+            );
+            // 探测用户目录下的 Edge / Chrome
+            if (localAppData) {
+              browserPaths.push(
+                `${localAppData}\\Microsoft\\Edge\\Application\\msedge.exe`,
+                `${localAppData}\\Google\\Chrome\\Application\\chrome.exe`,
+              );
+            }
+          } else if (process.platform === 'darwin') {
+            // macOS 常见路径
+            browserPaths.push(
+              '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+              '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+              '/Applications/Chromium.app/Contents/MacOS/Chromium',
+            );
+          } else {
+            // Linux / Docker 容器环境路径
+            browserPaths.push(
+              '/usr/bin/chromium-browser',
+              '/usr/bin/chromium',
+              '/usr/bin/google-chrome',
+              '/usr/bin/microsoft-edge',
+            );
+          }
+
           let execPath = '';
           for (const p of browserPaths) {
             if (fs.existsSync(p)) {
@@ -35,7 +71,10 @@ class BrowserPool {
           }
 
           if (!execPath) {
-            throw new Error('系统未找到可用 Chromium 浏览器内核');
+            const tip = process.platform === 'win32'
+              ? '系统未检测到可用浏览器，请确保 Windows 自带的 Edge 浏览器正常或安装 Chrome'
+              : '系统未找到可用 Chromium 浏览器内核 (请确保已安装 Chromium 或 Chrome)';
+            throw new Error(tip);
           }
 
           const b = await puppeteer.launch({
