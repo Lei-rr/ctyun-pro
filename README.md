@@ -40,8 +40,8 @@ _✨ 天翼云电脑多账号纯协议持久保活 · 智能补足挂机引擎 �
 
 > [!NOTE]
 > 🐳 **官方 Docker 镜像地址**：
-> - **GitHub 官方源（海外/默认）**：`ghcr.io/lei-rr/ctyun-pro:latest` 或 `ghcr.io/lei-rr/ctyun-pro:v1.3.2`
-> - **阿里云高速源（国内推荐 ⚡）**：`crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:latest` 或 `crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:v1.3.2`  
+> - **GitHub 官方源（海外/默认）**：`ghcr.io/lei-rr/ctyun-pro:latest` 或 `ghcr.io/lei-rr/ctyun-pro:v1.3.3`
+> - **阿里云高速源（国内推荐 ⚡）**：`crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:latest` 或 `crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:v1.3.3`  
 > 镜像内已预置全套中文字体与 Chromium 无头浏览器内核，无需在宿主机额外配置浏览器环境，开箱即用！
 
 > [!WARNING]
