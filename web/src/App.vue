@@ -702,10 +702,10 @@ onUnmounted(() => {
                   v-model="store.policyScheduleType"
                   class="w-full h-9 px-3 text-xs rounded-lg bg-background border border-input text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                 >
-                  <option value="monthly_last_day">月末最后一天 (推荐)</option>
+                  <option value="interval_days">按间隔天数 (推荐每隔4天)</option>
+                  <option value="monthly_last_day">月末最后一天</option>
                   <option value="monthly_day">每月固定日期</option>
                   <option value="specific_date">指定具体日期</option>
-                  <option value="interval_days">按间隔天数</option>
                   <option value="daily">每日自动执行</option>
                 </select>
               </div>

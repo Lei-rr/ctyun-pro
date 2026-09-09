@@ -1,6 +1,15 @@
 import path from 'node:path';
 import fs from 'node:fs';
 
+export const DEFAULT_REDEEM_CONFIG: RedeemConfig = {
+  enabled: false,
+  targetProdId: 17024101, // 1G数据盘永久扩容
+  costPoints: 1200,
+  prodType: 'pointsdiskupgrade',
+  scheduleType: 'interval_days',
+  intervalDays: 4,
+};
+
 export interface RedeemConfig {
   enabled: boolean;
   targetProdId?: number; // 官方商品 ID

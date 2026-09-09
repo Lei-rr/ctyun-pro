@@ -640,13 +640,13 @@ export const useAppStore = defineStore('app', () => {
   const policyAiChat = ref(true);
   const policyKeepAliveHang = ref(true);
   const policyRedeemEnabled = ref(false);
-  const policyScheduleType = ref('monthly_last_day');
+  const policyScheduleType = ref('interval_days');
   const policyMonthlyDay = ref(28);
-  const policyIntervalDays = ref(30);
+  const policyIntervalDays = ref(4);
   const policySpecificDate = ref('');
   const policyTargetDesktop = ref('');
   const policyDesktops = ref<Desktop[]>([]);
-  const policyTargetProdId = ref<number | ''>(17023101);
+  const policyTargetProdId = ref<number | ''>(17024101);
   const LOCAL_DEFAULT_REWARDS = [
     {
       prodId: 17023101,
@@ -758,12 +758,12 @@ export const useAppStore = defineStore('app', () => {
 
     const r = (account.redeemConfig as any) || {};
     policyRedeemEnabled.value = Boolean(r.enabled);
-    policyScheduleType.value = r.scheduleType || 'monthly_last_day';
+    policyScheduleType.value = r.scheduleType || 'interval_days';
     policyMonthlyDay.value = r.monthlyDay || 28;
-    policyIntervalDays.value = r.intervalDays || 30;
+    policyIntervalDays.value = r.intervalDays || 4;
     policySpecificDate.value = r.specificDate || '';
     policyTargetDesktop.value = r.targetDesktopId || '';
-    policyTargetProdId.value = r.targetProdId ? Number(r.targetProdId) : 17023101;
+    policyTargetProdId.value = r.targetProdId ? Number(r.targetProdId) : 17024101;
     policyDesktops.value = account.desktops || [];
     showPolicyModal.value = true;
 

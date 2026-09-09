@@ -256,6 +256,7 @@ export class HangTask {
 
       // 轮询检测进入按钮或自动切入桌面路由（最长等待 60 秒）
       let desktopEntered = false;
+      let clickedEnter = false;
       for (let i = 0; i < 60; i++) {
         if (isTerminated) break;
         await new Promise((r) => setTimeout(r, 1000));
@@ -263,24 +264,51 @@ export class HangTask {
           const loc = (globalThis as any).location;
           const href = loc?.href || '';
           if (href.includes('desktop?id=')) {
-            return { entered: true, clicked: false };
+            return { entered: true, clicked: false, foundCount: 0, state: 'entered' };
           }
           const doc = (globalThis as any).document;
-          if (!doc) return { entered: false, clicked: false };
+          if (!doc) return { entered: false, clicked: false, foundCount: 0, state: 'no_doc' };
 
-          // 1. 严格定位进入云电脑按钮容器 (对齐 ctyun-auto 工业级标准实现)
-          const enters = Array.from(
-            doc.querySelectorAll('div.desktopcom-enter, .desktopcom-enter'),
-          ) as any[];
-          const target =
-            enters.find((el: any) => (el.innerText || '').includes('进入AI云电脑') || (el.innerText || '').includes('进入')) ||
-            enters[0];
-          if (target) {
-            target.click();
-            return { entered: false, clicked: true };
+          // 检查是否在加载动画中
+          const anim = doc.querySelector('.rotate-animtion, .loading, .ant-spin');
+          if (anim) {
+            return { entered: false, clicked: false, foundCount: 0, state: 'loading' };
           }
 
-          return { entered: false, clicked: false };
+          // 1. 全面扫描进入云电脑按钮选择器 (div.desktopcom-enter, button, card 进入链接等)
+          const enters = Array.from(
+            doc.querySelectorAll('div.desktopcom-enter, .desktopcom-enter, .desktop-item, .enter-btn, button, [role="button"]')
+          ) as any[];
+
+          const target = enters.find((el: any) => {
+            const text = (el.innerText || el.textContent || '').trim();
+            return (
+              text === '进入AI云电脑' ||
+              text === '进入' ||
+              text.includes('进入AI云电脑') ||
+              text.includes('进入云电脑') ||
+              (text.startsWith('进入') && text.length < 15)
+            );
+          });
+
+          if (target) {
+            target.click();
+            return { entered: false, clicked: true, foundCount: enters.length, state: 'clicked' };
+          }
+
+          // 备用兜底：尝试点击首个 .desktopcom-enter
+          const fallback = doc.querySelector('div.desktopcom-enter, .desktopcom-enter');
+          if (fallback) {
+            fallback.click();
+            return { entered: false, clicked: true, foundCount: 1, state: 'fallback_clicked' };
+          }
+
+          const empty = doc.querySelector('div.empty-desc, .empty, .no-data');
+          if (empty) {
+            return { entered: false, clicked: false, foundCount: 0, state: 'empty' };
+          }
+
+          return { entered: false, clicked: false, foundCount: enters.length, state: 'waiting' };
         });
 
         if (check.entered) {
@@ -288,8 +316,17 @@ export class HangTask {
           break;
         }
         if (check.clicked) {
+          clickedEnter = true;
           logger.addLog('info', `[${accountName}] 已检测到并点击进入云电脑按钮，正在等待桌面会话建立...`);
           break;
+        }
+
+        // 容错重试：如果非动画加载状态且等待超过 15 秒仍未出现按钮，主动触发一次页面重新导航/刷新
+        if ((i === 15 || i === 30 || i === 45) && check.state !== 'loading') {
+          try {
+            logger.addLog('info', `[${accountName}] 列表加载等待中，触发主动刷新重试 (${i}s)...`);
+            await page.evaluate(() => (globalThis as any).location?.reload());
+          } catch {}
         }
       }
 

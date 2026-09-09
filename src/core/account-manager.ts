@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { Config, getRandomScheduleTime, type AccountConfig, type TaskConfig, type RedeemConfig } from '../config.js';
+import { Config, getRandomScheduleTime, DEFAULT_REDEEM_CONFIG, type AccountConfig, type TaskConfig, type RedeemConfig } from '../config.js';
 import { CtYunClient, type Desktop, type DesktopInfo, type LoginInfo } from './client.js';
 import { KeepAliveManager, type ManagedDesktopState } from '../keepalive/keepalive-manager.js';
 import { Logger, type LogItem } from './logger.js';
@@ -442,7 +442,8 @@ export class AccountManager {
     if (!taskConfig.scheduleTime) {
       taskConfig.scheduleTime = getRandomScheduleTime();
     }
-    const fullAcc: AccountConfig = { ...config, name, user, deviceCode, taskConfig };
+    const redeemConfig = config.redeemConfig || { ...DEFAULT_REDEEM_CONFIG };
+    const fullAcc: AccountConfig = { ...config, name, user, deviceCode, taskConfig, redeemConfig };
 
     this.accounts.set(name, fullAcc);
     let state = this.accountStates.get(name);
@@ -456,7 +457,7 @@ export class AccountManager {
         autoSign: config.autoSign ?? true,
         lastSignDate: config.lastSignDate,
         taskConfig,
-        redeemConfig: config.redeemConfig,
+        redeemConfig,
         desktops: [],
       };
       this.accountStates.set(name, state);
@@ -466,7 +467,7 @@ export class AccountManager {
       state.autoSign = config.autoSign ?? state.autoSign;
       state.lastSignDate = config.lastSignDate ?? state.lastSignDate;
       state.taskConfig = taskConfig;
-      state.redeemConfig = config.redeemConfig ?? state.redeemConfig;
+      state.redeemConfig = config.redeemConfig ?? state.redeemConfig ?? redeemConfig;
       if (config.loginInfo) {
         state.loginInfo = config.loginInfo;
         state.status = 'online';
@@ -563,18 +564,45 @@ export class AccountManager {
       this.notifyStatusChange();
     }
 
-    // 后台异步触发智能补足挂机
+    // 后台异步触发智能补足挂机 (内置智能重试机制：最多尝试 3 次)
     (async () => {
       let hangResult: { success: boolean; message: string; isCompleted?: boolean } | null = null;
+      const MAX_ATTEMPTS = 3;
+
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          if (attempt > 1) {
+            this.logger.addLog('info', `[${accountName}] 正在进行第 ${attempt}/${MAX_ATTEMPTS} 次挂机会话重试...`);
+            // 重试前刷新一次实例凭据
+            try {
+              await client.getDesktopList();
+            } catch {}
+            await new Promise((r) => setTimeout(r, 3000));
+          }
+
+          hangResult = await HangTask.executeSmartHang(accountName, client, this.logger, () => {
+            this.notifyStatusChange();
+          });
+
+          // 如果成功执行或达标，则退出重试循环
+          if (hangResult.success) {
+            break;
+          }
+
+          // 如果是明确已被手动终止，不再重试
+          if (hangResult.message?.includes('主动终止') || hangResult.message?.includes('已达成')) {
+            break;
+          }
+
+          this.logger.addLog('warn', `[${accountName}] 第 ${attempt} 次挂机未达成: ${hangResult.message}`);
+        } catch (e: any) {
+          this.logger.addLog('warn', `[${accountName}] 第 ${attempt} 次挂机异常: ${e.message}`);
+          hangResult = { success: false, message: e.message };
+        }
+      }
+
+      // 挂机完成（或异常退出）后：恢复底层 7x24 小时持久保活长连接
       try {
-        hangResult = await HangTask.executeSmartHang(accountName, client, this.logger, () => {
-          this.notifyStatusChange();
-        });
-      } catch (e: any) {
-        this.logger.addLog('warn', `[${accountName}] 智能挂机提示: ${e.message}`);
-        hangResult = { success: false, message: e.message };
-      } finally {
-        // 挂机完成（或异常退出）后：恢复底层 7x24 小时持久保活长连接
         try {
           const list = await client.getDesktopList();
           const state = this.accountStates.get(accountName);
@@ -601,6 +629,8 @@ export class AccountManager {
         }
 
         this.notifyStatusChange();
+      } catch (err: any) {
+        this.logger.addLog('warn', `[${accountName}] 挂机收尾处理提示: ${err.message}`);
       }
     })();
 
@@ -860,7 +890,8 @@ export class AccountManager {
       if (!taskConfig.scheduleTime) {
         taskConfig.scheduleTime = getRandomScheduleTime();
       }
-      const fullAcc: AccountConfig = { ...acc, name, user, deviceCode, taskConfig };
+      const redeemConfig = acc.redeemConfig || { ...DEFAULT_REDEEM_CONFIG };
+      const fullAcc: AccountConfig = { ...acc, name, user, deviceCode, taskConfig, redeemConfig };
       this.accounts.set(name, fullAcc);
 
       const client = this.getClient(name);
@@ -877,7 +908,7 @@ export class AccountManager {
         autoSign: acc.autoSign ?? true,
         lastSignDate: acc.lastSignDate,
         taskConfig,
-        redeemConfig: acc.redeemConfig,
+        redeemConfig,
         desktops: [],
       };
       this.accountStates.set(name, state);
