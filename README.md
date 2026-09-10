@@ -81,7 +81,7 @@ docker run -d \
   --name ctyun-pro \
   --restart unless-stopped \
   -p 3088:3088 \
-  -v /guolei/ctyun-pro:/app/data \
+  -v /data/ctyun-pro:/app/data \
   ghcr.io/lei-rr/ctyun-pro:latest
 ```
 
@@ -173,7 +173,7 @@ A: 官方计费网关存在约 3~5 分钟的结算延迟。系统在挂机结束
 <details>
 <summary><b>Q: 数据如何备份或迁移？</b></summary>
 <br>
-A: 系统的所有数据均保存在挂载的持久化目录（如 `/guolei/ctyun-pro`）中，迁移时只需将该目录复制到新机器对应的挂载路径即可无缝恢复。
+A: 系统的所有数据均保存在挂载的持久化目录（如宿主机的 `/data/ctyun-pro` 或 `./data`）中，迁移时只需将该目录复制到新机器对应的挂载路径即可无缝恢复。
 </details>
 
 ---
