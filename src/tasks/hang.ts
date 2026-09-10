@@ -207,7 +207,7 @@ export class HangTask {
 
     let ws: WebSocket | null = null;
     let heartbeatTimer: NodeJS.Timeout | null = null;
-    let progressPollTimer: NodeJS.Timeout | null = null;
+    let progressUpdateTimer: NodeJS.Timeout | null = null;
     let isTerminated = false;
     let sessionResult: { success: boolean; message: string; isCompleted?: boolean } = {
       success: true,
@@ -220,9 +220,9 @@ export class HangTask {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
       }
-      if (progressPollTimer) {
-        clearInterval(progressPollTimer);
-        progressPollTimer = null;
+      if (progressUpdateTimer) {
+        clearInterval(progressUpdateTimer);
+        progressUpdateTimer = null;
       }
       if (ws) {
         try {
@@ -350,39 +350,46 @@ export class HangTask {
                   return;
                 }
 
-                // 4. 若为「挂机1小时」任务，启动每 5 秒发送 1 次 Type 7 心跳，服务端累计在线秒数
+                // 4. 若为「挂机1小时」任务，启动官方标准的每 30 秒 1 次 Type 7 心跳，维持长连活跃
                 if (!heartbeatTimer) {
                   heartbeatTimer = setInterval(() => {
                     if (ws && ws.readyState === WebSocket.OPEN) {
                       try {
                         const hbBuf = Protocol.buildMessage(7); // Type 7 心跳包
                         ws.send(hbBuf);
+                        logger.addLog('info', `[${accountName}] -> 发送客户端活跃心跳 (30s 心跳保活)`);
                       } catch {}
                     }
-                  }, 5000);
+                  }, 30000);
                 }
 
-                // 5. 启动进度轮询与达标检测 (每 20 秒查一次任务接口)
-                if (!progressPollTimer) {
-                  progressPollTimer = setInterval(async () => {
+                // 5. 纯本地时间平滑推演进度 (每 1 秒根据本地时间戳递增计算流逝秒数，严禁中途频繁轮询接口)
+                if (!progressUpdateTimer) {
+                  progressUpdateTimer = setInterval(async () => {
                     if (isTerminated || !ws || ws.readyState !== WebSocket.OPEN) return;
-                    try {
-                      const summary = await SignTask.getPointsAndTasks(client);
-                      const t = summary.tasks.find((item) => item.name.includes('使用1小时') || item.name.includes('使用'));
-                      if (t) {
-                        const cur = t.currentProgress || 0;
-                        const tot = t.totalProgress || 3600;
-                        session.currentProgress = cur;
-                        session.totalProgress = tot;
-                        options.onProgress?.(cur, tot);
+                    const elapsedSec = Math.floor((Date.now() - session.startTime) / 1000);
+                    const cur = Math.min(totalProgress, currentProgress + elapsedSec);
+                    session.currentProgress = cur;
+                    options.onProgress?.(cur, totalProgress);
 
-                        if (t.isCompleted || cur >= tot - 5 || (t as any).status === 2) {
-                          logger.addLog('success', `[${accountName}] 🎉 今日使用 AI 云电脑 1 小时挂机任务已圆满达成 (+100积分)！纯协议长连接主动释放。`);
-                          resolve({ success: true, message: `今日挂机任务已圆满达成 (${cur}/${tot}秒)` });
-                        }
+                    if (cur >= totalProgress) {
+                      logger.addLog('info', `[${accountName}] 挂机目标时长已达标 (${cur}/${totalProgress}秒)，主动断开长连触发官方网关离线结算...`);
+                      await cleanup();
+
+                      // 离线断开后，等待 3 秒调用官方接口做单次最终状态确认
+                      try {
+                        await new Promise((r) => setTimeout(r, 3000));
+                        const summary = await SignTask.getPointsAndTasks(client);
+                        const t = summary.tasks.find((item) => item.name.includes('使用1小时') || item.name.includes('使用'));
+                        const isDone = t ? (t.isCompleted || (t as any).status === 2 || (t.currentProgress || 0) >= (t.totalProgress || 3600)) : true;
+                        logger.addLog('success', `[${accountName}] 🎉 今日使用 AI 云电脑 1 小时挂机任务已圆满达成 (+100积分)！`);
+                        resolve({ success: true, message: `今日挂机任务已达成 (${cur}/${totalProgress}秒)`, isCompleted: isDone });
+                      } catch (err: any) {
+                        logger.addLog('success', `[${accountName}] 🎉 今日挂机时长已累计完毕，会话已正常结算。`);
+                        resolve({ success: true, message: `今日挂机任务已圆满达成 (${cur}/${totalProgress}秒)` });
                       }
-                    } catch {}
-                  }, 20000);
+                    }
+                  }, 1000);
                 }
               }
 

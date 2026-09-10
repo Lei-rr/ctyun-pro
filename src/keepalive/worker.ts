@@ -110,6 +110,7 @@ export class KeepAliveWorker {
       // CLINK_MSGC_HEARTBEAT = 7 (type: uint16=7, size: uint32=0)
       const hbBuf = Protocol.buildMessage(7);
       this.currentWs.send(hbBuf);
+      this.log('info', '-> 发送客户端活跃心跳 (30s 心跳保活)');
       this.options.onHeartbeat?.();
     } catch (err: any) {
       this.log('warn', `发送客户端心跳异常: ${err.message}`);
