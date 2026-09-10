@@ -109,7 +109,8 @@ export function registerDesktopProxyRoutes(
   verifyAuth: (request: any, reply: any) => boolean,
 ): void {
   // 1. 云电脑 Web 免密直通操作视窗 (拉取官方最新骨架，现代化注入免密凭据与沉浸式骨架屏)
-  fastify.get('/desktop-view', async (request: FastifyRequest, reply: FastifyReply) => {
+  // 同时支持 /view (推荐) 与 /desktop-view (向下兼容)
+  const renderDesktopView = async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
 
     const query = request.query as { desktopId?: string };
@@ -350,7 +351,10 @@ export function registerDesktopProxyRoutes(
     } catch (err: any) {
       reply.code(500).type('text/html; charset=utf-8').send(`<h3 style="font-family:sans-serif;padding:20px;">连接云电脑服务异常: ${err.message}</h3>`);
     }
-  });
+  };
+
+  fastify.get('/view', renderDesktopView);
+  fastify.get('/desktop-view', renderDesktopView);
 
   // 2. 接收前台 Web 用户活跃心跳 (刷新避让时长 30s)
   fastify.post('/api/instances/:id/web-active', async (request: FastifyRequest, reply: FastifyReply) => {
