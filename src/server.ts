@@ -194,7 +194,7 @@ export async function createServer() {
     const success = await sendWebhookNotification(
       targetUrl,
       'CTYUN-PRO - Webhook 通知测试',
-      `恭喜！您的 Webhook 消息通知配置成功！\n\n• 测试结果: 成功连通 ✅\n• 发送时间: ${nowStr}\n• 监控范围: 智能挂机达标、Token过期告警、每日运行战报已接入。`,
+      `恭喜！您的 Webhook 消息通知配置成功！\n\n• 测试结果: 成功连通\n• 发送时间: ${nowStr}\n• 监控范围: 智能挂机达标、Token过期告警、每日运行战报已接入。`,
     );
 
     if (success) {

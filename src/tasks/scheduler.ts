@@ -244,7 +244,7 @@ export class TaskScheduler {
             const total = (sum.generalPoints || 0) + (sum.phonePoints || 0);
             totalGeneral += total;
             const hangTask = sum.tasks.find((t) => t.name.includes('使用1小时') || t.name.includes('使用'));
-            const hangStatusText = hangTask?.isCompleted ? '已达标(100分) ✅' : `${hangTask?.currentProgress || 0}秒`;
+            const hangStatusText = hangTask?.isCompleted ? '已达标(100分)' : `${hangTask?.currentProgress || 0}秒`;
             pointInfo = `总积分: ${total} | 挂机: ${hangStatusText}`;
           } catch {
             pointInfo = '积分查询暂缓';
