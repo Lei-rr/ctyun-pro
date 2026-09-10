@@ -85,8 +85,8 @@ const initDesktop = async () => {
   errorMsg.value = '';
   statusText.value = '正在获取机房直连凭证...';
   try {
-    // 1. 获取直连参数 (标准优雅 API: /api/v1/instances/:id/stream)
-    const res = await fetch(`/api/v1/instances/${encodeURIComponent(desktopId.value)}/stream`);
+    // 1. 获取直连参数 (标准优雅 API: /api/instances/:id/stream)
+    const res = await fetch(`/api/instances/${encodeURIComponent(desktopId.value)}/stream`);
     let json = await res.json();
     if (!json.success || !json.data) {
       // 兼容旧接口回退

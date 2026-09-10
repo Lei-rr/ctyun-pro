@@ -15,7 +15,6 @@ import QRCode from 'qrcode';
 import { Config } from './config.js';
 import { AccountManager } from './core/index.js';
 import { CtYunClient, type ChallengeData } from './core/client.js';
-import { TaskRunner } from './tasks/index.js';
 import { safeWriteFileSync, sendWebhookNotification } from './core/utils.js';
 import { EMBEDDED_WEB_FILES } from './embedded-web.js';
 
@@ -754,13 +753,13 @@ export async function createServer() {
   // ==========================================
 
   // Profiles 列表 (所有身份档案及所属云实例快照)
-  fastify.get('/api/v1/profiles', async (request, reply) => {
+  fastify.get('/api/profiles', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     return { success: true, data: manager.getAccountsSummary() };
   });
 
   // 单个 Profile 详情
-  fastify.get('/api/v1/profiles/:id', async (request, reply) => {
+  fastify.get('/api/profiles/:id', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
     const acc = manager.getAccount(params.id);
@@ -772,7 +771,7 @@ export async function createServer() {
   });
 
   // 删除 Profile
-  fastify.delete('/api/v1/profiles/:id', async (request, reply) => {
+  fastify.delete('/api/profiles/:id', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
     const acc = manager.getAccount(params.id);
@@ -784,7 +783,7 @@ export async function createServer() {
   });
 
   // 重命名 Profile 备注名
-  fastify.post('/api/v1/profiles/:id/rename', async (request, reply) => {
+  fastify.post('/api/profiles/:id/rename', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
     const body = request.body as { name: string };
@@ -800,7 +799,7 @@ export async function createServer() {
   });
 
   // 触发指定 Profile 的实例列表同步与本地落盘
-  fastify.post('/api/v1/profiles/:id/sync', async (request, reply) => {
+  fastify.post('/api/profiles/:id/sync', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
     const acc = manager.getAccount(params.id);
@@ -812,13 +811,13 @@ export async function createServer() {
   });
 
   // 全局 Instances 一等公民资源列表 (秒级直读本地缓存与保活心跳)
-  fastify.get('/api/v1/instances', async (request, reply) => {
+  fastify.get('/api/instances', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     return { success: true, data: manager.getAllInstancesSummary() };
   });
 
   // 全局强制同步刷新所有 Instances
-  fastify.post('/api/v1/instances/sync', async (request, reply) => {
+  fastify.post('/api/instances/sync', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     for (const name of manager.getAllAccounts().keys()) {
       await manager.reloadDesktops(name).catch(() => {});
@@ -827,7 +826,7 @@ export async function createServer() {
   });
 
   // 指定 Instance 详情
-  fastify.get('/api/v1/instances/:id', async (request, reply) => {
+  fastify.get('/api/instances/:id', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
     const instances = manager.getAllInstancesSummary();
@@ -839,7 +838,7 @@ export async function createServer() {
   });
 
   // 指定 Instance 直连流媒体参数与机房 WebSocket 网关 (秒级直连，一等公民顶级资源)
-  fastify.get('/api/v1/instances/:id/stream', async (request, reply) => {
+  fastify.get('/api/instances/:id/stream', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     try {
       const params = request.params as { id: string };
@@ -851,7 +850,7 @@ export async function createServer() {
   });
 
   // 指定 Instance 电源操作 (开机/关机/重启)
-  fastify.post('/api/v1/instances/:id/power', async (request, reply) => {
+  fastify.post('/api/instances/:id/power', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     try {
       const params = request.params as { id: string };
