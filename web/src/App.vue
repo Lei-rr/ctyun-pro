@@ -162,8 +162,14 @@ onUnmounted(() => {
 
 <template>
   <TooltipProvider>
+    <!-- 独立全屏纯净推流播放页（无任何控制台顶栏与底栏） -->
+    <div v-if="route.path.startsWith('/live/') || route.path.startsWith('/desktop/')" class="bg-black text-foreground min-h-svh w-screen overflow-hidden flex flex-col antialiased">
+      <RouterView />
+      <Toaster position="top-center" :close-button="true" />
+    </div>
+
     <!-- 独立全屏登录页（无顶栏和底栏） -->
-    <div v-if="route.path === '/login'" class="bg-background text-foreground min-h-svh flex flex-col antialiased">
+    <div v-else-if="route.path === '/login'" class="bg-background text-foreground min-h-svh flex flex-col antialiased">
       <RouterView />
       <Toaster position="top-center" :close-button="true" />
     </div>

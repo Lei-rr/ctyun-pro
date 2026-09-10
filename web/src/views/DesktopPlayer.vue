@@ -192,26 +192,31 @@ const initDesktop = async () => {
 
     // 6. 构造 Clink 连接参数并启动
     const desktopInfo = data.desktopInfo || {};
+    const servername = desktopInfo.internalIp ? `${desktopInfo.internalIp}:${desktopInfo.internalPort || 3389}` : '';
     const clinkConfig = {
       uri: data.wsHost,
-      host: desktopInfo.clinkProxyHost || desktopInfo.clinkLvsOutHost || 'deskmsgz.ctyun.cn',
-      port: desktopInfo.clinkProxyPort || 9011,
+      host: desktopInfo.internalIp || desktopInfo.host || '127.0.0.1',
+      port: desktopInfo.internalPort || desktopInfo.port || 3389,
+      servername: servername,
+      cert: desktopInfo.clientCert,
+      ca: desktopInfo.caCert,
+      key: desktopInfo.clientKey,
       ssl: true,
-      servername: desktopInfo.clinkServerName || '',
-      oqs: 0,
+      oqs: desktopInfo.desktopCertCategory || 0,
       token: desktopInfo.token || desktopInfo.ticket || '',
-      ticket: desktopInfo.token || desktopInfo.ticket || '',
       desktopId: data.desktopId,
       deviceCode: data.deviceCode || 'web_chrome_desktop',
-      userAccount: data.userAccount || '',
       deviceType: 100,
-      productName: 'ctyun-pro',
-      projectionInfo: {
-        userInfo: JSON.stringify({ clientRoleType: 4 }),
+      userAccount: data.userAccount || '',
+      screen: {
+        w: window.innerWidth,
+        h: window.innerHeight,
       },
-      picQuality: 4,
-      videoQuality: 3,
-      flowChartConfig: 2,
+      clipBoardIn: desktopInfo.clipBoardIn,
+      clipBoardOut: desktopInfo.clipBoardOut,
+      dragFileIn: desktopInfo.dragFileIn,
+      dragFileOut: desktopInfo.dragFileOut,
+      clientStrategy: desktopInfo.clientStrategy,
     };
 
     statusText.value = '正在与机房 WSS 网关握手建立通道...';

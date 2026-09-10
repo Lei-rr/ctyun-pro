@@ -489,10 +489,11 @@ export class ProfileManager {
     const objType = targetDesktop.objType ?? 0;
     const desktopInfo = await client.connectDesktop(dId, objType);
 
-    // 官方 Clink WebSocket 网关地址，优先使用 desktopInfo.clinkLvsOutHost，备用默认网关
-    const gateway = desktopInfo.clinkLvsOutHost
-      ? `wss://${desktopInfo.clinkLvsOutHost}:9011/clinkProxy`
-      : 'wss://deskmsgz.ctyun.cn:9011/clinkProxy';
+    // 官方 Clink WebSocket 网关地址，格式对齐官方 SDK: wss://${desktopInfo.clinkLvsOutHost}/clinkProxy/${desktopId}
+    const hostWithPort = desktopInfo.clinkLvsOutHost
+      ? (desktopInfo.clinkLvsOutHost.includes(':') ? desktopInfo.clinkLvsOutHost : `${desktopInfo.clinkLvsOutHost}:9011`)
+      : 'deskmsgz.ctyun.cn:9011';
+    const gateway = `wss://${hostWithPort}/clinkProxy/${dId}`;
 
     this.logger.addLog('info', `[${matchedAccountName}] 全局命中云电脑 [${dId}] 直连凭证与推流网关: ${gateway}`);
 

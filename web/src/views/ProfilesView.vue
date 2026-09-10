@@ -90,7 +90,7 @@ async function confirmPowerOperate() {
 const directUrlLoading = ref<string | null>(null);
 
 async function openDirectDesktop(accountName: string, desktopId?: string) {
-  // 彻底剥离多余 UI，新窗口直接通过官方免密链接直连进入云桌面
+  // 在纯净独立新窗口中打开直连推流播放器（无外部控制台框架、无系统顶栏底栏）
   let targetId = desktopId;
   if (!targetId) {
     const acc = store.accounts.find((a) => a.name === accountName);
@@ -102,16 +102,9 @@ async function openDirectDesktop(accountName: string, desktopId?: string) {
     return;
   }
 
-  const loadKey = `${accountName}_${targetId}`;
-  directUrlLoading.value = loadKey;
-  try {
-    const url = await store.getDesktopDirectUrl(targetId, accountName);
-    if (url) {
-      window.open(url, '_blank');
-    }
-  } finally {
-    directUrlLoading.value = null;
-  }
+  // 纯净新窗口独立加载 /live/:desktopId
+  const url = `/live/${encodeURIComponent(targetId)}?account=${encodeURIComponent(accountName)}`;
+  window.open(url, '_blank');
 }
 
 function openRename(name: string) {
