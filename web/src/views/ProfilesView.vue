@@ -92,14 +92,13 @@ async function openDirectDesktop(accountName: string, desktopId?: string) {
   if (desktopId) {
     router.push(`/live/${encodeURIComponent(desktopId)}?account=${encodeURIComponent(accountName)}`);
   } else {
-    // 兼容回退
-    const loadingKey = `${accountName}_default`;
-    directUrlLoading.value = loadingKey;
-    try {
-      const url = await store.getDesktopDirectUrl(accountName);
-      if (url) window.open(url, '_blank');
-    } finally {
-      directUrlLoading.value = null;
+    // 若未带 desktopId 则取该 Profile 绑定的第一个云实例
+    const acc = store.accounts.find((a) => a.name === accountName);
+    const firstId = acc?.desktops?.[0]?.desktopId;
+    if (firstId) {
+      router.push(`/live/${encodeURIComponent(firstId)}?account=${encodeURIComponent(accountName)}`);
+    } else {
+      store.fetchStatus();
     }
   }
 }

@@ -3,21 +3,21 @@ import type { Logger } from '../core/logger.js';
 import { TaskRunner } from './task-runner.js';
 import { RedeemTask } from './redeem.js';
 import { sendWebhookNotification } from '../core/utils.js';
-import type { AccountManager } from '../core/account-manager.js';
+import type { ProfileManager } from '../core/profile-manager.js';
 
 /**
  * 工业级精准时间点调度器
  * 负责各账号每日自动打卡与周期性兑换下单
  */
 export class TaskScheduler {
-  private accountManager: AccountManager;
+  private accountManager: ProfileManager;
   private logger: Logger;
   private timer: NodeJS.Timeout | null = null;
   private lastCheckedMinute = '';
   private lastDigestDate = '';
 
-  constructor(accountManager: AccountManager, logger: Logger) {
-    this.accountManager = accountManager;
+  constructor(profileManager: ProfileManager, logger: Logger) {
+    this.accountManager = profileManager;
     this.logger = logger;
   }
 

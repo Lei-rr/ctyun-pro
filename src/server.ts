@@ -206,12 +206,12 @@ export async function createServer() {
     }
   });
 
-  // 2. 更新保活周期
+  // 2.3 修改保活心跳重连周期
   fastify.post('/api/config/keepalive', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const body = request.body as { seconds: number };
-    if (!body || !body.seconds || body.seconds < 10) {
-      return reply.code(400).send({ success: false, msg: '周期不能少于 10 秒' });
+    if (!body || typeof body.seconds !== 'number' || body.seconds < 10) {
+      return reply.code(400).send({ success: false, msg: '保活周期必须为数字且不小于 10 秒' });
     }
     manager.keepAliveSeconds = body.seconds;
     manager.saveToDisk();
@@ -219,65 +219,60 @@ export async function createServer() {
     return { success: true };
   });
 
-  // 3. 获取登录图形验证码（官方原生验证码直连呈现）
-  fastify.get('/api/account/captcha', async (request, reply) => {
+  // ==========================================
+  // 标准 RESTful 优雅 API 体系 (profiles & instances)
+  // 彻底废除历史老旧兼容垫片 (/api/account/*)
+  // ==========================================
+
+  // Profiles 列表 (所有身份档案及所属云实例快照)
+  fastify.get('/api/profiles', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
-    const query = request.query as { accountName?: string; user?: string };
-    const user = query.user || query.accountName || '';
-    const accountName = query.accountName || user || '__anonymous__';
-    const client = manager.getClient(accountName);
-
-    try {
-      const challenge = await client.getChallengeData();
-      challengeCache.set(accountName, challenge);
-      challengeCache.set('__latest__', challenge);
-      if (user) challengeCache.set(user, challenge);
-
-      const imgBuffer = await client.getLoginCaptcha(user);
-
-      return {
-        success: true,
-        data: {
-          image: `data:image/jpeg;base64,${imgBuffer.toString('base64')}`,
-        },
-      };
-    } catch (err: any) {
-      reply.code(500).send({ success: false, msg: err.message });
-    }
+    return { success: true, data: manager.getAccountsSummary() };
   });
 
-  // 3.1 生成扫码登录二维码
-  fastify.post('/api/account/qrcode/create', async (request, reply) => {
+  // 新建 Profile 档案
+  fastify.post('/api/profiles', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const body = (request.body as any) || {};
-    const accountName = (body.accountName || '').trim() || `user_${Date.now().toString().slice(-4)}`;
+    const name = (body.name || body.user || '').trim();
+    const user = (body.user || body.name || '').trim();
+    if (!name || !user) {
+      return reply.code(400).send({ success: false, msg: '档案名称与手机号不能为空' });
+    }
+    await manager.addOrUpdateAccount({
+      name,
+      user,
+      password: body.password || '',
+      autoSign: body.autoSign !== false,
+      autoStart: body.autoStart !== false,
+      taskConfig: body.taskConfig || { enabled: true, scheduleTime: '08:00', autoHang: true, autoAiChat: true },
+      redeemConfig: body.redeemConfig || { enabled: true, targetReward: '1G数据盘-4天', fallbackDays: 4 },
+    });
+    manager.addLog('info', `[${name}] 档案已创建`);
+    return { success: true, msg: 'Profile 创建成功', data: manager.getAccountState(name) };
+  });
+
+  // 生成扫码登录二维码
+  fastify.post('/api/profiles/qrcode/create', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const body = (request.body as any) || {};
+    const accountName = (body.name || body.accountName || '').trim() || `user_${Date.now().toString().slice(-4)}`;
     const client = manager.getClient(accountName);
     try {
       const { qrCodeId, qrUrl } = await client.genQrCode();
       const qrImage = await QRCode.toDataURL(qrUrl, {
         width: 200,
         margin: 1,
-        color: {
-          dark: '#000000',
-          light: '#ffffff',
-        },
+        color: { dark: '#000000', light: '#ffffff' },
       });
-      return {
-        success: true,
-        data: {
-          accountName,
-          qrCodeId,
-          qrUrl,
-          qrImage,
-        },
-      };
+      return { success: true, data: { accountName, qrCodeId, qrUrl, qrImage } };
     } catch (err: any) {
       return reply.code(500).send({ success: false, msg: err.message || '生成二维码失败' });
     }
   });
 
-  // 3.2 轮询扫码状态并自动完成登录授权
-  fastify.get('/api/account/qrcode/status', async (request, reply) => {
+  // 轮询扫码状态并自动完成登录授权
+  fastify.get('/api/profiles/qrcode/status', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const query = request.query as { qrCodeId?: string; accountName?: string };
     if (!query.qrCodeId) {
@@ -290,25 +285,19 @@ export async function createServer() {
       if (statusData.codeStatus === 'authorize' && statusData.loginToken) {
         manager.addLog('info', `[${accountName}] 扫码授权成功，正在换取登录凭证...`);
         const loginInfo = await client.loginByToken(statusData.loginToken);
-
         const finalUser = loginInfo.mobilephone || loginInfo.userName || loginInfo.userAccount || accountName;
-        const finalAccountName =
-          (query.accountName || '').trim() ||
-          finalUser;
-
+        const finalAccountName = (query.accountName || '').trim() || finalUser;
         await manager.addOrUpdateAccount({
           name: finalAccountName,
           user: finalUser,
           deviceCode: client.getDeviceCode(),
-          loginInfo: loginInfo,
+          loginInfo,
           autoStart: true,
         });
-
         manager.addLog('success', `[${finalAccountName}] 扫码登录成功！已就绪并同步积分与保活`);
         manager.startAccount(finalAccountName).catch((e) => {
           manager.addLog('warn', `[${finalAccountName}] 启动保活提示: ${e.message}`);
         });
-
         return {
           success: true,
           codeStatus: 'authorize',
@@ -317,445 +306,10 @@ export async function createServer() {
           msg: '登录成功',
         };
       }
-
-      return {
-        success: true,
-        codeStatus: statusData.codeStatus,
-      };
+      return { success: true, codeStatus: statusData.codeStatus };
     } catch (err: any) {
       return reply.send({ success: false, msg: err.message });
     }
-  });
-
-  // 4. 用户提交账号密码 + 验证码执行登录
-  fastify.post('/api/account/login', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as {
-      accountName?: string;
-      user: string;
-      password?: string;
-      captchaCode: string;
-    };
-
-    if (!body.user || !body.captchaCode) {
-      return reply.code(400).send({ success: false, msg: '请填写完整账号与验证码' });
-    }
-
-    const accountName = body.accountName || body.user;
-    const client = manager.getClient(accountName);
-    // 优先从账号名、手机号或通用空键中读取有效 challenge
-    let challenge =
-      challengeCache.get(accountName) ||
-      challengeCache.get(body.user) ||
-      challengeCache.get('__latest__') ||
-      challengeCache.get('__anonymous__') ||
-      challengeCache.get('13800138000');
-
-    if (!challenge) {
-      try {
-        challenge = await client.getChallengeData();
-        challengeCache.set(accountName, challenge);
-      } catch {
-        return reply.code(400).send({ success: false, msg: '请先刷新验证码' });
-      }
-    }
-
-    try {
-      manager.addLog('info', `[${accountName}] 正在验证登录...`);
-      const loginInfo = await client.login(
-        body.user,
-        body.password || '',
-        challenge,
-        body.captchaCode.trim(),
-      );
-
-      manager.addOrUpdateAccount({
-        name: accountName,
-        user: body.user,
-        password: body.password,
-        deviceCode: client.getDeviceCode(),
-        loginInfo: loginInfo,
-        autoStart: true,
-      });
-
-      if (!loginInfo.bondedDevice) {
-        manager.addLog('warn', `[${accountName}] 设备未绑定，需要短信验证码确认`);
-        return {
-          success: true,
-          needSms: true,
-          msg: '登录成功，但当前设备未绑定，需要输入短信验证码',
-        };
-      }
-
-      manager.addLog('success', `[${accountName}] 登录成功！正在启动云电脑保活...`);
-
-      manager.startAccount(accountName).catch((e) => {
-        manager.addLog('error', `[${accountName}] 启动保活失败: ${e.message}`);
-      });
-
-      return {
-        success: true,
-        needSms: false,
-        msg: '登录成功并已启动保活',
-      };
-    } catch (err: any) {
-      manager.addLog('error', `[${accountName}] 登录失败: ${err.message}`);
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 5. 获取短信图验图片
-  fastify.get('/api/account/sms-captcha', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const query = request.query as { accountName: string };
-    if (!query.accountName) {
-      return reply.code(400).send({ success: false, msg: '缺少账号参数' });
-    }
-    const client = manager.getClient(query.accountName);
-    try {
-      const { image, captchaKey } = await client.getSmsCodeCaptcha();
-      if (captchaKey) {
-        const cur = smsSessionCache.get(query.accountName) || {};
-        cur.captchaKey = captchaKey;
-        smsSessionCache.set(query.accountName, cur);
-      }
-      reply.type('image/jpeg').send(image);
-    } catch (err: any) {
-      reply.code(500).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 6. 发送绑定设备短信
-  fastify.post('/api/account/send-sms', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as { accountName: string; user: string; captchaCode: string };
-    if (!body.accountName || !body.user || !body.captchaCode) {
-      return reply.code(400).send({ success: false, msg: '参数不完整' });
-    }
-    const client = manager.getClient(body.accountName);
-    const cachedKey = smsSessionCache.get(body.accountName)?.captchaKey || '';
-    try {
-      const { smsKey } = await client.sendSmsCode(body.user, body.captchaCode.trim(), cachedKey);
-      if (smsKey) {
-        const cur = smsSessionCache.get(body.accountName) || {};
-        cur.smsKey = smsKey;
-        smsSessionCache.set(body.accountName, cur);
-      }
-      manager.addLog('info', `[${body.accountName}] 短信验证码已发送至手机号 ${body.user}`);
-      return { success: true };
-    } catch (err: any) {
-      manager.addLog('error', `[${body.accountName}] 发送短信失败: ${err.message}`);
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 7. 提交短信验证码绑定设备
-  fastify.post('/api/account/bind-device', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as { accountName: string; smsCode: string };
-    if (!body.accountName || !body.smsCode) {
-      return reply.code(400).send({ success: false, msg: '请填写短信验证码' });
-    }
-    const client = manager.getClient(body.accountName);
-    const cachedSmsKey = smsSessionCache.get(body.accountName)?.smsKey || '';
-    try {
-      await client.bindDevice(body.smsCode.trim(), cachedSmsKey);
-      manager.saveToDisk();
-      manager.addLog('success', `[${body.accountName}] 设备绑定成功！正在启动保活...`);
-
-      manager.startAccount(body.accountName).catch((e) => {
-        manager.addLog('error', `[${body.accountName}] 启动保活失败: ${e.message}`);
-      });
-
-      return { success: true, msg: '绑定成功并已启动保活' };
-    } catch (err: any) {
-      manager.addLog('error', `[${body.accountName}] 设备绑定失败: ${err.message}`);
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8. 手动启动 / 停止账号保活
-  fastify.post('/api/account/action', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as { accountName: string; action: 'start' | 'stop' | 'delete' };
-    if (!body.accountName || !body.action) {
-      return reply.code(400).send({ success: false, msg: '参数不完整' });
-    }
-
-    if (body.action === 'start') {
-      try {
-        await manager.startAccount(body.accountName);
-        return { success: true };
-      } catch (err: any) {
-        return reply.code(400).send({ success: false, msg: err.message });
-      }
-    } else if (body.action === 'stop') {
-      manager.stopAccount(body.accountName);
-      return { success: true };
-    } else if (body.action === 'delete') {
-      manager.removeAccount(body.accountName);
-      return { success: true };
-    }
-    return reply.code(400).send({ success: false, msg: '未知操作' });
-  });
-
-  // 7.1 修改账号备注名称
-  fastify.post('/api/account/rename', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as { oldName: string; newName: string };
-    if (!body || !body.oldName || !body.newName) {
-      return reply.code(400).send({ success: false, msg: '缺少必要参数' });
-    }
-    try {
-      manager.updateAccountName(body.oldName, body.newName);
-      return { success: true };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8.0 获取账号当前真实积分与每日三大任务进度 (优先支持按不可变 user 手机号查询)
-  fastify.get('/api/account/points', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const query = request.query as { user?: string; accountName?: string };
-    const key = query.user || query.accountName;
-    if (!key) return reply.code(400).send({ success: false, msg: '缺少账号参数' });
-    const acc = manager.getAccount(key);
-    if (!acc) return reply.code(404).send({ success: false, msg: '未找到该账号' });
-    const client = manager.getClient(acc.name);
-    if (!client.loginInfo) return reply.code(400).send({ success: false, msg: '账号未登录' });
-    try {
-      const data = await manager.getPointsAndTasks(acc.name);
-      return { success: true, data };
-    } catch (err: any) {
-      return reply.code(500).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8.1 手动触发签到
-  fastify.post('/api/account/sign', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as { accountName: string };
-    if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
-    try {
-      const msg = await manager.manualSignIn(body.accountName);
-      return { success: true, msg };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8.1.1 查询商城可兑换商品列表
-  fastify.get('/api/rewards', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    try {
-      const data = await manager.getAvailableRewards('', false);
-      return { success: true, data };
-    } catch (err: any) {
-      return reply.code(500).send({ success: false, msg: err.message });
-    }
-  });
-
-  fastify.get('/api/account/rewards', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const query = request.query as { user?: string; accountName?: string; refresh?: string };
-    const key = query.user || query.accountName;
-    try {
-      const data = await manager.getAvailableRewards(key || '', query.refresh === '1' || query.refresh === 'true');
-      return { success: true, data };
-    } catch (err: any) {
-      return reply.code(500).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8.2 手动触发兑换
-  fastify.post('/api/account/redeem', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as {
-      accountName: string;
-      prodId?: number;
-      costPoints?: number;
-      prodType?: string;
-      desktopId?: string;
-    };
-    if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
-    try {
-      const msg = await manager.manualRedeem(
-        body.accountName,
-        body.prodId,
-        body.costPoints,
-        body.prodType,
-        body.desktopId,
-      );
-      return { success: true, msg };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8.2 手动执行每日打卡与任务推进
-  fastify.post('/api/account/task/run', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as { accountName: string };
-    if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
-    try {
-      const msg = await manager.manualRunTasks(body.accountName);
-      return { success: true, msg };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8.2.1 手动触发智能补足时长挂机
-  fastify.post('/api/account/hang/run', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as { accountName: string };
-    if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
-    try {
-      const msg = await manager.manualHang(body.accountName);
-      return { success: true, msg };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8.2.1.1 手动中止智能挂机
-  fastify.post('/api/account/hang/stop', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as { accountName: string };
-    if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
-    try {
-      await manager.stopHang(body.accountName);
-      return { success: true, msg: '已成功中止挂机任务，并恢复保活长连接' };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8.2.2 手动触发登录云电脑任务
-  fastify.post('/api/account/task/login-desktop', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as { accountName: string };
-    if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
-    try {
-      const msg = await manager.manualActivateDesktop(body.accountName);
-      return { success: true, msg };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8.2.3 手动触发AI对话任务
-  fastify.post('/api/account/task/ai-chat', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as { accountName: string };
-    if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
-    try {
-      const msg = await manager.manualAiChat(body.accountName);
-      return { success: true, msg };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8.3 更新签到、任务与兑换策略设置
-  fastify.post('/api/account/policy', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as {
-      accountName: string;
-      autoSign?: boolean;
-      taskConfig?: any;
-      redeemConfig?: any;
-    };
-    if (!body.accountName) return reply.code(400).send({ success: false, msg: '缺少账号' });
-    const existing = manager.getAccount(body.accountName);
-    if (!existing) return reply.code(404).send({ success: false, msg: '未找到该账号' });
-
-    await manager.addOrUpdateAccount({
-      ...existing,
-      autoSign: body.autoSign !== undefined ? body.autoSign : (body.taskConfig?.enabled ?? existing.autoSign),
-      taskConfig: body.taskConfig !== undefined ? body.taskConfig : existing.taskConfig,
-      redeemConfig: body.redeemConfig !== undefined ? body.redeemConfig : existing.redeemConfig,
-    });
-    manager.addLog('info', `[${body.accountName}] 自动化任务与兑换策略已保存`);
-    return { success: true };
-  });
-
-  // 8.3 云电脑电源操作 (开机/关机/重启)
-  fastify.post('/api/account/desktop/operate', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const body = request.body as {
-      accountName: string;
-      desktopId: string;
-      operation: 'on' | 'shutdown' | 'reset';
-    };
-    if (!body.accountName || !body.desktopId || !body.operation) {
-      return reply.code(400).send({ success: false, msg: '缺少必要参数' });
-    }
-    try {
-      const msg = await manager.operateDesktop(body.accountName, body.desktopId, body.operation);
-      return { success: true, msg };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8. 刷新账号云电脑列表
-  fastify.post('/api/account/desktops/refresh', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    try {
-      const body = request.body as { accountName?: string };
-      if (body?.accountName) {
-        await manager.reloadDesktops(body.accountName);
-      } else {
-        for (const name of manager.getAllAccounts().keys()) {
-          await manager.reloadDesktops(name).catch(() => {});
-        }
-      }
-      return { success: true, data: manager.getAccountsSummary() };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8.1 获取官方远程桌面免密直达 URL
-  fastify.get('/api/account/desktop/url', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    try {
-      const query = request.query as { accountName: string; desktopId?: string };
-      if (!query?.accountName) {
-        return reply.code(400).send({ success: false, msg: '缺少 accountName 参数' });
-      }
-      const res = await manager.getDesktopDirectUrl(query.accountName, query.desktopId);
-      return { success: true, data: res };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // 8.2 获取纯前端内置云电脑播放器直连参数 (以全局唯一 desktopId 反查定位，免除账号重名冲突)
-  fastify.get('/api/account/desktop/connect-params', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    try {
-      const query = request.query as { desktopId: string; accountName?: string };
-      if (!query?.desktopId) {
-        return reply.code(400).send({ success: false, msg: '缺少全局唯一 desktopId 参数' });
-      }
-      const res = await manager.getDesktopConnectionParamsByDesktopId(query.desktopId, query.accountName);
-      return { success: true, data: res };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // ==========================================
-  // 标准 RESTful 优雅 API 体系 (v1: profiles & instances)
-  // ==========================================
-
-  // Profiles 列表 (所有身份档案及所属云实例快照)
-  fastify.get('/api/profiles', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    return { success: true, data: manager.getAccountsSummary() };
   });
 
   // 单个 Profile 详情
@@ -810,37 +364,170 @@ export async function createServer() {
     return { success: true, data: manager.getAccountState(acc.name) };
   });
 
-  // Profile 策略配置设置 (签到、任务与兑换策略)
-  fastify.post('/api/profiles/:id/policy', async (request, reply) => {
+  // Profile 密码/短信/扫码登录与验证绑定
+  fastify.get('/api/profiles/:id/captcha', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
     const acc = manager.getAccount(params.id);
-    if (!acc) {
-      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+    const user = acc?.user || params.id;
+    const client = manager.getClient(acc?.name || params.id);
+    try {
+      const challenge = await client.getChallengeData();
+      challengeCache.set(acc?.name || params.id, challenge);
+      challengeCache.set(user, challenge);
+      challengeCache.set('__latest__', challenge);
+      const imgBuffer = await client.getLoginCaptcha(user);
+      return { success: true, data: { image: `data:image/jpeg;base64,${imgBuffer.toString('base64')}` } };
+    } catch (err: any) {
+      return reply.code(500).send({ success: false, msg: err.message });
     }
-    const body = request.body as {
-      autoSign?: boolean;
-      taskConfig?: any;
-      redeemConfig?: any;
-    };
+  });
+
+  fastify.post('/api/profiles/:id/login', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const body = (request.body as any) || {};
+    const acc = manager.getAccount(params.id);
+    const user = body.user || acc?.user || params.id;
+    const name = acc?.name || body.name || params.id;
+    const client = manager.getClient(name);
+    let challenge = challengeCache.get(name) || challengeCache.get(user) || challengeCache.get('__latest__');
+    if (!challenge) {
+      try {
+        challenge = await client.getChallengeData();
+        challengeCache.set(name, challenge);
+      } catch {
+        return reply.code(400).send({ success: false, msg: '请先刷新验证码' });
+      }
+    }
+    try {
+      manager.addLog('info', `[${name}] 正在验证登录...`);
+      const loginInfo = await client.login(user, body.password || '', challenge, (body.captchaCode || '').trim());
+      await manager.addOrUpdateAccount({
+        name,
+        user,
+        password: body.password || '',
+        deviceCode: client.getDeviceCode(),
+        loginInfo,
+        autoStart: true,
+      });
+      if (!loginInfo.bondedDevice) {
+        manager.addLog('warn', `[${name}] 设备未绑定，需要短信验证码确认`);
+        return { success: true, needSms: true, msg: '登录成功，但当前设备未绑���，需要输入短信验证码' };
+      }
+      manager.addLog('success', `[${name}] 登录成功！正在启动云电脑保活...`);
+      manager.startAccount(name).catch((e) => manager.addLog('error', `[${name}] 启动保活失败: ${e.message}`));
+      return { success: true, needSms: false, msg: '登录成功并已启动保活', data: manager.getAccountState(name) };
+    } catch (err: any) {
+      manager.addLog('error', `[${name}] 登录失败: ${err.message}`);
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.get('/api/profiles/:id/sms-captcha', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    const name = acc?.name || params.id;
+    const client = manager.getClient(name);
+    try {
+      const { image, captchaKey } = await client.getSmsCodeCaptcha();
+      if (captchaKey) {
+        const cur = smsSessionCache.get(name) || {};
+        cur.captchaKey = captchaKey;
+        smsSessionCache.set(name, cur);
+      }
+      reply.type('image/jpeg').send(image);
+    } catch (err: any) {
+      return reply.code(500).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.post('/api/profiles/:id/send-sms', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const body = (request.body as any) || {};
+    const acc = manager.getAccount(params.id);
+    const name = acc?.name || params.id;
+    const user = body.user || acc?.user;
+    if (!user || !body.captchaCode) {
+      return reply.code(400).send({ success: false, msg: '参数不完整' });
+    }
+    const client = manager.getClient(name);
+    const cachedKey = smsSessionCache.get(name)?.captchaKey || '';
+    try {
+      const { smsKey } = await client.sendSmsCode(user, body.captchaCode.trim(), cachedKey);
+      if (smsKey) {
+        const cur = smsSessionCache.get(name) || {};
+        cur.smsKey = smsKey;
+        smsSessionCache.set(name, cur);
+      }
+      manager.addLog('info', `[${name}] 短信验证码已发送至手机号 ${user}`);
+      return { success: true };
+    } catch (err: any) {
+      manager.addLog('error', `[${name}] 发送短信失败: ${err.message}`);
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.post('/api/profiles/:id/bind-device', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const body = (request.body as any) || {};
+    const acc = manager.getAccount(params.id);
+    const name = acc?.name || params.id;
+    if (!body.smsCode) {
+      return reply.code(400).send({ success: false, msg: '请填写短信验证码' });
+    }
+    const client = manager.getClient(name);
+    const cachedSmsKey = smsSessionCache.get(name)?.smsKey || '';
+    try {
+      await client.bindDevice(body.smsCode.trim(), cachedSmsKey);
+      manager.saveToDisk();
+      manager.addLog('success', `[${name}] 设备绑定成功！正在启动保活...`);
+      manager.startAccount(name).catch((e) => manager.addLog('error', `[${name}] 启动保活失败: ${e.message}`));
+      return { success: true, msg: '绑定成功并已启动保活' };
+    } catch (err: any) {
+      manager.addLog('error', `[${name}] 设备绑定失败: ${err.message}`);
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // Profile 策略配置与自动化日常任务执行
+  fastify.get('/api/profiles/:id/points', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+    try {
+      const data = await manager.getPointsAndTasks(acc.name);
+      return { success: true, data };
+    } catch (err: any) {
+      return reply.code(500).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.post('/api/profiles/:id/policy', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const body = (request.body as any) || {};
+    const acc = manager.getAccount(params.id);
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
     await manager.addOrUpdateAccount({
       ...acc,
       autoSign: body.autoSign !== undefined ? body.autoSign : (body.taskConfig?.enabled ?? acc.autoSign),
       taskConfig: body.taskConfig !== undefined ? body.taskConfig : acc.taskConfig,
       redeemConfig: body.redeemConfig !== undefined ? body.redeemConfig : acc.redeemConfig,
     });
-    manager.addLog('info', `[${acc.name}] 自动化任务与兑换策略已保存`);
+    manager.addLog('info', `[${acc.name}] 策略配置已更新并落盘`);
     return { success: true, data: manager.getAccountState(acc.name) };
   });
 
-  // Profile 手动执行日常任务
   fastify.post('/api/profiles/:id/tasks/run', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
     const acc = manager.getAccount(params.id);
-    if (!acc) {
-      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
-    }
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
     try {
       const msg = await manager.manualRunTasks(acc.name);
       return { success: true, msg };
@@ -849,46 +536,11 @@ export async function createServer() {
     }
   });
 
-  // Profile 手动触发补足时长智能挂机
-  fastify.post('/api/profiles/:id/hang/run', async (request, reply) => {
+  fastify.post('/api/profiles/:id/tasks/sign', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
     const acc = manager.getAccount(params.id);
-    if (!acc) {
-      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
-    }
-    try {
-      const msg = await manager.manualHang(acc.name);
-      return { success: true, msg };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // Profile 手动中止挂机
-  fastify.post('/api/profiles/:id/hang/stop', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const params = request.params as { id: string };
-    const acc = manager.getAccount(params.id);
-    if (!acc) {
-      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
-    }
-    try {
-      await manager.stopHang(acc.name);
-      return { success: true, msg: '已成功中止挂机任务，并恢复保活长连接' };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
-  // Profile 手动触发打卡签到
-  fastify.post('/api/profiles/:id/sign', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    const params = request.params as { id: string };
-    const acc = manager.getAccount(params.id);
-    if (!acc) {
-      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
-    }
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
     try {
       const msg = await manager.manualSignIn(acc.name);
       return { success: true, msg };
@@ -897,26 +549,55 @@ export async function createServer() {
     }
   });
 
-  // Profile 手动触发积分兑换
-  fastify.post('/api/profiles/:id/redeem', async (request, reply) => {
+  fastify.post('/api/profiles/:id/tasks/hang/start', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
     const acc = manager.getAccount(params.id);
-    if (!acc) {
-      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
-    }
-    const body = (request.body as { prodId?: number; costPoints?: number; prodType?: string; desktopId?: string }) || {};
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
     try {
-      const msg = await manager.manualRedeem(
-        acc.name,
-        body.prodId,
-        body.costPoints,
-        body.prodType,
-        body.desktopId,
-      );
+      const msg = await manager.manualHang(acc.name);
       return { success: true, msg };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.post('/api/profiles/:id/tasks/hang/stop', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+    try {
+      await manager.stopHang(acc.name);
+      return { success: true, msg: '已成功中止挂机任务，并恢复保活长连接' };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.post('/api/profiles/:id/tasks/redeem', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const body = (request.body as any) || {};
+    const acc = manager.getAccount(params.id);
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+    try {
+      const msg = await manager.manualRedeem(acc.name, body.prodId, body.costPoints, body.prodType, body.desktopId);
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // 获取商城可兑换商品
+  fastify.get('/api/rewards', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const query = (request.query as any) || {};
+    try {
+      const data = await manager.getAvailableRewards(query.profileId, query.refresh === '1' || query.refresh === 'true');
+      return { success: true, data };
+    } catch (err: any) {
+      return reply.code(500).send({ success: false, msg: err.message });
     }
   });
 

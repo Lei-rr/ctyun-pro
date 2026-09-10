@@ -1,4 +1,4 @@
-export { AccountManager, type ManagedAccount } from './account-manager.js';
+export { ProfileManager, ProfileManager as AccountManager, type ManagedAccount } from './profile-manager.js';
 export { Logger, type LogItem } from './logger.js';
 export { Protocol } from './protocol.js';
 export {

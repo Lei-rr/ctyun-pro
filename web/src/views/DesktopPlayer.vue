@@ -85,17 +85,9 @@ const initDesktop = async () => {
   errorMsg.value = '';
   statusText.value = '正在获取机房直连凭证...';
   try {
-    // 1. 获取直连参数 (标准优雅 API: /api/instances/:id/stream)
+    // 1. 获取直连参数 (标准 RESTful API: /api/instances/:id/stream)
     const res = await fetch(`/api/instances/${encodeURIComponent(desktopId.value)}/stream`);
-    let json = await res.json();
-    if (!json.success || !json.data) {
-      // 兼容旧接口回退
-      const query = new URLSearchParams();
-      query.set('desktopId', desktopId.value);
-      if (accountHint.value) query.set('accountName', accountHint.value);
-      const fallbackRes = await fetch(`/api/account/desktop/connect-params?${query.toString()}`);
-      json = await fallbackRes.json();
-    }
+    const json = await res.json();
     if (!json.success || !json.data) {
       throw new Error(json.msg || json.error || '获取机房连接凭据失败');
     }

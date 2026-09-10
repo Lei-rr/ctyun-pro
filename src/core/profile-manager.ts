@@ -38,7 +38,7 @@ export interface ManagedAccount {
  * 账号与系统顶层业务管理者
  * 协调：账号认证存储、保活管理器 (KeepAliveManager)、定时调度器 (TaskScheduler)
  */
-export class AccountManager {
+export class ProfileManager {
   private accounts: Map<string, AccountConfig> = new Map();
   private clients: Map<string, CtYunClient> = new Map();
   private accountStates: Map<string, ManagedAccount> = new Map();

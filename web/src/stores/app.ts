@@ -329,7 +329,7 @@ export const useAppStore = defineStore('app', () => {
     qrImage.value = '';
     modalError.value = '';
     try {
-      const res = await fetch('/api/account/qrcode/create', {
+      const res = await fetch('/api/profiles/qrcode/create', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -361,7 +361,7 @@ export const useAppStore = defineStore('app', () => {
         return;
       }
       try {
-        const url = `/api/account/qrcode/status?qrCodeId=${encodeURIComponent(
+        const url = `/api/profiles/qrcode/status?qrCodeId=${encodeURIComponent(
           qrCodeId.value,
         )}&accountName=${encodeURIComponent(formName.value.trim())}`;
         const res = await fetch(url, {
@@ -445,7 +445,6 @@ export const useAppStore = defineStore('app', () => {
     const userPhone = (forceUser !== undefined ? forceUser : formUser.value).trim();
     if (!userPhone) {
       captchaImgUrl.value = '';
-      toast.warning('请先输入天翼云登录手机号');
       return;
     }
     const name = formName.value.trim() || userPhone;
@@ -453,9 +452,7 @@ export const useAppStore = defineStore('app', () => {
     formCaptcha.value = ''; // 刷新验证码清空旧输入
     try {
       const res = await fetch(
-        `/api/account/captcha?accountName=${encodeURIComponent(name)}&user=${encodeURIComponent(
-          userPhone,
-        )}&_t=${Date.now()}`,
+        `/api/profiles/${encodeURIComponent(name)}/captcha?_t=${Date.now()}`,
         { headers: getHeaders() },
       );
       const json = await res.json();
@@ -463,158 +460,165 @@ export const useAppStore = defineStore('app', () => {
         captchaImgUrl.value = json.data.image;
       }
     } catch {
-      captchaImgUrl.value = `/api/account/captcha?accountName=${encodeURIComponent(
+      captchaImgUrl.value = `/api/profiles/${encodeURIComponent(
         name,
-      )}&user=${encodeURIComponent(userPhone)}&_t=${Date.now()}`;
+      )}/captcha?_t=${Date.now()}`;
     } finally {
       captchaLoading.value = false;
     }
   }
 
   async function submitLogin() {
-    if (!formUser.value || !formCaptcha.value) {
-      modalError.value = '请填写手机号和图形验证码';
-      return;
+      if (!formUser.value || !formCaptcha.value) {
+        modalError.value = '请填写手机号和图形验证码';
+        return;
+      }
+      modalLoading.value = true;
+      modalError.value = '';
+      const name = formName.value.trim() || formUser.value.trim();
+
+      try {
+        const res = await fetch(`/api/profiles/${encodeURIComponent(name)}/login`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify({
+            name,
+            user: formUser.value.trim(),
+            password: formPassword.value,
+            captchaCode: formCaptcha.value.trim(),
+          }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.msg || '登录失败');
+
+        if (data.needSms) {
+          modalStep.value = 'sms';
+          refreshSmsCaptcha();
+        } else {
+          showModal.value = false;
+          toast.success(`账号 [${name}] 登录并保活成功`);
+          fetchStatus();
+        }
+      } catch (err: any) {
+        modalError.value = err.message;
+        toast.error(err.message || '登录失败');
+        refreshLoginCaptcha();
+      } finally {
+        modalLoading.value = false;
+      }
     }
-    modalLoading.value = true;
-    modalError.value = '';
-    const name = formName.value.trim() || formUser.value.trim();
 
-    try {
-      const res = await fetch('/api/account/login', {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          accountName: name,
-          user: formUser.value.trim(),
-          password: formPassword.value,
-          captchaCode: formCaptcha.value.trim(),
-        }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.msg || '登录失败');
+    function refreshSmsCaptcha() {
+      const name = formName.value.trim() || formUser.value.trim();
+      smsCaptchaImgUrl.value = `/api/profiles/${encodeURIComponent(
+        name,
+      )}/sms-captcha?_t=${Date.now()}`;
+    }
 
-      if (data.needSms) {
-        modalStep.value = 'sms';
+    async function sendSms() {
+      if (!smsCaptchaCode.value) {
+        modalError.value = '请输入短信图验字符';
+        return;
+      }
+      modalLoading.value = true;
+      modalError.value = '';
+      const name = formName.value.trim() || formUser.value.trim();
+      try {
+        const res = await fetch(`/api/profiles/${encodeURIComponent(name)}/send-sms`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify({
+            name,
+            user: formUser.value.trim(),
+            captchaCode: smsCaptchaCode.value.trim(),
+          }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.msg || '发送短信失败');
+        smsSentSuccess.value = true;
+        toast.success('短信验证码已成功发送');
+      } catch (err: any) {
+        modalError.value = err.message;
+        toast.error(err.message || '发送短信失败');
         refreshSmsCaptcha();
-      } else {
+      } finally {
+        modalLoading.value = false;
+      }
+    }
+
+    async function submitBindDevice() {
+      if (!smsVerificationCode.value) {
+        modalError.value = '请输入收到的短信验证码';
+        return;
+      }
+      modalLoading.value = true;
+      modalError.value = '';
+      const name = formName.value.trim() || formUser.value.trim();
+      try {
+        const res = await fetch(`/api/profiles/${encodeURIComponent(name)}/bind-device`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify({
+            name,
+            smsCode: smsVerificationCode.value.trim(),
+          }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.msg || '绑定失败');
         showModal.value = false;
-        toast.success(`账号 [${name}] 登录并保活成功`);
+        toast.success(`新设备已绑定成功，账号 [${name}] 启动保活`);
+        fetchStatus();
+      } catch (err: any) {
+        modalError.value = err.message;
+        toast.error(err.message || '绑定失败');
+      } finally {
+        modalLoading.value = false;
+      }
+    }
+
+    async function accountAction(accountName: string, action: 'start' | 'stop' | 'delete') {
+      if (action === 'delete') {
+        const confirmed = await confirmDelete(`账号 [${accountName}]`, '删除后将移除所有已配置的保活与云电脑实例信息。');
+        if (!confirmed) return;
+      }
+
+      // 乐观即时更新前端状态，提升丝滑手感，无需等待网络来回
+      const targetAcc = accounts.value.find((a) => a.name === accountName);
+      if (targetAcc) {
+        if (action === 'start') {
+          targetAcc.status = 'online';
+        } else if (action === 'stop') {
+          targetAcc.status = 'idle';
+        }
+      }
+
+      try {
+        let res: Response;
+        if (action === 'delete') {
+          res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}`, {
+            method: 'DELETE',
+            headers: getHeaders(),
+          });
+        } else {
+          res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/sync`, {
+            method: 'POST',
+            headers: getHeaders(),
+          });
+        }
+        const data = await res.json();
+        if (!data.success) {
+          toast.error(data.msg || '操作失败');
+        } else {
+          if (action === 'delete') toast.success(`账号 [${accountName}] 已删除`);
+          else if (action === 'start') toast.success(`账号 [${accountName}] 保活已启动`);
+          else toast.info(`账号 [${accountName}] 保活已停止`);
+        }
+        fetchStatus();
+      } catch (err: any) {
+        toast.error(err.message || '网络请求错误');
         fetchStatus();
       }
-    } catch (err: any) {
-      modalError.value = err.message;
-      toast.error(err.message || '登录失败');
-      refreshLoginCaptcha();
-    } finally {
-      modalLoading.value = false;
     }
-  }
-
-  function refreshSmsCaptcha() {
-    const name = formName.value.trim() || formUser.value.trim();
-    smsCaptchaImgUrl.value = `/api/account/sms-captcha?accountName=${encodeURIComponent(
-      name,
-    )}&_t=${Date.now()}`;
-  }
-
-  async function sendSms() {
-    if (!smsCaptchaCode.value) {
-      modalError.value = '请输入短信图验字符';
-      return;
-    }
-    modalLoading.value = true;
-    modalError.value = '';
-    const name = formName.value.trim() || formUser.value.trim();
-    try {
-      const res = await fetch('/api/account/send-sms', {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          accountName: name,
-          user: formUser.value.trim(),
-          captchaCode: smsCaptchaCode.value.trim(),
-        }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.msg || '发送短信失败');
-      smsSentSuccess.value = true;
-      toast.success('短信验证码已成功发送');
-    } catch (err: any) {
-      modalError.value = err.message;
-      toast.error(err.message || '发送短信失败');
-      refreshSmsCaptcha();
-    } finally {
-      modalLoading.value = false;
-    }
-  }
-
-  async function submitBindDevice() {
-    if (!smsVerificationCode.value) {
-      modalError.value = '请输入收到的短信验证码';
-      return;
-    }
-    modalLoading.value = true;
-    modalError.value = '';
-    const name = formName.value.trim() || formUser.value.trim();
-    try {
-      const res = await fetch('/api/account/bind-device', {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          accountName: name,
-          smsCode: smsVerificationCode.value.trim(),
-        }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.msg || '绑定失败');
-      showModal.value = false;
-      toast.success(`新设备已绑定成功，账号 [${name}] 启动保活`);
-      fetchStatus();
-    } catch (err: any) {
-      modalError.value = err.message;
-      toast.error(err.message || '绑定失败');
-    } finally {
-      modalLoading.value = false;
-    }
-  }
-
-  async function accountAction(accountName: string, action: 'start' | 'stop' | 'delete') {
-    if (action === 'delete') {
-      const confirmed = await confirmDelete(`账号 [${accountName}]`, '删除后将移除所有已配置的保活与云电脑实例信息。');
-      if (!confirmed) return;
-    }
-
-    // 乐观即时更新前端状态，提升丝滑手感，无需等待网络来回
-    const targetAcc = accounts.value.find((a) => a.name === accountName);
-    if (targetAcc) {
-      if (action === 'start') {
-        targetAcc.status = 'online';
-      } else if (action === 'stop') {
-        targetAcc.status = 'idle';
-      }
-    }
-
-    try {
-      const res = await fetch('/api/account/action', {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ accountName, action }),
-      });
-      const data = await res.json();
-      if (!data.success) {
-        toast.error(data.msg || '操作失败');
-      } else {
-        if (action === 'delete') toast.success(`账号 [${accountName}] 已删除`);
-        else if (action === 'start') toast.success(`账号 [${accountName}] 保活已启动`);
-        else toast.info(`账号 [${accountName}] 保活已停止`);
-      }
-      fetchStatus();
-    } catch (err: any) {
-      toast.error(err.message || '网络请求错误');
-      fetchStatus();
-    }
-  }
 
   async function triggerAll(action: 'start' | 'stop') {
     for (const a of accounts.value) {
@@ -729,7 +733,7 @@ export const useAppStore = defineStore('app', () => {
     try {
       const acc = accounts.value.find((a) => a.name === policyAccount.value);
       const res = await fetch(
-        `/api/account/rewards?user=${encodeURIComponent(acc?.user || policyAccount.value)}&refresh=1&_t=${Date.now()}`,
+        `/api/rewards?profileId=${encodeURIComponent(acc?.name || policyAccount.value)}&refresh=1&_t=${Date.now()}`,
         { headers: getHeaders() },
       );
       const json = await res.json();
@@ -786,7 +790,7 @@ export const useAppStore = defineStore('app', () => {
       if (policyRedeemEnabled.value && !selectedProd) {
         throw new Error('未获取到官方商品数据，暂不能启用自动兑换');
       }
-      const res = await fetch('/api/account/policy', {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(policyAccount.value)}/policy`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({
@@ -803,13 +807,13 @@ export const useAppStore = defineStore('app', () => {
           redeemConfig: {
             enabled: policyRedeemEnabled.value,
             scheduleType: policyScheduleType.value,
-            monthlyDay: Number(policyMonthlyDay.value),
-            intervalDays: Number(policyIntervalDays.value),
+            monthlyDay: policyMonthlyDay.value,
+            intervalDays: policyIntervalDays.value,
             specificDate: policySpecificDate.value,
-            targetDesktopId: policyTargetDesktop.value,
-            targetProdId: Number(policyTargetProdId.value),
-             costPoints: selectedProd?.costPoints,
-             prodType: selectedProd?.prodType,
+            targetDesktopId: policyTargetDesktop.value || undefined,
+            targetProdId: policyTargetProdId.value || 17024101,
+            targetReward: selectedProd?.prodName || '1G数据盘-4天',
+            fallbackDays: 4,
           },
         }),
       });
@@ -827,7 +831,7 @@ export const useAppStore = defineStore('app', () => {
 
   async function manualRunTasks(accountName: string) {
     try {
-      const res = await fetch('/api/account/task/run', {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/run`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ accountName }),
@@ -846,7 +850,7 @@ export const useAppStore = defineStore('app', () => {
 
   async function manualActivateDesktop(accountName: string) {
     try {
-      const res = await fetch('/api/account/hang/run', {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/hang/start`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ accountName }),
@@ -865,7 +869,7 @@ export const useAppStore = defineStore('app', () => {
 
   async function manualStopHang(accountName: string) {
     try {
-      const res = await fetch('/api/account/hang/stop', {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/hang/stop`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ accountName }),
@@ -884,7 +888,7 @@ export const useAppStore = defineStore('app', () => {
 
   async function manualLoginDesktopTask(accountName: string) {
     try {
-      const res = await fetch('/api/account/task/login-desktop', {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/sync`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ accountName }),
@@ -903,7 +907,7 @@ export const useAppStore = defineStore('app', () => {
 
   async function manualAiChatTask(accountName: string) {
     try {
-      const res = await fetch('/api/account/task/ai-chat', {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/run`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ accountName }),
@@ -922,7 +926,7 @@ export const useAppStore = defineStore('app', () => {
 
   async function manualSignIn(accountName: string) {
     try {
-      const res = await fetch('/api/account/sign', {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/sign`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ accountName }),
@@ -948,7 +952,7 @@ export const useAppStore = defineStore('app', () => {
     const desktopId = policyTargetDesktop.value || undefined;
 
     try {
-      const res = await fetch('/api/account/redeem', {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/redeem`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({
@@ -1024,7 +1028,7 @@ export const useAppStore = defineStore('app', () => {
     submitBindDevice,
     accountAction,
     renameAccount: async (oldName: string, newName: string) => {
-      const res = await fetch('/api/account/rename', {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(oldName)}/rename`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ oldName, newName }),
@@ -1035,7 +1039,7 @@ export const useAppStore = defineStore('app', () => {
       fetchStatus();
     },
     fetchPointsAndTasks: async (accountUserOrName: string) => {
-      const res = await fetch(`/api/account/points?user=${encodeURIComponent(accountUserOrName)}`, {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(accountUserOrName)}/points`, {
         headers: getHeaders(),
       });
       const json = await res.json();
@@ -1081,10 +1085,10 @@ export const useAppStore = defineStore('app', () => {
       operation: 'on' | 'shutdown' | 'reset',
     ) => {
       try {
-        const res = await fetch('/api/account/desktop/operate', {
+        const res = await fetch(`/api/instances/${encodeURIComponent(desktopId)}/power`, {
           method: 'POST',
           headers: getHeaders(),
-          body: JSON.stringify({ accountName, desktopId, operation }),
+          body: JSON.stringify({ action: operation, accountName }),
         });
         const json = await res.json();
         if (json.success) {
@@ -1121,7 +1125,7 @@ export const useAppStore = defineStore('app', () => {
       desktopId?: string,
     ) => {
       try {
-        const res = await fetch('/api/account/redeem', {
+        const res = await fetch(`/api/profiles/${encodeURIComponent(accountKey)}/tasks/redeem`, {
           method: 'POST',
           headers: getHeaders(),
           body: JSON.stringify({
@@ -1144,24 +1148,6 @@ export const useAppStore = defineStore('app', () => {
       } catch (e: any) {
         toast.error(e.message || '兑换请求异常');
         return false;
-      }
-    },
-    getDesktopDirectUrl: async (accountName: string, desktopId?: string) => {
-      try {
-        const params = new URLSearchParams({ accountName });
-        if (desktopId) params.append('desktopId', desktopId);
-        const res = await fetch(`/api/account/desktop/url?${params.toString()}`, {
-          headers: getHeaders(),
-        });
-        const json = await res.json();
-        if (json.success && json.data?.url) {
-          return json.data.url as string;
-        }
-        toast.error(json.msg || '获取远程桌面直连地址失败');
-        return null;
-      } catch (e: any) {
-        toast.error(e.message || '获取远程桌面直连地址异常');
-        return null;
       }
     },
     async clearLogs() {

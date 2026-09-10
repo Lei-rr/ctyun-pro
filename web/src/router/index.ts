@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import AccountsView from '@/views/AccountsView.vue';
+import ProfilesView from '@/views/ProfilesView.vue';
 import LogsView from '@/views/LogsView.vue';
 import LoginView from '@/views/LoginView.vue';
 import { useAppStore } from '@/stores/app';
@@ -8,8 +8,8 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', component: LoginView, meta: { public: true } },
-    { path: '/', component: AccountsView },
-    { path: '/profiles', component: AccountsView },
+    { path: '/', component: ProfilesView },
+    { path: '/profiles', component: ProfilesView },
     { path: '/logs', component: LogsView },
     { path: '/live/:instanceId', component: () => import('@/views/DesktopPlayer.vue') },
     { path: '/desktop/:desktopId', redirect: to => `/live/${to.params.desktopId}` },
