@@ -1,53 +1,56 @@
 import WebSocket from 'ws';
 import { Protocol } from '../core/protocol.js';
-import type { Desktop, DesktopInfo, LoginInfo } from '../core/client.js';
+import type { Desktop, DesktopInfo } from '../core/client.js';
 
 export interface KeepAliveWorkerOptions {
   accountName: string;
   desktop: Desktop;
   desktopInfo: DesktopInfo;
-  loginInfo: LoginInfo;
+  loginInfo: any;
   deviceCode: string;
-  keepAliveSeconds?: number;
   onRefreshInfo?: (desktopId: string) => Promise<DesktopInfo>;
-  onLog?: (level: 'info' | 'warn' | 'error' | 'success', message: string) => void;
   onStatusChange?: (status: 'connecting' | 'connected' | 'reconnecting' | 'stopped') => void;
   onHeartbeat?: () => void;
+  onLog?: (level: 'info' | 'warn' | 'error' | 'success', msg: string) => void;
 }
 
 /**
- * 经典极简纯保活工作者 (严格对齐 GitHub 经典实现：单个 MAIN WebSocket + 30s 活跃心跳 + REDQ/103 响应)
+ * 经典纯协议保活工作者 (旁观者脉冲模式)
+ * 核心机制：
+ * 1. 严格对齐开源仓库 (muyicn/ctyun-dashboard 与 vay1314/CtYun-Keeper)：
+ *    单个 MAIN WebSocket + 30s 活跃心跳 (Type 7) + REDQ/103 响应
+ * 2. 旁观者模式安全守则：绝不发送 Type 112 (会话认领) 与 Type 104 (通道就绪)，
+ *    使通道仅维持实例活跃和重置天翼云官方 1 小时自动休眠关机计时器，官方客户端随时连入绝不互踢！
+ * 3. 监听 Type 119/120/137 与 4001 客户端状态通知，感知真机用户上线
+ * 4. 支持 pause() 与 resume() 软暂停/恢复，与挂机任务无缝优雅交接
  */
 export class KeepAliveWorker {
   private options: KeepAliveWorkerOptions;
+  private currentWs: WebSocket | null = null;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
   private isRunning = false;
   private isReconnecting = false;
-  private currentWs: WebSocket | null = null;
-  private reconnectTimer: NodeJS.Timeout | null = null;
-  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private isPaused = false;
 
   constructor(options: KeepAliveWorkerOptions) {
-    this.options = {
-      keepAliveSeconds: 30,
-      ...options,
-    };
+    this.options = options;
   }
 
-  private log(level: 'info' | 'warn' | 'error' | 'success', message: string) {
-    const prefix = `[${this.options.accountName}][${this.options.desktop.desktopCode || this.options.desktop.desktopId}]`;
-    this.options.onLog?.(level, `${prefix} ${message}`);
+  private log(level: 'info' | 'warn' | 'error' | 'success', msg: string) {
+    this.options.onLog?.(level, `[${this.options.accountName}][${this.options.desktop.desktopCode || this.options.desktop.desktopId}] ${msg}`);
   }
 
   public start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
-    this.log('info', '保活任务启动：维持持久长连接与自动心跳校验');
+    this.isPaused = false;
     this.connect();
   }
 
   public stop(): void {
     this.isRunning = false;
-    this.isReconnecting = false;
+    this.isPaused = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -60,25 +63,53 @@ export class KeepAliveWorker {
     this.options.onStatusChange?.('stopped');
   }
 
+  /**
+   * 软暂停保活连接 (用于让位给挂机任务，不销毁配置)
+   */
+  public pause(): void {
+    if (!this.isRunning || this.isPaused) return;
+    this.isPaused = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    this.cleanupSocket();
+    this.log('info', '保活通道已软暂停（让位给任务执行）');
+  }
+
+  /**
+   * 恢复保活连接
+   */
+  public resume(): void {
+    if (!this.isRunning || !this.isPaused) return;
+    this.isPaused = false;
+    this.log('info', '任务完成，保活通道正在恢复连接...');
+    this.connect();
+  }
+
   private cleanupSocket(): void {
     if (this.currentWs) {
       try {
         this.currentWs.removeAllListeners();
-        this.currentWs.on('error', () => {});
-        this.currentWs.close(1000, 'Worker Stopped');
+        if (this.currentWs.readyState === WebSocket.OPEN || this.currentWs.readyState === WebSocket.CONNECTING) {
+          this.currentWs.close(1000, 'Worker cleanup');
+        }
       } catch {}
       this.currentWs = null;
     }
   }
 
-  /** 发送官方 30s 活跃心跳 */
+  /** 发送官方 30s 活跃心跳 (Type 7) */
   private sendClientHeartbeat(): void {
-    if (!this.isRunning || !this.currentWs || this.currentWs.readyState !== WebSocket.OPEN) return;
+    if (!this.isRunning || this.isPaused || !this.currentWs || this.currentWs.readyState !== WebSocket.OPEN) return;
     try {
       // CLINK_MSGC_HEARTBEAT = 7 (type: uint16=7, size: uint32=0)
-      const hbBuf = Buffer.from([0x07, 0x00, 0x00, 0x00, 0x00, 0x00]);
+      const hbBuf = Protocol.buildMessage(7);
       this.currentWs.send(hbBuf);
-      this.log('info', '-> 发送客户端活跃心跳 (30s 心跳保活)');
       this.options.onHeartbeat?.();
     } catch (err: any) {
       this.log('warn', `发送客户端心跳异常: ${err.message}`);
@@ -86,7 +117,7 @@ export class KeepAliveWorker {
   }
 
   private connect(): void {
-    if (!this.isRunning) return;
+    if (!this.isRunning || this.isPaused) return;
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -105,22 +136,30 @@ export class KeepAliveWorker {
     const hostParts = desktopInfo.clinkLvsOutHost.split(':');
     const mainUrl = `wss://${desktopInfo.clinkLvsOutHost}/clinkProxy/${desktop.desktopId}/MAIN`;
 
-    this.log('info', `建立持久 WebSocket 连接 (${desktopInfo.clinkLvsOutHost})...`);
+    this.log('info', `建立持久旁观者 WebSocket 连接 (${desktopInfo.clinkLvsOutHost})...`);
 
     const ws = new WebSocket(mainUrl, ['binary'], {
       headers: {
         Origin: 'https://pc.ctyun.cn',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       },
       rejectUnauthorized: false,
     });
     this.currentWs = ws;
 
     const triggerReconnect = async (code: number, reason: any) => {
-      if (!this.isRunning || this.isReconnecting) return;
+      if (!this.isRunning || this.isPaused || this.isReconnecting) return;
       this.isReconnecting = true;
 
       this.options.onStatusChange?.('reconnecting');
-      this.log('info', `网络连接断开 (${code}, ${reason?.toString() || '远程连接关闭'})，5秒后自动重连...`);
+      const reasonStr = reason?.toString() || '';
+      
+      // 检测是否为官方客户端接入导致的抢占避让
+      if (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) {
+        this.log('info', `检测到官方客户端接入 (Code ${code})，旁观通道主动避让，将在 5 分钟后静默恢复...`);
+      } else {
+        this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
+      }
 
       if (this.heartbeatTimer) {
         clearInterval(this.heartbeatTimer);
@@ -128,18 +167,19 @@ export class KeepAliveWorker {
       }
       this.cleanupSocket();
 
-      // 断线重连前重新换取官方最新动态连接凭证与 Token
+      // 断线重连前重新换取官方最新动态连接凭证
       if (this.options.onRefreshInfo) {
         try {
-          const freshInfo = await this.options.onRefreshInfo(this.options.desktop.desktopId);
+          const freshInfo = await this.options.onRefreshInfo(String(this.options.desktop.desktopId));
           this.options.desktopInfo = freshInfo;
         } catch {}
       }
 
+      const retryDelay = (code === 4001 || reasonStr.includes('preempt')) ? 300000 : 5000;
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null;
         this.connect();
-      }, 5000);
+      }, retryDelay);
     };
 
     ws.on('open', async () => {
@@ -168,35 +208,33 @@ export class KeepAliveWorker {
 
       // 2. 等待 500ms 发送原生初始握手帧 (UkVEUQIAAAACAAAAGgAAAAAAAAABAAEAAAABAAAAEgAAAAkAAAAECAAA)
       setTimeout(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          try {
-            const initialPayload = Buffer.from('UkVEUQIAAAACAAAAGgAAAAAAAAABAAEAAAABAAAAEgAAAAkAAAAECAAA', 'base64');
-            ws.send(initialPayload);
-            this.log('success', '进入保活监听状态');
-            this.options.onStatusChange?.('connected');
+        if (!this.isRunning || this.isPaused || ws.readyState !== WebSocket.OPEN) return;
+        try {
+          const initialPayload = Buffer.from('UkVEUQIAAAACAAAAGgAAAAAAAAABAAEAAAABAAAAEgAAAAkAAAAECAAA', 'base64');
+          ws.send(initialPayload);
+          this.log('success', '进入保活监听状态（旁观者姿态，不抢占会话）');
+          this.options.onStatusChange?.('connected');
 
-            // 3. 启动官方标准的 30s 活跃心跳定时器
-            if (!this.heartbeatTimer) {
-              this.heartbeatTimer = setInterval(() => this.sendClientHeartbeat(), 30000);
-            }
-          } catch (err: any) {
-            this.log('error', `握手流程异常: ${err.message}`);
+          // 3. 启动官方标准的 30s 活跃心跳定时器
+          if (!this.heartbeatTimer) {
+            this.heartbeatTimer = setInterval(() => this.sendClientHeartbeat(), 30000);
           }
+        } catch (err: any) {
+          this.log('error', `握手流程异常: ${err.message}`);
         }
       }, 500);
     });
 
     ws.on('message', (data: WebSocket.RawData) => {
+      if (!this.isRunning || this.isPaused) return;
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
 
-      // 收到 REDQ 保活校验帧 -> 动态解密并响应
+      // 收到 REDQ 保活校验帧 -> 动态响应
       if (buffer.length >= 4 && buffer.subarray(0, 4).toString('ascii') === 'REDQ') {
-        this.log('info', '-> 收到服务端保活校验');
         try {
           const response = Protocol.executeRedqEncryption(buffer);
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(response);
-            this.log('success', '-> 发送保活校验响应成功');
           }
         } catch (err: any) {
           this.log('warn', `处理保活校验异常: ${err.message}`);
@@ -204,7 +242,7 @@ export class KeepAliveWorker {
         return;
       }
 
-      // 收到 Type 103 用户状态探测 -> 响应 Type 118 用户身份
+      // 收到 Type 103 用户状态探测 -> 仅响应 Type 118 用户身份（坚决不发 112/104，保持纯旁观）
       try {
         const infos = Protocol.parseSendInfo(buffer);
         for (const info of infos) {
@@ -219,6 +257,11 @@ export class KeepAliveWorker {
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(byUserName);
             }
+          }
+
+          // 监听官方客户端状态通知 (Type 119/120/137)
+          if (info.type === 119 || info.type === 120 || info.type === 137) {
+            this.log('info', `收到客户端状态通知 (Type ${info.type})，旁观通道持续待命`);
           }
         }
       } catch {}

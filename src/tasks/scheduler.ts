@@ -82,46 +82,50 @@ export class TaskScheduler {
         // 准点命中判定：仅在到达设定时间的当分钟 (currentHHmm === targetTime) 且今日未执行时触发
         // 若服务重启或时间已过 (currentHHmm > targetTime)，绝不补跑，避免重启误触
         if (tConf.lastRunDate !== today && currentHHmm === targetTime) {
-          try {
-            this.logger.addLog('info', `[${name}] ⏰ 命中每日做任务定时 (${targetTime})，正在按策略自动执行...`);
-            const dId = this.accountManager.getAccountState(name)?.desktops?.[0]?.desktopId;
-            const res = await TaskRunner.executeDailyTasks(client, dId, tConf, this.logger);
-            acc.lastSignDate = today;
-            tConf.lastRunDate = today;
-            acc.taskConfig = tConf;
-            this.accountManager.saveToDisk();
-            this.logger.addLog('success', `[${name}] 每日任务已执行: ${res.message}`);
+          // 加入 1~15 秒的账号级执行随机抖动 (Jitter)，防止多账号同一时刻并发冲击官方风控
+          const jitterMs = Math.floor(Math.random() * 14000) + 1000;
+          setTimeout(async () => {
+            try {
+              this.logger.addLog('info', `[${name}] ⏰ 命中每日做任务定时 (${targetTime}，抖动延时 ${(jitterMs/1000).toFixed(1)}s)，正在按策略自动执行...`);
+              const dId = this.accountManager.getAccountState(name)?.desktops?.[0]?.desktopId;
+              const res = await TaskRunner.executeDailyTasks(client, dId, tConf, this.logger);
+              acc.lastSignDate = today;
+              tConf.lastRunDate = today;
+              acc.taskConfig = tConf;
+              this.accountManager.saveToDisk();
+              this.logger.addLog('success', `[${name}] 每日任务已执行: ${res.message}`);
 
-            // Webhook 通知
-            if (this.accountManager.webhookUrl) {
-              sendWebhookNotification(
-                this.accountManager.webhookUrl,
-                `天翼云电脑 - [${name}] 每日任务完成`,
-                `执行时间: ${targetTime}\n任务详情: ${res.message}`,
-              ).catch(() => {});
+              // Webhook 通知
+              if (this.accountManager.webhookUrl) {
+                sendWebhookNotification(
+                  this.accountManager.webhookUrl,
+                  `天翼云电脑 - [${name}] 每日任务完成`,
+                  `执行时间: ${targetTime}\n任务详情: ${res.message}`,
+                ).catch(() => {});
+              }
+
+              // 若开启了使用1小时挂机任务，自动连带触发智能补足时长挂机
+              if (tConf.keepAliveHang !== false) {
+                this.accountManager.manualHang(name).catch(() => {});
+              }
+
+              // 任务完成后异步拉取官方最新积分并刷新看板
+              this.accountManager.getPointsAndTasks(name)
+                .then(() => this.accountManager.notifyStatusChange())
+                .catch(() => {});
+
+              this.accountManager.notifyStatusChange();
+            } catch (e: any) {
+              this.logger.addLog('warn', `[${name}] 自动任务执行跳过: ${e.message}`);
+              if (this.accountManager.webhookUrl) {
+                sendWebhookNotification(
+                  this.accountManager.webhookUrl,
+                  `天翼云电脑 - [${name}] 任务执行跳过`,
+                  `原因: ${e.message}`,
+                ).catch(() => {});
+              }
             }
-
-            // 若开启了使用1小时挂机任务，自动连带触发智能补足时长挂机
-            if (tConf.keepAliveHang !== false) {
-              this.accountManager.manualHang(name).catch(() => {});
-            }
-
-            // 任务完成后异步拉取官方最新积分并刷新看板
-            this.accountManager.getPointsAndTasks(name)
-              .then(() => this.accountManager.notifyStatusChange())
-              .catch(() => {});
-
-            this.accountManager.notifyStatusChange();
-          } catch (e: any) {
-            this.logger.addLog('warn', `[${name}] 自动任务执行跳过: ${e.message}`);
-            if (this.accountManager.webhookUrl) {
-              sendWebhookNotification(
-                this.accountManager.webhookUrl,
-                `天翼云电脑 - [${name}] 任务执行跳过`,
-                `原因: ${e.message}`,
-              ).catch(() => {});
-            }
-          }
+          }, jitterMs);
         }
       }
 

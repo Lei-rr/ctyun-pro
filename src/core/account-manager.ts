@@ -552,8 +552,11 @@ export class AccountManager {
       return '后台挂机任务已在运行中，无需重复触发';
     }
 
-    // 挂机启动前：临时暂停底层保活连接，防止与网页端互相踢线争抢 session
-    this.keepAliveManager.stopWorkers(accountName);
+    // 挂机启动前：优先软暂停底层保活连接，无缝让位防踢线
+    const paused = this.keepAliveManager.pauseWorkers(accountName);
+    if (!paused) {
+      this.keepAliveManager.stopWorkers(accountName);
+    }
 
     // 将桌面状态置为 hanging 并更新挂机状态，保证主页保活在线数不失联
     const state = this.accountStates.get(accountName);
@@ -601,16 +604,20 @@ export class AccountManager {
         }
       }
 
-      // 挂机完成（或异常退出）后：若账号开启了保活(autoStart)，才恢复底层 7x24 小时持久保活长连接 (挂机与保活解耦)
+      // 挂机完成（或异常退出）后：若账号开启了保活(autoStart)，恢复底层 7x24 小时持久保活长连接 (挂机与保活解耦)
       try {
         const isKeepAliveEnabled = acc.autoStart !== false;
         if (isKeepAliveEnabled) {
-          try {
-            const list = await client.getDesktopList();
-            const state = this.accountStates.get(accountName);
-            const desktopStates = state?.desktops || [];
-            await this.keepAliveManager.syncWorkersForAccount(accountName, client, list, desktopStates);
-          } catch {}
+          // 优先通过 resumeWorkers 恢复连接，若无对应 Worker 则走同步初始化
+          const resumed = this.keepAliveManager.resumeWorkers(accountName);
+          if (!resumed) {
+            try {
+              const list = await client.getDesktopList();
+              const state = this.accountStates.get(accountName);
+              const desktopStates = state?.desktops || [];
+              await this.keepAliveManager.syncWorkersForAccount(accountName, client, list, desktopStates);
+            } catch {}
+          }
         } else {
           // 若关闭了保活，确保云电脑状态置为 stopped，不维持常驻 Worker
           const state = this.accountStates.get(accountName);

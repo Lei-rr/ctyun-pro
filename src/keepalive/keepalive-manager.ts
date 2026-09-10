@@ -45,6 +45,34 @@ export class KeepAliveManager {
   }
 
   /**
+   * 软暂停指定账号下的保活工作者 (让位给挂机任务)
+   */
+  public pauseWorkers(accountName: string): boolean {
+    const existing = this.workers.get(accountName);
+    if (!existing || existing.length === 0) return false;
+    for (const w of existing) {
+      try {
+        w.pause();
+      } catch {}
+    }
+    return true;
+  }
+
+  /**
+   * 恢复指定账号下的保活工作者
+   */
+  public resumeWorkers(accountName: string): boolean {
+    const existing = this.workers.get(accountName);
+    if (!existing || existing.length === 0) return false;
+    for (const w of existing) {
+      try {
+        w.resume();
+      } catch {}
+    }
+    return true;
+  }
+
+  /**
    * 停止全部保活工作者
    */
   public stopAll(): void {
