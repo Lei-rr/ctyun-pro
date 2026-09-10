@@ -117,7 +117,7 @@ export class KeepAliveManager {
       if (!isRunning) {
         this.logger.addLog(
           'warn',
-          `[${accountName}][${d.desktopCode || d.desktopId}] 当前状态: [${d.useStatusText}]，正在下发自动开机指令...`,
+          `[${accountName}] 当前状态: [${d.useStatusText}]，正在下发自动开机指令...`,
         );
         try {
           await client.operateDesktop(d.desktopId, 'on');
@@ -126,7 +126,7 @@ export class KeepAliveManager {
         }
 
         // 异步等待云电脑开机完成（轮询检测官方状态，最多等待 5 分钟）
-        this.logger.addLog('info', `[${accountName}][${d.desktopCode || d.desktopId}] 等待云电脑开机就绪中 (最长 5 分钟)...`);
+        this.logger.addLog('info', `[${accountName}] 等待云电脑开机就绪中 (最长 5 分钟)...`);
         let ready = false;
         for (let waitSec = 0; waitSec < 60; waitSec++) {
           await new Promise((r) => setTimeout(r, 5000));
@@ -136,13 +136,13 @@ export class KeepAliveManager {
             if (cur && (cur.useStatusText === '运行中' || cur.useStatusText === '离线运行')) {
               d.useStatusText = cur.useStatusText;
               ready = true;
-              this.logger.addLog('success', `[${accountName}][${d.desktopCode || d.desktopId}] 云电脑已成功开机`);
+              this.logger.addLog('success', `[${accountName}] 云电脑已成功开机`);
               break;
             }
           } catch {}
         }
         if (!ready) {
-          this.logger.addLog('warn', `[${accountName}][${d.desktopCode || d.desktopId}] 云电脑开机仍在进行中，稍后将自动接入保活`);
+          this.logger.addLog('warn', `[${accountName}] 云电脑开机仍在进行中，稍后将自动接入保活`);
         }
       }
 
@@ -205,7 +205,7 @@ export class KeepAliveManager {
       } catch (err: any) {
         this.logger.addLog(
           'error',
-          `[${accountName}][${d.desktopCode || d.desktopId}] 连接建立失败: ${err.message}`,
+          `[${accountName}] 连接建立失败: ${err.message}`,
         );
       }
     }

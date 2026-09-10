@@ -239,7 +239,7 @@ export class AccountManager {
     try {
       const targetObjType = desktop.objType ?? 0;
       const message = await client.operateDesktop(desktopId, operation, targetObjType);
-      this.logger.addLog('info', `[${accountName}][${desktopId}] ${message}`);
+      this.logger.addLog('info', `[${accountName}] ${message}`);
       // 后台轮询跟踪云电脑电源状态，直至真正开机或关机完成
       this.trackDesktopStatusAfterPower(accountName, desktopId, operation);
       return message;
@@ -278,7 +278,7 @@ export class AccountManager {
             if (current.useStatusText === '运行中') {
               clearInterval(timer);
               target.status = 'connecting';
-              this.logger.addLog('success', `[${accountName}][${desktopId}] 云电脑已成功开机，正在接入保活...`);
+              this.logger.addLog('success', `[${accountName}] 云电脑已成功开机，正在接入保活...`);
               this.notifyStatusChange();
               // 云电脑开机成功后，若账号处于保活状态，自动启动该桌面的 WebSocket 保活
               this.reloadDesktops(accountName).catch(() => {});
@@ -288,7 +288,7 @@ export class AccountManager {
             if (current.useStatusText === '已关机' || current.useStatusText === '关机') {
               clearInterval(timer);
               target.status = 'stopped';
-              this.logger.addLog('info', `[${accountName}][${desktopId}] 云电脑已安全关机`);
+              this.logger.addLog('info', `[${accountName}] 云电脑已安全关机`);
               this.notifyStatusChange();
               return;
             }
