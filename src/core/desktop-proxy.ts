@@ -15,6 +15,45 @@ let currentCacheSizeBytes = 0;
 const ctyunStaticCache = new Map<string, { buffer: Buffer; contentType: string; size: number; timestamp: number }>();
 
 /**
+ * 基于 Node.js 原生 https 发起 IPv4 请求（规避容器与云厂商环境 IPv6 路由不可达导致 fetch failed / ETIMEDOUT）
+ */
+function requestBufferIpv4(urlStr: string, headers: Record<string, string> = {}): Promise<{ buffer: Buffer; contentType: string; status: number }> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlStr);
+    const isHttps = url.protocol === 'https:';
+    const clientModule = isHttps ? https : http;
+    const req = clientModule.request(
+      url,
+      {
+        method: 'GET',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          ...headers,
+        },
+        family: 4,
+        rejectUnauthorized: false,
+        timeout: 15000,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        res.on('end', () => {
+          const buffer = Buffer.concat(chunks);
+          const contentType = (res.headers['content-type'] as string) || 'application/octet-stream';
+          resolve({ buffer, contentType, status: res.statusCode || 200 });
+        });
+      },
+    );
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error(`请求超时 (15000ms): ${urlStr}`));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/**
  * 获取天翼云官方 PC 客户端入口 HTML 骨架
  */
 async function getCtyunIndexHtml(): Promise<string> {
@@ -23,18 +62,12 @@ async function getCtyunIndexHtml(): Promise<string> {
     return cachedIndexHtml;
   }
 
-  const res = await fetch('https://pc.ctyun.cn/', {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-    },
-  });
-
-  if (!res.ok) {
+  const res = await requestBufferIpv4('https://pc.ctyun.cn/');
+  if (res.status >= 400) {
     throw new Error(`拉取天翼云入口网页失败: HTTP ${res.status}`);
   }
 
-  const text = await res.text();
+  const text = res.buffer.toString('utf-8');
   cachedIndexHtml = text;
   lastIndexHtmlFetch = now;
   return text;
@@ -54,22 +87,17 @@ async function proxyStaticAsset(reply: FastifyReply, targetUrl: string): Promise
   }
 
   try {
-    const upstream = await fetch(targetUrl, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        Referer: 'https://pc.ctyun.cn/',
-      },
+    const upstream = await requestBufferIpv4(targetUrl, {
+      Referer: 'https://pc.ctyun.cn/',
     });
 
-    if (!upstream.ok) {
-      reply.code(upstream.status).send(`Upstream Error: ${upstream.statusText}`);
+    if (upstream.status >= 400) {
+      reply.code(upstream.status).send(`Upstream Error: HTTP ${upstream.status}`);
       return;
     }
 
-    const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
-    const arrayBuffer = await upstream.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const contentType = upstream.contentType;
+    const buffer = upstream.buffer;
 
     // LRU 淘汰：若超出容量先清理旧资源
     if (currentCacheSizeBytes + buffer.length > MAX_CACHE_SIZE_BYTES) {
@@ -96,7 +124,7 @@ async function proxyStaticAsset(reply: FastifyReply, targetUrl: string): Promise
       .header('Cache-Control', 'public, max-age=86400')
       .send(buffer);
   } catch (err: any) {
-    reply.code(502).send(`Gateway Error: ${err.message}`);
+    reply.code(502).send(`Gateway Proxy Error: ${err.message}`);
   }
 }
 
@@ -432,6 +460,7 @@ export function registerDesktopProxyRoutes(
       {
         method: req.method,
         headers: proxyHeaders,
+        family: 4,
         rejectUnauthorized: false,
       },
       (proxyRes) => {
