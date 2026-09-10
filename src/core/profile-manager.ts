@@ -10,7 +10,7 @@ import { SignTask, type PointsSummary } from '../tasks/sign.js';
 import { RedeemTask, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../tasks/redeem.js';
 import { AiChatTask } from '../tasks/ai-chat.js';
 import { HangTask } from '../tasks/hang.js';
-import { safeWriteFileSync, sendWebhookNotification } from './utils.js';
+import { safeWriteFileSync, sendWebhookNotification, getCstDateString } from './utils.js';
 
 export interface ManagedAccount {
   id: string; // 全局唯一不可变 UUID (主键)
@@ -51,14 +51,39 @@ export class ProfileManager {
   public adminPassword = '';
   public webhookUrl = '';
   public rewardsCache: RewardItem[] = [...DEFAULT_LOCAL_REWARDS];
-  private todayPointsCache: Map<string, { todayPoints: number; summary?: PointsSummary; updatedAt: number }> = new Map();
+  private todayPointsCache: Map<string, { todayPoints: number; date: string; summary?: PointsSummary; updatedAt: number }> = new Map();
   private expiredNotifiedAccounts: Set<string> = new Set();
+  private manualShutdownDesktops: Set<string> = new Set();
 
   constructor() {
     this.keepAliveManager = new KeepAliveManager(this.logger, () => this.notifyStatusChange());
     this.taskScheduler = new TaskScheduler(this, this.logger);
     this.loadFromDisk();
     this.taskScheduler.start();
+  }
+
+  public getKeepAliveManager(): KeepAliveManager {
+    return this.keepAliveManager;
+  }
+
+  public touchWebUserActive(accountName: string, desktopId: string, durationSec: number = 60): void {
+    this.keepAliveManager.touchWebUserActive(accountName, desktopId, durationSec);
+  }
+
+  public releaseWebUserActive(accountName: string, desktopId: string): void {
+    this.keepAliveManager.releaseWebUserActive(accountName, desktopId);
+  }
+
+  public isManualShutdown(desktopId: string): boolean {
+    return this.manualShutdownDesktops.has(desktopId);
+  }
+
+  public setManualShutdown(desktopId: string, manual: boolean): void {
+    if (manual) {
+      this.manualShutdownDesktops.add(desktopId);
+    } else {
+      this.manualShutdownDesktops.delete(desktopId);
+    }
   }
 
   public getLogger(): Logger {
@@ -181,10 +206,30 @@ export class ProfileManager {
         state.taskConfig = acc.taskConfig;
         state.redeemConfig = acc.redeemConfig;
         state.hangStatus = HangTask.getHangInfo(name) || undefined;
-        state.todayPoints = this.todayPointsCache.get(name)?.todayPoints ?? 0;
+        const pts = this.todayPointsCache.get(name);
+        const todayStr = getCstDateString();
+        // 严格自然日校验：仅在缓存日期与东八区当天一致时有效，跨天直接归零
+        state.todayPoints = (pts && pts.date === todayStr) ? (pts.todayPoints ?? 0) : 0;
       }
     }
     return Array.from(this.accountStates.values());
+  }
+
+  /**
+   * 0 点跨天重置所有账号的今日积分缓存 (纯本地时钟归零，不请求官方接口)
+   */
+  public resetTodayPointsAtMidnight(): void {
+    const todayStr = getCstDateString();
+    for (const [name, state] of this.accountStates.entries()) {
+      state.todayPoints = 0;
+      const cached = this.todayPointsCache.get(name);
+      if (cached) {
+        cached.todayPoints = 0;
+        cached.date = todayStr;
+      }
+    }
+    this.logger.addLog('info', `到达 00:00 跨天时间节点，今日已获积分已平滑清零重置`);
+    this.notifyStatusChange();
   }
 
   /**
@@ -272,12 +317,16 @@ export class ProfileManager {
     if (!state || !desktop || !client.loginInfo) throw new Error('未找到可操作的云电脑或账号未登录');
 
     if (operation === 'shutdown' || operation === 'reset') {
+      if (operation === 'shutdown') {
+        this.setManualShutdown(desktopId, true);
+      }
       this.keepAliveManager.stopWorkers(accountName);
       desktop.status = 'stopped';
       desktop.lastHeartbeat = undefined;
       desktop.useStatusText = operation === 'shutdown' ? '已关机' : '重启中';
       this.notifyStatusChange();
     } else {
+      this.setManualShutdown(desktopId, false);
       desktop.status = 'connecting';
       desktop.useStatusText = '启动中';
       this.notifyStatusChange();
@@ -545,7 +594,7 @@ export class ProfileManager {
             if (current.useStatusText === '已关机' || current.useStatusText === '关机') {
               clearInterval(timer);
               target.status = 'stopped';
-              this.logger.addLog('info', `[${accountName}] 云电脑已安全关机`);
+              this.logger.addLog('info', `[${accountName}] 云电脑已安全关机，已锁定保活防止误唤醒`);
               this.notifyStatusChange();
               return;
             }
@@ -692,7 +741,13 @@ export class ProfileManager {
       return;
     }
 
-    await this.keepAliveManager.syncWorkersForAccount(accountName, client, list, state.desktops);
+    await this.keepAliveManager.syncWorkersForAccount(
+      accountName,
+      client,
+      list,
+      state.desktops,
+      (dId) => this.isManualShutdown(dId),
+    );
   }
 
   public async addOrUpdateAccount(config: AccountConfig): Promise<void> {
@@ -834,10 +889,11 @@ export class ProfileManager {
 
     // 立即登记并预设挂机 Session，优先使用缓存，若无缓存或已过期则先异步静默请求任务中心
     let cachedEntry = this.todayPointsCache.get(accountName);
-    if (!cachedEntry || !cachedEntry.summary) {
+    const todayStr = getCstDateString();
+    if (!cachedEntry || !cachedEntry.summary || cachedEntry.date !== todayStr) {
       try {
         const sum = await this.getPointsAndTasks(accountName);
-        cachedEntry = { todayPoints: sum.generalPoints + sum.phonePoints, summary: sum, updatedAt: Date.now() };
+        cachedEntry = { todayPoints: sum.generalPoints + sum.phonePoints, date: todayStr, summary: sum, updatedAt: Date.now() };
       } catch {}
     }
     const hangTask = cachedEntry?.summary?.tasks?.find((t: any) => t.name.includes('使用1小时') || t.name.includes('使用'));
@@ -1097,7 +1153,8 @@ export class ProfileManager {
         todayEarned += Number(t.rewardPoints || 0);
       }
     }
-    this.todayPointsCache.set(accountName, { todayPoints: todayEarned, summary, updatedAt: Date.now() });
+    const todayStr = getCstDateString();
+    this.todayPointsCache.set(accountName, { todayPoints: todayEarned, date: todayStr, summary, updatedAt: Date.now() });
     const state = this.accountStates.get(accountName);
     if (state) {
       state.todayPoints = todayEarned;

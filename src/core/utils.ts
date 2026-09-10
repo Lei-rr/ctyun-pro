@@ -165,3 +165,17 @@ export async function sendWebhookNotification(
     return false;
   }
 }
+
+/**
+ * 获取东八区北京时间当天日期字符串 (YYYY-MM-DD)
+ */
+export function getCstDateString(date: Date = new Date()): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+    .format(date)
+    .replace(/\//g, '-');
+}

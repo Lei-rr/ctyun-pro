@@ -25,10 +25,75 @@ export class KeepAliveManager {
   private workers: Map<string, KeepAliveWorker[]> = new Map();
   private logger: Logger;
   private onStateChange?: () => void;
+  // 前台用户 Web 操作避让记录：desktopId -> activeUntilTimestamp
+  private webUserActiveMap: Map<string, number> = new Map();
+  private webYieldTimer: NodeJS.Timeout | null = null;
 
   constructor(logger: Logger, onStateChange?: () => void) {
     this.logger = logger;
     this.onStateChange = onStateChange;
+    this.startWebYieldWatchdog();
+  }
+
+  /**
+   * 登记前台 Web 用户活跃（避让 60 秒）
+   */
+  public touchWebUserActive(accountName: string, desktopId: string, durationSec: number = 60): void {
+    const until = Date.now() + durationSec * 1000;
+    const isFirstActive = !this.isWebUserActive(desktopId);
+    this.webUserActiveMap.set(desktopId, until);
+
+    if (isFirstActive) {
+      this.logger.addLog('info', `[${accountName}] 检测到前台 Web 直连视窗接入，保活长连主动避让挂起 (${durationSec}s)`);
+      this.pauseWorkers(accountName);
+    }
+  }
+
+  /**
+   * 释放前台 Web 用户活跃（页面关闭时立即恢复）
+   */
+  public releaseWebUserActive(accountName: string, desktopId: string): void {
+    if (this.webUserActiveMap.has(desktopId)) {
+      this.webUserActiveMap.delete(desktopId);
+      this.logger.addLog('info', `[${accountName}] 前台 Web 直连视窗已退出，正在恢复后台保活长连...`);
+      this.resumeWorkers(accountName);
+    }
+  }
+
+  /**
+   * 检查指定云电脑当前是否有前台用户在操作
+   */
+  public isWebUserActive(desktopId: string): boolean {
+    const until = this.webUserActiveMap.get(desktopId);
+    if (!until) return false;
+    if (Date.now() > until) {
+      this.webUserActiveMap.delete(desktopId);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 定时检查避让超时的实例并平滑恢复
+   */
+  private startWebYieldWatchdog(): void {
+    if (this.webYieldTimer) return;
+    this.webYieldTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [desktopId, until] of this.webUserActiveMap.entries()) {
+        if (now > until) {
+          this.webUserActiveMap.delete(desktopId);
+          // 寻找对应账号并恢复
+          for (const [acc, workers] of this.workers.entries()) {
+            const matched = workers.some(w => (w as any).options?.desktopId === desktopId);
+            if (matched) {
+              this.logger.addLog('info', `[${acc}] 前台 Web 直连避让已超时，正在自动恢复后台保活通道...`);
+              this.resumeWorkers(acc);
+            }
+          }
+        }
+      }
+    }, 5000);
   }
 
   /**
@@ -45,7 +110,7 @@ export class KeepAliveManager {
   }
 
   /**
-   * 软暂停指定账号下的保活工作者 (让位给挂机任务)
+   * 软暂停指定账号下的保活工作者 (让位给挂机任务或前台直连)
    */
   public pauseWorkers(accountName: string): boolean {
     const existing = this.workers.get(accountName);
@@ -76,6 +141,10 @@ export class KeepAliveManager {
    * 停止全部保活工作者
    */
   public stopAll(): void {
+    if (this.webYieldTimer) {
+      clearInterval(this.webYieldTimer);
+      this.webYieldTimer = null;
+    }
     for (const [acc, workers] of this.workers.entries()) {
       for (const w of workers) {
         try {
@@ -87,13 +156,14 @@ export class KeepAliveManager {
   }
 
   /**
-   * 为账号名下的所有云电脑启动最小 CLINK 保活守护
+   * 核心同步调度：按最新云电脑列表智能创建、销毁、维持保活连接
    */
   public async syncWorkersForAccount(
     accountName: string,
     client: CtYunClient,
     desktops: Desktop[],
     desktopStates: ManagedDesktopState[],
+    isManualShutdown?: (desktopId: string) => boolean,
   ): Promise<void> {
     if (!client.loginInfo) return;
 
@@ -111,6 +181,16 @@ export class KeepAliveManager {
     for (let i = 0; i < desktops.length; i++) {
       const d = desktops[i];
       const state = desktopStates[i];
+
+      // 若用户主动手动关机，则严格跳过自动开机与保活建立
+      if (isManualShutdown && isManualShutdown(d.desktopId)) {
+        if (state) {
+          state.status = 'stopped';
+          state.useStatusText = '已关机';
+        }
+        this.logger.addLog('info', `[${accountName}] 云电脑 [${d.desktopName || d.desktopId}] 处于手动关机锁定状态，跳过自动唤醒`);
+        continue;
+      }
 
       // 若云电脑未处于运行中（已关机/离线等），先自动下发官方开机指令并轮询等待开机就绪
       const isRunning = d.useStatusText === '运行中' || d.useStatusText === '离线运行';
@@ -169,6 +249,9 @@ export class KeepAliveManager {
       try {
         d.desktopInfo = info;
 
+        // 如果当前前台正在通过 Web 直连操控该电脑，创建后直接处于 pause 状态
+        const isWebActive = this.isWebUserActive(d.desktopId);
+
         const worker = new KeepAliveWorker({
           accountName,
           desktop: d,
@@ -202,6 +285,10 @@ export class KeepAliveManager {
 
         worker.start();
         newWorkers.push(worker);
+
+        if (isWebActive) {
+          worker.pause();
+        }
       } catch (err: any) {
         this.logger.addLog(
           'error',

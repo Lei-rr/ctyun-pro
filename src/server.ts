@@ -17,6 +17,7 @@ import { AccountManager } from './core/index.js';
 import { CtYunClient, type ChallengeData } from './core/client.js';
 import { safeWriteFileSync, sendWebhookNotification } from './core/utils.js';
 import { EMBEDDED_WEB_FILES } from './embedded-web.js';
+import { registerDesktopProxyRoutes } from './core/desktop-proxy.js';
 
 export async function createServer() {
   const fastify = Fastify({
@@ -641,18 +642,6 @@ export async function createServer() {
     }
   });
 
-  // 指定 Instance 直连流媒体参数与机房 WebSocket 网关 (秒级直连，一等公民顶级资源)
-  fastify.get('/api/instances/:id/stream', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
-    try {
-      const params = request.params as { id: string };
-      const res = await manager.getDesktopConnectionParamsByDesktopId(params.id);
-      return { success: true, data: res };
-    } catch (err: any) {
-      return reply.code(400).send({ success: false, msg: err.message });
-    }
-  });
-
   // 指定 Instance 电源操作 (开机/关机/重启)
   fastify.post('/api/instances/:id/power', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
@@ -833,5 +822,8 @@ export async function createServer() {
   });
 
   (fastify as any).manager = manager;
+  // 注册天翼云官方反代与免密直通视窗模块
+  registerDesktopProxyRoutes(fastify, manager, verifyAuth);
+
   return fastify;
 }

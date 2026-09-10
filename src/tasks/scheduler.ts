@@ -15,6 +15,7 @@ export class TaskScheduler {
   private timer: NodeJS.Timeout | null = null;
   private lastCheckedMinute = '';
   private lastDigestDate = '';
+  private lastMidnightResetDate = '';
 
   constructor(profileManager: ProfileManager, logger: Logger) {
     this.accountManager = profileManager;
@@ -65,6 +66,12 @@ export class TaskScheduler {
     const cstMonth = cstDate.getMonth() + 1;
     const cstYear = cstDate.getFullYear();
     const lastDayOfMonth = new Date(cstYear, cstMonth, 0).getDate();
+
+    // 0. 跨天主动重置今日积分 (0 点清零，纯本地状态机重置，绝不发起多余网络拉取)
+    if (this.lastMidnightResetDate && this.lastMidnightResetDate !== today) {
+      this.accountManager.resetTodayPointsAtMidnight();
+    }
+    this.lastMidnightResetDate = today;
 
     const accounts = this.accountManager.getAllAccounts();
 

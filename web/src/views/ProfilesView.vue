@@ -90,7 +90,6 @@ async function confirmPowerOperate() {
 const directUrlLoading = ref<string | null>(null);
 
 async function openDirectDesktop(accountName: string, desktopId?: string) {
-  // 在纯净独立新窗口中打开直连推流播放器（无外部控制台框架、无系统顶栏底栏）
   let targetId = desktopId;
   if (!targetId) {
     const acc = store.accounts.find((a) => a.name === accountName);
@@ -102,9 +101,20 @@ async function openDirectDesktop(accountName: string, desktopId?: string) {
     return;
   }
 
-  // 纯净新窗口独立加载 /live/:desktopId（基于全局唯一 ID 自动寻址）
-  const url = `/live/${encodeURIComponent(targetId)}`;
-  window.open(url, '_blank');
+  directUrlLoading.value = targetId;
+  try {
+    // 纯净新窗口独立加载官方原生云电脑视窗（拉取官方 HTML 骨架并免密注入凭据，全功能原生体验）
+    const token = localStorage.getItem('token') || '';
+    const url = `/desktop-view?desktopId=${encodeURIComponent(targetId)}&account=${encodeURIComponent(accountName)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+    const win = window.open(url, '_blank');
+    if (!win) {
+      toast.error('直连视窗被浏览器拦截，请允许弹出窗口');
+    }
+  } finally {
+    setTimeout(() => {
+      directUrlLoading.value = null;
+    }, 600);
+  }
 }
 
 function openRename(name: string) {

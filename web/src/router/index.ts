@@ -11,8 +11,6 @@ export const router = createRouter({
     { path: '/', component: ProfilesView },
     { path: '/profiles', component: ProfilesView },
     { path: '/logs', component: LogsView },
-    { path: '/live/:instanceId', component: () => import('@/views/DesktopPlayer.vue') },
-    { path: '/desktop/:desktopId', redirect: to => `/live/${to.params.desktopId}` },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 });
