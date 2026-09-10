@@ -1168,6 +1168,7 @@ export const useAppStore = defineStore('app', () => {
         return null;
       }
     },
+    getHeaders,
     async clearLogs() {
       logs.value = [];
       try {

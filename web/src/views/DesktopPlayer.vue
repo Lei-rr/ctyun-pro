@@ -84,10 +84,22 @@ const initDesktop = async () => {
   errorMsg.value = '';
   statusText.value = '正在获取机房直连凭证...';
   try {
-    // 1. 获取直连参数 (标准 RESTful API: /api/instances/:id/stream，公开免密直连)
-    const res = await fetch(`/api/instances/${encodeURIComponent(desktopId.value)}/stream`);
+    // 1. 获取直连参数 (标准 RESTful API: /api/instances/:id/stream，安全鉴权直连)
+    const token = localStorage.getItem('ctyun_admin_token') || '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['x-admin-token'] = token;
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(`/api/instances/${encodeURIComponent(desktopId.value)}/stream`, {
+      headers,
+    });
     const json = await res.json();
     if (!json.success || !json.data) {
+      if (res.status === 401 || json.msg?.includes('未授权') || json.msg?.includes('登录')) {
+        throw new Error('未授权访问：请先登录系统控制台后再打开云电脑直连通道');
+      }
       throw new Error(json.msg || json.error || '获取机房连接凭据失败');
     }
 
@@ -112,11 +124,15 @@ const initDesktop = async () => {
     clinkClient = new ClinkClientClass();
     clinkClient.setAllowIo(true);
     clinkClient.setAllowResize(true);
+    clinkClient.setAllowChangeResolution(true);
 
+    // 适配高清屏幕像素比
+    const dpr = window.devicePixelRatio || 1;
     if (canvasRef.value) {
       canvasCtx = canvasRef.value.getContext('2d');
       canvasRef.value.width = currentWidth;
       canvasRef.value.height = currentHeight;
+      canvasRef.value.style.imageRendering = '-webkit-optimize-contrast';
     }
 
     // 4. 初始化 WebCodecs 硬解（若浏览器支持）
@@ -187,11 +203,14 @@ const initDesktop = async () => {
 
     // 6. 构造 Clink 连接参数并启动
     const desktopInfo = data.desktopInfo || {};
-    const servername = (desktopInfo.host && desktopInfo.port) ? `${desktopInfo.host}:${desktopInfo.port}` : (desktopInfo.internalIp ? `${desktopInfo.internalIp}:${desktopInfo.internalPort || 3389}` : '');
+    // 严禁写死 IP：严格由天翼云接口动态反查下发的 host/port 或 internalIp/internalPort 动态装配 SNI
+    const targetHost = desktopInfo.host || desktopInfo.internalIp;
+    const targetPort = desktopInfo.port || desktopInfo.internalPort;
+    const servername = (targetHost && targetPort) ? `${targetHost}:${targetPort}` : '';
     const clinkConfig = {
       uri: data.wsHost,
-      host: desktopInfo.host || desktopInfo.internalIp || '127.0.0.1',
-      port: desktopInfo.port || desktopInfo.internalPort || 3389,
+      host: targetHost,
+      port: targetPort,
       servername: servername,
       cert: desktopInfo.clientCert,
       ca: desktopInfo.caCert,
@@ -204,9 +223,12 @@ const initDesktop = async () => {
       deviceType: 100,
       userAccount: data.userAccount || '',
       screen: {
-        w: window.innerWidth,
-        h: window.innerHeight,
+        w: Math.round(window.innerWidth * (window.devicePixelRatio || 1)),
+        h: Math.round(window.innerHeight * (window.devicePixelRatio || 1)),
       },
+      picQuality: 4, // ri.BIT_32 32位超清真彩色
+      videoQuality: 3, // oi.BEST 最高画质
+      subjpegQuality: 100, // 100% 最高无损采样
       clipBoardIn: desktopInfo.clipBoardIn,
       clipBoardOut: desktopInfo.clipBoardOut,
       dragFileIn: desktopInfo.dragFileIn,
