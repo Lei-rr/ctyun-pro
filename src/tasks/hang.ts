@@ -35,7 +35,12 @@ export class HangTask {
   }
 
   public static isRunning(accountName: string): boolean {
-    return activeHangSessions.has(accountName);
+    const s = activeHangSessions.get(accountName);
+    return Boolean(s && s.status === 'running');
+  }
+
+  public static clearSession(accountName: string): void {
+    activeHangSessions.delete(accountName);
   }
 
   public static getHangInfo(accountName: string) {
@@ -156,25 +161,24 @@ export class HangTask {
       }
     }
 
-    // 3. 动态核验当前任务进度（优先取缓存，无缓存再网络查）
+    // 3. 动态核验当前任务进度（必须先调用官方接口确认真实基线）
     let currentProgress = 0;
     let totalProgress = 3600;
     try {
-      let summary = SignTask.getCachedPointsAndTasks?.(accountName);
-      if (!summary) {
-        summary = await SignTask.getPointsAndTasks(client);
-      }
-      const hangTask = summary.tasks.find((t) => t.name.includes('使用1小时') || t.name.includes('使用'));
+      const summary = await SignTask.getPointsAndTasks(client);
+      const hangTask = summary.tasks.find((t: any) => t.name.includes('使用1小时') || t.name.includes('使用'));
       if (hangTask) {
         currentProgress = hangTask.currentProgress || 0;
         totalProgress = hangTask.totalProgress || 3600;
-        if (!options.onlyLoginTask && (hangTask.isCompleted || currentProgress >= totalProgress - 5)) {
-          logger.addLog('success', `[${accountName}] 今日「使用1小时」挂机任务已达成 (${currentProgress}/${totalProgress}秒)，无需重复挂机`);
+        if (!options.onlyLoginTask && (hangTask.isCompleted || currentProgress >= totalProgress)) {
+          logger.addLog('success', `[${accountName}] 任务中心核验今日「使用1小时」已达成 (${currentProgress}/${totalProgress}秒，+100积分)，无需挂机`);
           options.onProgress?.(currentProgress, totalProgress);
           return { success: true, message: `今日挂机任务已达成 (${currentProgress}/${totalProgress}秒)`, isCompleted: true };
         }
       }
-    } catch {}
+    } catch (e: any) {
+      logger.addLog('warn', `[${accountName}] 查询初始任务状态失败，将基于默认进度启动: ${e.message}`);
+    }
 
     // 4. 获取 Clink 接入信道与双向 SSL 证书
     let desktopInfo: DesktopInfo | null = null;
@@ -249,7 +253,7 @@ export class HangTask {
     activeHangSessions.set(accountName, session);
 
     try {
-      const connectPromise = new Promise<{ success: boolean; message: string }>((resolve) => {
+      const connectPromise = new Promise<{ success: boolean; message: string; isCompleted?: boolean }>((resolve) => {
         ws = new WebSocket(wsUrl, ['binary'], {
           headers: {
             Origin: 'https://pc.ctyun.cn',
@@ -364,6 +368,10 @@ export class HangTask {
                 }
 
                 // 5. 纯本地时间平滑推演进度 (每 1 秒根据本地时间戳递增计算流逝秒数，严禁中途频繁轮询接口)
+                // 冗余缓冲时间：额外增加 15 秒挂机时长，抵消网络延迟与官方网关统计误差
+                const BUFFER_SECONDS = 15;
+                const targetSeconds = totalProgress + BUFFER_SECONDS;
+
                 if (!progressUpdateTimer) {
                   progressUpdateTimer = setInterval(async () => {
                     if (isTerminated || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -372,21 +380,29 @@ export class HangTask {
                     session.currentProgress = cur;
                     options.onProgress?.(cur, totalProgress);
 
-                    if (cur >= totalProgress) {
-                      logger.addLog('info', `[${accountName}] 挂机目标时长已达标 (${cur}/${totalProgress}秒)，主动断开长连触发官方网关离线结算...`);
+                    if (currentProgress + elapsedSec >= targetSeconds) {
+                      logger.addLog('info', `[${accountName}] 挂机目标时长已达标 (推演 ${cur}/${totalProgress}秒，含 ${BUFFER_SECONDS}s 冗余缓冲)，主动断开长连触发官方结算...`);
                       await cleanup();
 
-                      // 离线断开后，等待 3 秒调用官方接口做单次最终状态确认
+                      // 离线断开后，等待 3 秒调用官方接口核验积分与时长
                       try {
                         await new Promise((r) => setTimeout(r, 3000));
                         const summary = await SignTask.getPointsAndTasks(client);
-                        const t = summary.tasks.find((item) => item.name.includes('使用1小时') || item.name.includes('使用'));
-                        const isDone = t ? (t.isCompleted || (t as any).status === 2 || (t.currentProgress || 0) >= (t.totalProgress || 3600)) : true;
-                        logger.addLog('success', `[${accountName}] 今日使用 AI 云电脑 1 小时挂机任务已圆满达成 (+100积分)！`);
-                        resolve({ success: true, message: `今日挂机任务已达成 (${cur}/${totalProgress}秒)`, isCompleted: isDone });
+                        const t = summary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用'));
+                        const cloudProgress = t?.currentProgress || 0;
+                        const isDone = Boolean(t && (t.isCompleted || (t as any).status === 2 || cloudProgress >= totalProgress));
+
+                        if (isDone) {
+                          logger.addLog('success', `[${accountName}] 官方接口复核通过：今日使用 AI 云电脑 1 小时任务已达成 (+100积分)！`);
+                          resolve({ success: true, message: `今日挂机任务已达成 (${cur}/${totalProgress}秒)`, isCompleted: true });
+                        } else {
+                          const gap = Math.max(1, totalProgress - cloudProgress);
+                          logger.addLog('warn', `[${accountName}] 官方接口复核发现时长未计满 (云端记录: ${cloudProgress}/${totalProgress}秒)，仍差 ${gap} 秒，需自动补挂`);
+                          resolve({ success: false, message: `云端时长不足 (当前 ${cloudProgress}/${totalProgress}秒)，触发补挂`, isCompleted: false });
+                        }
                       } catch (err: any) {
-                        logger.addLog('success', `[${accountName}] 今日挂机时长已累计完毕，会话已正常结算。`);
-                        resolve({ success: true, message: `今日挂机任务已圆满达成 (${cur}/${totalProgress}秒)` });
+                        logger.addLog('info', `[${accountName}] 会话已正常结算，复核请求异常: ${err.message}`);
+                        resolve({ success: true, message: `挂机会话已结算 (${cur}/${totalProgress}秒)` });
                       }
                     }
                   }, 1000);

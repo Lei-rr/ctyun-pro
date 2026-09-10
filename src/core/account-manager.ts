@@ -552,14 +552,23 @@ export class AccountManager {
       return '后台挂机任务已在运行中，无需重复触发';
     }
 
+    // 确保清理残留的旧挂机状态与会话缓存
+    HangTask.clearSession(accountName);
+
     // 挂机启动前：优先软暂停底层保活连接，无缝让位防踢线
     const paused = this.keepAliveManager.pauseWorkers(accountName);
     if (!paused) {
       this.keepAliveManager.stopWorkers(accountName);
     }
 
-    // 立即登记并预设挂机 Session，让前端秒级感知到进度条和挂机状态
-    const cachedEntry = this.todayPointsCache.get(accountName);
+    // 立即登记并预设挂机 Session，优先使用缓存，若无缓存或已过期则先异步静默请求任务中心
+    let cachedEntry = this.todayPointsCache.get(accountName);
+    if (!cachedEntry || !cachedEntry.summary) {
+      try {
+        const sum = await this.getPointsAndTasks(accountName);
+        cachedEntry = { todayPoints: sum.generalPoints + sum.phonePoints, summary: sum, updatedAt: Date.now() };
+      } catch {}
+    }
     const hangTask = cachedEntry?.summary?.tasks?.find((t: any) => t.name.includes('使用1小时') || t.name.includes('使用'));
     HangTask.initPendingSession(accountName, hangTask?.currentProgress || 0, hangTask?.totalProgress || 3600);
 
@@ -593,8 +602,8 @@ export class AccountManager {
             this.notifyStatusChange();
           });
 
-          // 如果成功执行或达标，则退出重试循环
-          if (hangResult.success) {
+          // 如果官方核验达标，则退出重试循环
+          if (hangResult.isCompleted || (hangResult.success && !hangResult.message?.includes('补挂'))) {
             break;
           }
 
