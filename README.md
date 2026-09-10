@@ -1,279 +1,182 @@
 <div align="center">
 
-# CTYUN-PRO
+# ⚡ CTYUN-PRO (天翼云电脑智能管理运维系统)
 
 _✨ 天翼云电脑多账号纯协议持久保活 · 纯协议智能挂机 · 每日任务全自动 · 现代化 Web 控制台 ✨_
 
-<p align="center">
-  <a href="https://github.com/Lei-rr/ctyun-pro/releases/latest">
-    <img src="https://img.shields.io/github/v/release/Lei-rr/ctyun-pro?color=brightgreen&include_prereleases" alt="release">
-  </a>
-  <a href="https://github.com/Lei-rr/ctyun-pro/pkgs/container/ctyun-pro">
-    <img src="https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker" alt="docker pull">
-  </a>
-  <a href="https://nodejs.org/">
-    <img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg" alt="node">
-  </a>
-  <a href="https://github.com/Lei-rr/ctyun-pro/blob/main/LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license">
-  </a>
-  <a href="https://github.com/Lei-rr/ctyun-pro/stargazers">
-    <img src="https://img.shields.io/github/stars/Lei-rr/ctyun-pro?color=yellow" alt="stars">
-  </a>
-</p>
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Docker Image Size](https://img.shields.io/badge/Docker%20Image-~80MB-brightgreen.svg)](https://github.com/Lei-rr/ctyun-pro/pkgs/container/ctyun-pro)
+[![Release](https://img.shields.io/github/v/release/Lei-rr/ctyun-pro?color=orange)](https://github.com/Lei-rr/ctyun-pro/releases)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20.0.0-green.svg)](https://nodejs.org/)
 
 <p align="center">
-  <a href="#-部署教程">部署教程</a>
-  ·
-  <a href="#-功能特性">功能特性</a>
-  ·
-  <a href="#-配置参数">配置参数</a>
-  ·
-  <a href="#-常见问题-faq">常见问题 FAQ</a>
-  ·
-  <a href="#-免责声明">免责声明</a>
-  ·
-  <a href="https://github.com/Lei-rr/ctyun-pro/issues">意见反馈</a>
+  <a href="#-核心亮点">核心亮点</a> •
+  <a href="#-部署教程">部署教程</a> •
+  <a href="#-纯二进制运行免-docker">原生单二进制运行</a> •
+  <a href="#-系统架构">系统架构</a> •
+  <a href="#-环境变量">环境变量</a> •
+  <a href="#-常见问题-faq">常见问题</a>
 </p>
 
 </div>
 
-> [!NOTE]
-> 🐳 **官方 Docker 镜像地址**：
-> - **GitHub 官方源（海外/默认）**：`ghcr.io/lei-rr/ctyun-pro:latest` 或 `ghcr.io/lei-rr/ctyun-pro:v1.3.4`
-> - **阿里云高速源（国内推荐 ⚡）**：`crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:latest` 或 `crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:v1.3.4`  
-> 镜像内已预置全套中文字体与 Chromium 无头浏览器内核，无需在宿主机额外配置浏览器环境，开箱即用！
+---
 
-> [!WARNING]
-> ⚠️ **数据安全提示**：持久化数据目录内包含敏感的账号登录凭据与设备指纹，请妥善保管宿主机映射目录，切勿将数据文件公开泄露！
+### 💡 为什么选择 CTYUN-PRO？
+
+传统的云电脑保活与挂机脚本大多依赖重型无头浏览器（Puppeteer/Chromium）或 Windows 桌面客户端，不仅内存占用动辄 1.5GB ~ 2GB，在弱网或小内存 VPS 上频繁崩溃，还经常由于抢占桌面造成官方客户端无法登录。
+
+**CTYUN-PRO 2.0.0** 经过全面架构重构，彻底砍掉了一切浏览器及系统桌面依赖，全流程基于 Node.js 原生 HTTP 与 WebSocket 二进制 Clink 协议驱动：
+- 内存开销骤降 **95%**，单容器仅占用数十兆内存；
+- 日常 3 项任务与挂机时长彻底解耦，无论是否需要 1 小时时长任务，签到与打卡均 100% 稳定结算；
+- 具备官方客户端上线智能避让感知，绝不影响真实客户端使用！
+
+> 💡 **镜像源提示**：
+> - **GitHub 官方源（海外/默认）**：`ghcr.io/lei-rr/ctyun-pro:latest` 或 `ghcr.io/lei-rr/ctyun-pro:v2.0.0`
+> - **阿里云高速源（国内推荐 ⚡）**：`crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:latest` 或 `crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:v2.0.0`
+> 纯协议极轻量镜像，全平台通用，无需在宿主机额外配置任何浏览器或动态库环境，开箱即用！
 
 ---
 
-## 📖 项目简介
+## 🌟 核心特性
 
-**CTYUN-PRO** 是一款专为天翼云电脑（CtYun Desktop）打造的生产级多账号集中运维管理系统。系统彻底摆脱臃肿的官方桌面客户端与无头浏览器，全链路基于底层 WebSocket Clink 纯协议驱动，实现 7×24 小时极低资源消耗稳定在线与自动化打卡升配。
+**CTYUN-PRO** 是一款专为天翼云电脑（CtYun Desktop）打造的生产级多账号集中运维管理系统。
 
 - ⚡ **纯协议零浏览器**：彻底砍掉 Chromium/Playwright 以及 Windows 客户端依赖，挂机与保活完全采用二进制 Clink 握手与心跳协议，CPU 与内存开销骤降（镜像仅约数十兆）。
-- 🎯 **3 任务与保活彻底解耦**：每日做任务（签到、AI 对话、登录云电脑）与保活长连接独立调度。挂机开关关闭时绝不影响日常 3 任务的正常执行与积分结算。
-- 🔗 **任务与挂机两任合一**：登录云电脑与挂机 1 小时共享同一条轻量级 Clink 会话，握手秒级完成登录任务，开启挂机则原地维持 5 秒心跳跑满 3600 秒。
-- 🛡️ **防异地登录与智能避让**：复用既有有效 Session 避免顶号踢线；监听服务端 Type 119/120/137 与 4001 抢占通知，检测到用户官方客户端接入立即主动避让。
-
----
-
-## ✨ 功能特性
-
-+ [x] **7×24h 纯协议长连接保活**：基于天翼云官方 CLINK 协议通道，内置官方标准的 30s 活跃心跳与 REDQ 二进制动态握手，真正做到稳定不掉线。
-+ [x] **全形态云电脑全面兼容**：深度兼容普通独立机（公众版/个人版）、抢占式桌面（Preemption）以及**政企桌面池（POOL，政企企业级核心形态）**，自适应信令下发。
-+ [x] **智能补足挂机引擎 (Puppeteer-Core)**：
-  + 自动实时查询官方任务累计时长，精准计算并补齐剩余分钟数；
-  + 多账号单例 Chromium 进程池管理，`BrowserContext` 上下文沙箱强隔离；
-  + 挂机前自动避让保活长连接，挂机完成后无缝恢复保活，自动触发今日积分结算刷新；
-  + 挂机生命周期闭环控制，支持一键「中止挂机」并瞬间平滑恢复 7×24 小时保活长连；
-  + 挂机进度基于接入时间戳毫秒级平滑推演，控制台多端查看或刷新页面分秒不丢。
-+ [x] **实例管理与电源控制**：云电脑实时运行状态监控，支持纯图标一键远程开机、关机与即时重启，并配备高可用防误触弹窗二次确认。
-+ [x] **每日任务全自动流水线**：
-  + 每日登录云电脑会话激活（+100 积分）；
-  + 云智助手 AI 对话打卡（+100 积分）；
-  + 智能补时挂机满 1 小时（+100 积分）。
-+ [x] **离线积分商城与自动兑换**：
-  + 本地化离线商品库缓存，支持一键强制拉取官方最新商品；
-  + 自动识别匹配天翼云「8C16G 尊享版 / 4C8G 标准版 / 16C32G 旗舰版」规格；
-  + 支持配置月末最后一天、每月指定日期或固定天数间隔自动执行积分升配。
-+ [x] **设备安全白名单认证**：原生对接天翼云官方设备安全认证体系，已绑定熟设备秒级静默登录，新设备首次登录自动拉起短信二次认证。
-+ [x] **今日积分实时看板**：控制台仪表盘实时统计当日积分获取总额，开机自动预载，挂机完成秒级跳变刷新。
-+ [x] **全渠道 Webhook 通知**：支持配置企业微信机器人、钉钉机器人、飞书机器人、Server酱、Bark 与通用 Webhook，任务完成或异常即时通知。
-+ [x] **全自动 CI/CD 与多镜像仓库矩阵分发**：GitHub Actions 原生全自动交叉编译 Linux (x86_64/ARM64) 与 Windows 独立单文件二进制；Docker 镜像多通道并行分发至 GitHub Packages (GHCR) 与阿里云 ACR 国内高速节点，国内服务器免翻墙秒级部署。
-+ [x] **生产级高可用架构**：采用原子化临时文件落盘（拒绝断电配置损坏）、优雅停机资源回收与 60s 网络超时保护。
-+ [x] **现代化精致控制台**：基于 Vue 3 + Tailwind CSS + Radix UI 设计规范，支持深色高对比度主题切换、多账号日志智能折叠与置底。
+- 🔌 **双模式协议解耦**：
+  + **日常保活（开机防休眠）**：保持旁观者长连接（只响应 Type 118 身份应答），绝不发送独占认领包，手机 App 与 PC 客户端随时登录零冲突；
+  + **任务挂机（1小时时长累加）**：按需发送独占认领包与 Type 104 就绪包，维持 5 秒 Type 7 二进制心跳；深度监听 Type 119/120/137 抢占信号，官方客户端连入自动让位。
+- 🔄 **日常任务与挂机彻底解耦**：
+  + 挂机开关关闭时，每日签到（+100）、AI 对话（+100）、登录云电脑（+100）3 项日常打卡任务依旧 100% 顺畅执行并秒级入账，执行完毕干净断开；
+  + 挂机开关开启时，就地无缝续跑 1 小时挂机心跳，两任合一，无需重复建连。
+- 🎯 **每日任务错峰抖动（Jitter）**：
+  + 任务定时加入 1~15 秒随机抖动防风控机制，杜绝多账号同分钟并发冲击官方接口。
+- 🛡️ **生产级状态自愈与持久化**：
+  + 纯文件式数据卷驱动（`/app/data`），配置与 Token 原子化落盘，重启自愈零丢失。
+- 🎁 **全自动积分商城自动抢兑**：
+  + 支持配置每日 07:00 自动兑换策略（默认每 4 天自动兑换 1G 数据盘永久扩容），并支持多种云电脑时长包与优惠券兑换。
+- 🔔 **多通道消息通知**：
+  + 每日打卡报告、挂机达标结算、凭据失效预警即时推送至企业微信、飞书、钉钉、Bark、Server酱、PushPlus 等平台。
 
 ---
 
 ## 🚀 部署教程
 
-### 方式一：Docker 一键部署（首选推荐 👍）
-
-无需在宿主机安装任何浏览器依赖，镜像已内置完整运行环境，开箱即用：
+### 方式一：Docker 一键部署（首选推荐）
 
 ```bash
-# 方式 A：GitHub 官方源
 docker run -d \
   --name ctyun-pro \
   --restart unless-stopped \
   -p 3088:3088 \
-  -v /data/ctyun-pro:/app/data \
+  -v /guolei/ctyun-pro:/app/data \
   ghcr.io/lei-rr/ctyun-pro:latest
-
-# 方式 B：国内服务器高速源（阿里云镜像，免翻墙秒级下载）
-docker run -d \
-  --name ctyun-pro \
-  --restart unless-stopped \
-  -p 3088:3088 \
-  -v /data/ctyun-pro:/app/data \
-  crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:latest
 ```
+
+> 💡 **国内加速**：国内服务器如果拉取 GitHub Packages 较慢，可直接将镜像替换为阿里云国内高速源：
+> ```bash
+> crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:latest
+> ```
 
 启动成功后，使用浏览器访问：`http://你的服务器IP:3088`
 
+- **默认管理密码**：`admin123`（首次登录后请在控制台「系统设置」中修改）
+
 ---
 
-### 方式二：Docker Compose 编排部署（次选推荐 📦）
+### 方式二：Docker Compose 编排部署
 
-在宿主机创建 `docker-compose.yml` 文件：
+创建 `docker-compose.yml`：
 
 ```yaml
+version: '3.8'
+
 services:
   ctyun-pro:
-    # 方式 A：GitHub 官方源
     image: ghcr.io/lei-rr/ctyun-pro:latest
-    # 方式 B：国内服务器阿里云高速源（取消下行注释即可使用）
-    # image: crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro:latest
     container_name: ctyun-pro
     restart: unless-stopped
     ports:
       - "3088:3088"
     volumes:
       - ./data:/app/data
-    environment:
-      - PORT=3088
-      - HOST=0.0.0.0
-      - TZ=Asia/Shanghai
 ```
 
-执行启动命令：
-
+启动命令：
 ```bash
 docker compose up -d
 ```
 
 ---
 
-### 方式三：一键安装脚本（支持 systemd 开机自启 & 独立二进制 ⚡）
+### 方式三：一键安装脚本（免 Docker / Linux 原生服务）
 
-针对不想安装 Docker、低内存（512MB/1GB）VPS 或 Windows 用户，官方原生提供编译好的独立单文件（内嵌完整 Web 控制台，零外部依赖）：
-
-#### 1. Linux 一键自动安装与开机自启（推荐）
-在终端直接执行下方命令，脚本会自动识别系统架构（x86_64 / ARM64）、下载最新单文件并注册配置为 **systemd 开机自启**服务：
+针对小内存 VPS（如 512MB 内存小鸡）或无 Docker 环境的 Linux 宿主机：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Lei-rr/ctyun-pro/main/install.sh | bash
 ```
 
-常用服务管理命令：
-```bash
-systemctl start ctyun-pro    # 启动服务
-systemctl stop ctyun-pro     # 停止服务
-systemctl restart ctyun-pro  # 重启服务
-systemctl status ctyun-pro   # 查看状态
-journalctl -u ctyun-pro -f   # 查看实时日志
-```
-
-#### 2. Windows / 手动单文件直接运行
-- **🪟 Windows 用户**：
-  从 [GitHub Releases](https://github.com/Lei-rr/ctyun-pro/releases) 下载 `ctyun-pro-windows-x64.exe`，直接双击运行即可，浏览器打开 `http://127.0.0.1:3088`。
-- **🐧 手动运行 Linux 独立二进制**：
+- 自动识别 `x86_64` 与 `aarch64` 架构；
+- 自动下载原生独立二进制并注册 systemd 服务开机自启；
+- 运维管理：
   ```bash
-  # x86_64
-  wget https://github.com/Lei-rr/ctyun-pro/releases/latest/download/ctyun-pro-linux-amd64 -O ctyun-pro && chmod +x ctyun-pro && ./ctyun-pro
-  # ARM64
-  wget https://github.com/Lei-rr/ctyun-pro/releases/latest/download/ctyun-pro-linux-arm64 -O ctyun-pro && chmod +x ctyun-pro && ./ctyun-pro
+  systemctl restart ctyun-pro   # 重启
+  systemctl status ctyun-pro    # 查看状态
+  journalctl -u ctyun-pro -f    # 查看实时日志
   ```
 
 ---
 
-### 方式四：源码本地编译运行
+### 方式四：Windows 原生单二进制运行
 
-#### 1. 系统依赖安装（按需执行）
-智能补足挂机引擎依赖系统底层 Chromium 浏览器。如果在执行智能挂机时提示内核缺失，执行下方对应发行版命令即可：
+1. 从 [GitHub Releases](https://github.com/Lei-rr/ctyun-pro/releases) 下载 `ctyun-pro-windows-x64.exe`；
+2. 直接双击运行程序，打开浏览器访问 `http://127.0.0.1:3088` 即可开始使用。无需安装 Python、Node.js 或额外浏览器依赖。
 
-- **Ubuntu / Debian**：
-  ```bash
-  sudo apt-get update && sudo apt-get install -y chromium-browser nodejs npm || sudo apt-get install -y chromium nodejs npm
-  ```
-- **CentOS / RHEL / Rocky Linux**：
-  ```bash
-  sudo dnf install -y epel-release && sudo dnf install -y chromium nodejs npm
-  ```
-- **Alpine Linux**：
-  ```bash
-  apk add --no-cache nodejs npm chromium
-  ```
+---
 
-#### 2. 克隆与编译启动
+### 方式五：源码本地运行
+
 ```bash
-# 1. 克隆代码仓库
+# 1. 克隆代码
 git clone https://github.com/Lei-rr/ctyun-pro.git
 cd ctyun-pro
 
-# 2. 安装项目依赖
+# 2. 安装依赖并编译打包
 npm install
-
-# 3. 编译后端与 Web 前端
 npm run build
 
-# 4. 启动服务
+# 3. 启动服务
 npm start
 ```
 
 ---
 
-## ⚙️ 配置参数
+## ⚙️ 环境变量与配置
 
-系统支持通过环境变量进行自定义配置：
+| 变量名 | 默认值 | 作用说明 |
+|---|---|---|
+| `PORT` | `3088` | 服务监听端口 |
+| `HOST` | `0.0.0.0` | 绑定监听地址 |
+| `CTYUN_DATA_DIR` | `/app/data` | 数据持久化与配置文件存储目录 |
 
-| 环境变量 | 默认值 | 说明 |
-| :--- | :--- | :--- |
-| `PORT` | `3088` | Web 控制台与 HTTP API 服务端口 |
-| `HOST` | `0.0.0.0` | 服务监听绑定的网络地址 |
-| `CTYUN_DATA_DIR` | `/app/data` (Docker) 或 `./data` | 持久化数据存放目录（��号信息、配置、日志等） |
-| `TZ` | `Asia/Shanghai` | 定时任务与日志时区（推荐保持东八区） |
-| `ADMIN_PASSWORD` | `空` | 可选系统管理员访问密码（可在 Web 控制台随时修改） |
-| `PUPPETEER_EXECUTABLE_PATH` | `/usr/bin/chromium` (Docker) | Chromium 内核执行文件路径 |
+系统遵循**纯文件式配置原则**，除端口与数据目录外，账号、密码、调度时间、Webhook 等所有参数均统一在 Web 页面动态修改并原子保存在挂载目录下的 `config.json` 中，容器重建或升级永不丢失。
 
 ---
 
 ## ❓ 常见问题 (FAQ)
 
-<details>
-<summary><b>Q: 为什么挂机 1 小时任务提示“未找到进入AI云电脑按钮”？</b></summary>
-<br>
-A: 天翼云官方在云电脑处于「已关机」状态时，卡片上显示的是「开机」按钮，此时不存在「进入」按钮。请先在控制台点击云电脑开机，或开启账号的自动保活（系统开机就绪后会自动接入），待云电脑运行中时即可正常挂机。
-</details>
+#### Q: 纯协议挂机会不会被官方封号？
+A: CTYUN-PRO 严格对齐官方 Web 端客户端在建连时的二进制封包序列（SSL 握手协商 -> REDQ 动态应答 -> Type 103/118 身份校验 -> Type 112 客户端信息包 -> Type 104 通道就绪 -> Type 7 5秒心跳），对网关表现为一个极度标准的正常桌面端连接会话。
 
-<details>
-<summary><b>Q: 多账号挂机时会相互冲突或者挤下线吗？</b></summary>
-<br>
-A: 完全不会。CTYUN-PRO 后端采用单例 Chromium 浏览器多上下文隔离设计（BrowserContext 沙箱隔离），不同账号的 Cookies、LocalStorage 与缓存互不干扰；且挂机启动时会自动优雅让出底层的保活长连接信道，防止多端登录互踢。
-</details>
+#### Q: 挂机时会不会影响我手机/电脑官方客户端登录？
+A: 完全不会。挂机引擎内置客户端抢占监听（监听网关 Type 119/120/137 通知与 4001 Preempted 状态码）。一旦检测到你在真机客户端连入，系统立即主动让出桌面会话并避让 20 分钟；且日常保活不发独占会话包，与官方客户端完全互不冲突。
 
-<details>
-<summary><b>Q: 数据如何备份和迁移到新机器？</b></summary>
-<br>
-A: 系统的所有账号凭据、任务设置与商品目录均保存在映射的持久化数据目录（如 `/data/ctyun-pro`）下。迁移机器时，直接将该目录完整打包复制到新服务器的对应路径，重新运行 Docker 容器即可无缝恢复所有数据。
-</details>
-
-<details>
-<summary><b>Q: 如何修改管理员登录密码？</b></summary>
-<br>
-A: 可以直接在容器启动时传入环境变量 `-e ADMIN_PASSWORD=你的新密码`，或者登录 Web 控制台后，进入系统设置面板进行图形化修改。
-</details>
-
----
-
-## 🛡️ 免责声明
-
-1. **本项目仅供编程学习、计算机网络协议逆向分析以及个人对所属合法天翼云资源的自动化运维使用**。
-2. 使用本项目时，使用者必须严格遵守天翼云官方相关用户服务协议与活动规则，**严禁将本项目用于未授权批量访问、网络攻击、商业牟利或任何侵犯第三方合法权益的违法违规行为**。
-3. 本项目为开源软件，作者不对因使用本项目（包括但不限于账号异常、服务受限、积分清零、资源回收或数据丢失等）导致的任何直接或间接后果承担法律责任。
-4. 使用者在部署与运行本项目时，即代表已充分理解并自愿承担可能产生的所有风险。
-
----
-
-## 🌟 Star 历史趋势
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Lei-rr/ctyun-pro&type=Date)](https://github.com/Lei-rr/ctyun-pro/stargazers)
+#### Q: 为什么有时候界面显示挂机完成了，但积分没有立刻增加？
+A: 天翼云官方计费结算存在约 3~5 分钟的分段窗口结算延迟，时长达标后网关会异步入账。系统在挂机结束后会自动拉取官方最新积分并刷新看板。
 
 ---
 
 ## 📄 开源许可证
 
-本项目基于 [MIT License](LICENSE) 协议开源。
+本项目基于 [MIT License](LICENSE) 开源发布。仅供技术研究交流使用，请勿用于违反天翼云用户协议或法律法规的用途。
