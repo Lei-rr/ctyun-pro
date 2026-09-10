@@ -614,4 +614,27 @@ export class CtYunClient {
     }
     throw new Error(json.msg || `操作失败 (Code: ${json.code})`);
   }
+
+  /**
+   * 生成单点登录/免密直通 Token
+   */
+  public async genLoginToken(effectiveSeconds = 300): Promise<string> {
+    if (!this.loginInfo) {
+      throw new Error('账号尚未登录，无法生成登录 Token');
+    }
+    const res = await safeFetch(`${CtYunClient.BASE_URL}/api/auth/client/genLoginToken`, {
+      method: 'POST',
+      headers: {
+        ...this.getHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ authAppModel: 34, effectiveSeconds }),
+    });
+
+    const json = (await res.json()) as { code: number; msg?: string; data?: { token: string } };
+    if (json.code === 0 && json.data?.token) {
+      return json.data.token;
+    }
+    throw new Error(json.msg || `获取免密 Token 失败 (Code: ${json.code})`);
+  }
 }

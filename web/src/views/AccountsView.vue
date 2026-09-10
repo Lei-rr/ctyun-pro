@@ -19,6 +19,7 @@ import {
   Power,
   RotateCw,
   Zap,
+  ExternalLink,
 } from 'lucide-vue-next';
 import { Button } from '@/shared/ui/button';
 import { Badge } from '@/shared/ui/badge';
@@ -81,6 +82,21 @@ async function confirmPowerOperate() {
     showPowerModal.value = false;
   } finally {
     powerLoading.value = false;
+  }
+}
+
+const directUrlLoading = ref<string | null>(null);
+
+async function openDirectDesktop(accountName: string, desktopId?: string) {
+  const loadingKey = `${accountName}_${desktopId || 'default'}`;
+  directUrlLoading.value = loadingKey;
+  try {
+    const url = await store.getDesktopDirectUrl(accountName, desktopId);
+    if (url) {
+      window.open(url, '_blank');
+    }
+  } finally {
+    directUrlLoading.value = null;
   }
 }
 
@@ -495,6 +511,21 @@ onUnmounted(() => {
                     </TableCell>
                     <TableCell class="py-2.5 text-right whitespace-nowrap pr-2">
                       <div class="inline-flex items-center gap-1 justify-end">
+                        <!-- 远程桌面直通按钮 (新标签页打开官方视窗) -->
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="size-7 text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer"
+                          :title="desktop.useStatusText === '运行中' ? '进入远程桌面 (官方Web直连)' : '获取免密直连 (若未开机需先开机)'"
+                          :disabled="directUrlLoading === `${account.name}_${desktop.desktopId}`"
+                          @click="openDirectDesktop(account.name, desktop.desktopId)"
+                        >
+                          <RotateCw
+                            v-if="directUrlLoading === `${account.name}_${desktop.desktopId}`"
+                            class="size-3.5 animate-spin text-primary"
+                          />
+                          <ExternalLink v-else class="size-3.5" />
+                        </Button>
                         <!-- 关机状态：显示开机图标 -->
                         <Button
                           v-if="!(desktop.useStatusText === '运行中' && desktop.status === 'connected')"
@@ -615,6 +646,21 @@ onUnmounted(() => {
                   </span>
                 </div>
                 <div class="inline-flex items-center gap-1">
+                  <!-- 远程桌面直通按钮 (新标签页打开官方视窗) -->
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="size-7 text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer"
+                    :title="desktop.useStatusText === '运行中' ? '进入远程桌面 (官方Web直连)' : '获取免密直连 (若未开机需先开机)'"
+                    :disabled="directUrlLoading === `${account.name}_${desktop.desktopId}`"
+                    @click="openDirectDesktop(account.name, desktop.desktopId)"
+                  >
+                    <RotateCw
+                      v-if="directUrlLoading === `${account.name}_${desktop.desktopId}`"
+                      class="size-3.5 animate-spin text-primary"
+                    />
+                    <ExternalLink v-else class="size-3.5" />
+                  </Button>
                   <!-- 关机状态：显示开机图标 -->
                   <Button
                     v-if="!(desktop.useStatusText === '运行中' && desktop.status === 'connected')"

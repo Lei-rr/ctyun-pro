@@ -1146,6 +1146,24 @@ export const useAppStore = defineStore('app', () => {
         return false;
       }
     },
+    getDesktopDirectUrl: async (accountName: string, desktopId?: string) => {
+      try {
+        const params = new URLSearchParams({ accountName });
+        if (desktopId) params.append('desktopId', desktopId);
+        const res = await fetch(`/api/account/desktop/url?${params.toString()}`, {
+          headers: getHeaders(),
+        });
+        const json = await res.json();
+        if (json.success && json.data?.url) {
+          return json.data.url as string;
+        }
+        toast.error(json.msg || '获取远程桌面直连地址失败');
+        return null;
+      } catch (e: any) {
+        toast.error(e.message || '获取远程桌面直连地址异常');
+        return null;
+      }
+    },
     async clearLogs() {
       logs.value = [];
       try {

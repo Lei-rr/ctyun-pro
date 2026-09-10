@@ -701,12 +701,12 @@ export async function createServer() {
     }
   });
 
-  // 8.4 同步刷新云电脑真实状态
-  fastify.post('/api/account/desktop/refresh', async (request, reply) => {
+  // 8. 刷新账号云电脑列表
+  fastify.post('/api/account/desktops/refresh', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
-    const body = (request.body || {}) as { accountName?: string };
     try {
-      if (body.accountName) {
+      const body = request.body as { accountName?: string };
+      if (body?.accountName) {
         await manager.reloadDesktops(body.accountName);
       } else {
         for (const name of manager.getAllAccounts().keys()) {
@@ -714,6 +714,21 @@ export async function createServer() {
         }
       }
       return { success: true, data: manager.getAccountsSummary() };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // 8.1 获取官方远程桌面免密直达 URL
+  fastify.get('/api/account/desktop/url', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const query = request.query as { accountName: string; desktopId?: string };
+      if (!query?.accountName) {
+        return reply.code(400).send({ success: false, msg: '缺少 accountName 参数' });
+      }
+      const res = await manager.getDesktopDirectUrl(query.accountName, query.desktopId);
+      return { success: true, data: res };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });
     }

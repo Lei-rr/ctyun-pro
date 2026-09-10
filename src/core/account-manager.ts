@@ -252,6 +252,46 @@ export class AccountManager {
   }
 
   /**
+   * 生成官方远程桌面免密直达 URL
+   */
+  public async getDesktopDirectUrl(
+    accountName: string,
+    desktopId?: string,
+  ): Promise<{ url: string; desktopCode?: string }> {
+    const state = this.accountStates.get(accountName);
+    const client = this.getClient(accountName);
+    if (!state || !client || !client.loginInfo) {
+      throw new Error('未找到该账号或账号未登录');
+    }
+
+    let targetDesktop = desktopId
+      ? state.desktops.find((item) => item.desktopId === desktopId)
+      : state.desktops[0];
+
+    // 如果还没有加载过云电脑列表，则刷新一次
+    if (!targetDesktop) {
+      try {
+        await this.reloadDesktops(accountName);
+        const updatedState = this.accountStates.get(accountName);
+        targetDesktop = desktopId
+          ? updatedState?.desktops.find((item) => item.desktopId === desktopId)
+          : updatedState?.desktops[0];
+      } catch (err: any) {
+        this.logger.addLog('warn', `[${accountName}] 刷新云电脑列表失败: ${err.message}`);
+      }
+    }
+
+    const token = await client.genLoginToken(300);
+    const desktopCode = targetDesktop?.desktopCode || '';
+    const directUrl = desktopCode
+      ? `https://pc.ctyun.cn/#/oauth?token=${encodeURIComponent(token)}&desktopOid=${encodeURIComponent(desktopCode)}`
+      : `https://pc.ctyun.cn/#/oauth?token=${encodeURIComponent(token)}`;
+
+    this.logger.addLog('info', `[${accountName}] 生成远程桌面免密直连链接成功 (有效期 5 分钟)`);
+    return { url: directUrl, desktopCode };
+  }
+
+  /**
    * 电源操作（开机/关机/重启）后异步轮询官方最新真实状态
    */
   private trackDesktopStatusAfterPower(
