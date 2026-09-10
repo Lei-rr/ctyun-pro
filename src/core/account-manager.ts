@@ -413,8 +413,8 @@ export class AccountManager {
       };
     });
 
-    // 检查是否开启了保活长连接 (由 autoStart 控制，且若配置了 keepAliveHang 开关则遵从)
-    const isKeepAliveEnabled = acc.autoStart !== false && (acc.taskConfig?.keepAliveHang ?? true);
+    // 检查是否开启了保活长连接 (由 autoStart 控制，与挂机做任务完全解耦)
+    const isKeepAliveEnabled = acc.autoStart !== false;
     if (!isKeepAliveEnabled) {
       this.keepAliveManager.stopWorkers(accountName);
       for (const d of state.desktops) {
@@ -511,7 +511,7 @@ export class AccountManager {
     }
     const state = this.accountStates.get(accountName);
     const dId = state?.desktops?.[0]?.desktopId;
-    const res = await TaskRunner.executeDailyTasks(client, dId, acc.taskConfig);
+    const res = await TaskRunner.executeDailyTasks(client, dId, acc.taskConfig, this.logger);
     const today = new Date().toISOString().split('T')[0];
     acc.lastSignDate = today;
     if (!acc.taskConfig) {
@@ -601,9 +601,9 @@ export class AccountManager {
         }
       }
 
-      // 挂机完成（或异常退出）后：若账号开启了保活，才恢复底层 7x24 小时持久保活长连接
+      // 挂机完成（或异常退出）后：若账号开启了保活(autoStart)，才恢复底层 7x24 小时持久保活长连接 (挂机与保活解耦)
       try {
-        const isKeepAliveEnabled = acc.autoStart !== false && (acc.taskConfig?.keepAliveHang ?? true);
+        const isKeepAliveEnabled = acc.autoStart !== false;
         if (isKeepAliveEnabled) {
           try {
             const list = await client.getDesktopList();

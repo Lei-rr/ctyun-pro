@@ -1,260 +1,416 @@
-import fs from 'node:fs';
-import type { CtYunClient } from '../core/client.js';
-import { SignTask } from './sign.js';
+import WebSocket from 'ws';
+import { Protocol } from '../core/protocol.js';
+import type { CtYunClient, Desktop, DesktopInfo } from '../core/client.js';
 import type { Logger } from '../core/logger.js';
+import { SignTask } from './sign.js';
 
-// 单例浏览器池管理器：全系统多账号共享同一个 Chromium 进程，通过独立 BrowserContext 严格隔离各账号会话与 Cookie
-class BrowserPool {
-  private static browserInstance: any = null;
-  private static activeCount = 0;
-  private static launchPromise: Promise<any> | null = null;
-  private static isClosing = false;
-
-  /**
-   * 优雅或强制关闭指定的 Browser 进程，带 5 秒超时 SIGKILL 强杀守卫，彻底杜绝僵尸/孤儿进程残留
-   */
-  public static async closeBrowserSafely(b: any, reason = '挂机结束'): Promise<void> {
-    if (!b) return;
-    const pid = b.process()?.pid;
-    let timer: NodeJS.Timeout | null = null;
-
-    try {
-      // 5 秒超时熔断强杀保护
-      const timeoutPromise = new Promise<void>((resolve) => {
-        timer = setTimeout(() => {
-          try {
-            if (pid) {
-              process.kill(pid, 'SIGKILL');
-            }
-          } catch {}
-          resolve();
-        }, 5000);
-      });
-
-      const closePromise = (async () => {
-        try {
-          if (b.isConnected?.()) {
-            await b.close();
-          }
-        } catch {}
-      })();
-
-      await Promise.race([closePromise, timeoutPromise]);
-    } catch {} finally {
-      if (timer) clearTimeout(timer);
-      try {
-        // 双重确保：若底层进程仍未退出，发送 SIGKILL 彻底清除
-        if (pid) {
-          try {
-            process.kill(pid, 'SIGKILL');
-          } catch {}
-        }
-      } catch {}
-    }
-  }
-
-  public static async acquireContext(): Promise<{ context: any; close: () => Promise<void> }> {
-    if (!this.browserInstance || !this.browserInstance.isConnected?.()) {
-      this.browserInstance = null;
-      if (!this.launchPromise) {
-        this.launchPromise = (async () => {
-          let puppeteer: any;
-          try {
-            puppeteer = (await import('puppeteer-core')).default;
-          } catch {
-            throw new Error('未安装 puppeteer-core 依赖');
-          }
-
-          const browserPaths: string[] = [];
-
-          if (process.platform === 'win32') {
-            const progFiles86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
-            const progFiles = process.env.ProgramFiles || 'C:\\Program Files';
-            const localAppData = process.env.LOCALAPPDATA || '';
-
-            // 优先探测 Windows 原生自带的 Microsoft Edge (Chromium内核，无需额外安装)
-            browserPaths.push(
-              `${progFiles86}\\Microsoft\\Edge\\Application\\msedge.exe`,
-              `${progFiles}\\Microsoft\\Edge\\Application\\msedge.exe`,
-            );
-            // 其次探测系统安装的 Google Chrome
-            browserPaths.push(
-              `${progFiles}\\Google\\Chrome\\Application\\chrome.exe`,
-              `${progFiles86}\\Google\\Chrome\\Application\\chrome.exe`,
-            );
-            // 探测用户目录下的 Edge / Chrome
-            if (localAppData) {
-              browserPaths.push(
-                `${localAppData}\\Microsoft\\Edge\\Application\\msedge.exe`,
-                `${localAppData}\\Google\\Chrome\\Application\\chrome.exe`,
-              );
-            }
-          } else if (process.platform === 'darwin') {
-            // macOS 常见路径
-            browserPaths.push(
-              '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-              '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-              '/Applications/Chromium.app/Contents/MacOS/Chromium',
-            );
-          } else {
-            // Linux / Docker 容器环境路径
-            browserPaths.push(
-              '/usr/bin/chromium-browser',
-              '/usr/bin/chromium',
-              '/usr/bin/google-chrome',
-              '/usr/bin/microsoft-edge',
-            );
-          }
-
-          let execPath = '';
-          for (const p of browserPaths) {
-            if (fs.existsSync(p)) {
-              execPath = p;
-              break;
-            }
-          }
-
-          if (!execPath) {
-            const tip = process.platform === 'win32'
-              ? '系统未检测到可用浏览器，请确保 Windows 自带的 Edge 浏览器正常或安装 Chrome'
-              : '系统未找到可用 Chromium 浏览器内核 (请确保已安装 Chromium 或 Chrome)';
-            throw new Error(tip);
-          }
-
-          const b = await puppeteer.launch({
-            executablePath: execPath,
-            headless: 'new',
-            args: [
-              '--no-sandbox',
-              '--disable-setuid-sandbox',
-              '--disable-gpu',
-              '--disable-dev-shm-usage',
-              '--disable-software-rasterizer',
-              '--disable-background-timer-throttling',
-              '--disable-backgrounding-occluded-windows',
-              '--disable-renderer-backgrounding',
-              '--window-size=1280,800',
-              '--mute-audio',
-              '--disable-ipv6', // 禁用 IPv6 握手黑洞，全面使用 IPv4 直连
-            ],
-          });
-          this.browserInstance = b;
-          return b;
-        })();
-      }
-      await this.launchPromise;
-      this.launchPromise = null;
-    }
-
-    this.activeCount++;
-    const currentBrowser = this.browserInstance;
-    const context = await currentBrowser.createBrowserContext();
-
-    let isClosed = false;
-    const closeFn = async () => {
-      if (isClosed) return;
-      isClosed = true;
-      try {
-        await context.close();
-      } catch {}
-
-      this.activeCount = Math.max(0, this.activeCount - 1);
-      // 当所有并发账号挂机均已结束（activeCount === 0），才彻底关闭 Chromium 浏览器主进程
-      if (this.activeCount === 0 && this.browserInstance) {
-        const b = this.browserInstance;
-        this.browserInstance = null;
-        this.isClosing = true;
-        try {
-          await BrowserPool.closeBrowserSafely(b, '所有挂机账号均已完成/结束');
-        } finally {
-          this.isClosing = false;
-        }
-      }
-    };
-
-    return { context, close: closeFn };
-  }
-
-  public static async destroy(): Promise<void> {
-    this.activeCount = 0;
-    if (this.browserInstance) {
-      const b = this.browserInstance;
-      this.browserInstance = null;
-      this.isClosing = true;
-      try {
-        await BrowserPool.closeBrowserSafely(b, '系统销毁/退出');
-      } finally {
-        this.isClosing = false;
-      }
-    }
-  }
+export interface HangTaskSession {
+  accountName: string;
+  startTime: number;
+  status: 'running' | 'completed' | 'stopped' | 'failed';
+  currentProgress: number;
+  totalProgress: number;
+  connectedAt?: number;
+  message?: string;
+  stop: () => Promise<void>;
 }
 
-// 记录当前各账号的挂机任务状态与终止句柄
-const activeHangTasks = new Map<
-  string,
-  {
-    startTime: number;
-    connectedAt?: number;
-    baseProgress?: number;
-    status: string;
-    currentProgress?: number;
-    totalProgress?: number;
-    message?: string;
-    stop: () => Promise<void>;
-  }
->();
+const activeHangSessions = new Map<string, HangTaskSession>();
 
+/**
+ * 纯协议版云电脑挂机与登录任务处理器 (彻底剔除 Chromium/无头浏览器)
+ * 1. 纯 WebSocket 二进制 Clink 协议连接天翼云网关 (wss://.../clinkProxy/{id}/MAIN)
+ * 2. 握手后发送 Type 118 (身份) + Type 112 (会话认领) + Type 104 (通道就绪) + 5秒 Type 7 心跳
+ * 3. 登录与挂机两任合一：连上数秒即达成「登录AI云电脑」，若开启挂机则原地续跑满 3600 秒达成「使用1小时」
+ * 4. 监听服务端 Type 119/120/137 或 4001 抢占通知，检测到用户官方客户端接入立即主动避让，绝不冲突
+ */
 export class HangTask {
   public static async destroy(): Promise<void> {
-    await BrowserPool.destroy();
-    for (const task of activeHangTasks.values()) {
+    for (const session of activeHangSessions.values()) {
       try {
-        await task.stop();
+        await session.stop();
       } catch {}
     }
-    activeHangTasks.clear();
+    activeHangSessions.clear();
   }
 
-  /**
-   * 检查指定账号是否已有挂机任务正在运行
-   */
   public static isRunning(accountName: string): boolean {
-    return activeHangTasks.has(accountName);
+    return activeHangSessions.has(accountName);
   }
 
-  /**
-   * 获取指定账号的挂机实时状态与进度 (基于真实时间戳毫秒级推演，分秒平滑无差)
-   */
   public static getHangInfo(accountName: string) {
-    const t = activeHangTasks.get(accountName);
-    if (!t) return null;
-    let cur = t.currentProgress || 0;
-    if (t.connectedAt) {
-      const elapsed = Math.max(0, Math.floor((Date.now() - t.connectedAt) / 1000));
-      cur = Math.min(t.totalProgress || 3600, (t.baseProgress ?? cur) + elapsed);
-      t.currentProgress = cur;
+    const s = activeHangSessions.get(accountName);
+    if (!s) return null;
+
+    let cur = s.currentProgress || 0;
+    if (s.connectedAt) {
+      const elapsed = Math.max(0, Math.floor((Date.now() - s.connectedAt) / 1000));
+      cur = Math.min(s.totalProgress || 3600, cur + elapsed);
     }
-    const message = t.connectedAt
-      ? `智能挂机中 (${cur}/${t.totalProgress || 3600}秒)`
-      : t.message;
+    const message = s.connectedAt
+      ? `纯协议挂机中 (${cur}/${s.totalProgress || 3600}秒)`
+      : s.message || '协议准备中';
+
     return {
-      running: true,
-      startTime: t.startTime,
+      running: s.status === 'running',
+      startTime: s.startTime,
       currentProgress: cur,
-      totalProgress: t.totalProgress,
+      totalProgress: s.totalProgress,
       message,
     };
   }
 
+  public static async stopHang(accountName: string): Promise<void> {
+    const s = activeHangSessions.get(accountName);
+    if (s) {
+      try {
+        await s.stop();
+      } catch {}
+      activeHangSessions.delete(accountName);
+    }
+  }
+
   /**
-   * 智能挂机核心调度
-   * 核心设计：
-   * 1. 多账号共享单例 Chromium 进程，通过独立 BrowserContext 严格隔离；
-   * 2. 启动前先调官方任务接口核验当前真实累计进度（不写死 3600 秒）；
-   * 3. 若已有累计，自动计算剩余所需时长进行精准补足；
-   * 4. 挂机过程中每隔 60 秒轮询官方接口，以官方真正确认为达标准则（哪怕时间到了，也会守望直到官方确认）；
-   * 5. 官方达标后立即彻底关闭上下文，所有账号完成时自动自毁浏览器进程。
+   * 纯协议执行云电脑会话激活与挂机任务
+   * @param onlyLoginTask 若为 true，则仅激活登录会话（用于只做「登录AI云电脑」任务，握手达成即关闭）；若为 false，则持续挂机至满 1 小时
+   */
+  public static async executeProtocolHang(
+    accountName: string,
+    client: CtYunClient,
+    logger: Logger,
+    options: {
+      onlyLoginTask?: boolean;
+      desktopId?: string;
+      onProgress?: (cur: number, total: number) => void;
+    } = {},
+  ): Promise<{ success: boolean; message: string; isCompleted?: boolean }> {
+    if (!client.loginInfo) {
+      return { success: false, message: '账号未登录，无法执行任务' };
+    }
+
+    if (activeHangSessions.has(accountName)) {
+      return { success: true, message: '当前已有挂机任务在运行中，请勿重复启动' };
+    }
+
+    // 1. 获取目标云电脑实例
+    let targetDesktop: Desktop | undefined;
+    try {
+      const desktops = await client.getDesktopList();
+      if (options.desktopId) {
+        targetDesktop = desktops.find((d) => String(d.desktopId) === String(options.desktopId));
+      }
+      if (!targetDesktop) {
+        targetDesktop = desktops.find((d) => d.useStatusText === '运行中' || d.useStatusText === '离线运行') || desktops[0];
+      }
+    } catch (e: any) {
+      return { success: false, message: `获取云电脑列表失败: ${e.message}` };
+    }
+
+    if (!targetDesktop) {
+      return { success: false, message: '未找到可用云电脑实例' };
+    }
+
+    const dId = String(targetDesktop.desktopId);
+
+    // 2. 核验是否需要开机
+    const isRunning = targetDesktop.useStatusText === '运行中' || targetDesktop.useStatusText === '离线运行';
+    if (!isRunning) {
+      logger.addLog('warn', `[${accountName}] 云电脑当前为 [${targetDesktop.useStatusText}]，正在下发开机指令...`);
+      try {
+        await client.operateDesktop(dId, 'on');
+      } catch (e: any) {
+        logger.addLog('warn', `[${accountName}] 下发开机指令提示: ${e.message}`);
+      }
+
+      // 等待开机就绪（最多等待 3 分钟）
+      let ready = false;
+      for (let i = 0; i < 36; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          const list = await client.getDesktopList();
+          const cur = list.find((d) => String(d.desktopId) === dId);
+          if (cur && (cur.useStatusText === '运行中' || cur.useStatusText === '离线运行')) {
+            targetDesktop.useStatusText = cur.useStatusText;
+            ready = true;
+            logger.addLog('success', `[${accountName}] 云电脑开机就绪`);
+            break;
+          }
+        } catch {}
+      }
+      if (!ready) {
+        return { success: false, message: '等待云电脑开机超时' };
+      }
+    }
+
+    // 3. 动态核验当前任务进度
+    let currentProgress = 0;
+    let totalProgress = 3600;
+    try {
+      const summary = await SignTask.getPointsAndTasks(client);
+      const hangTask = summary.tasks.find((t) => t.name.includes('使用1小时') || t.name.includes('使用'));
+      if (hangTask) {
+        currentProgress = hangTask.currentProgress || 0;
+        totalProgress = hangTask.totalProgress || 3600;
+        if (!options.onlyLoginTask && (hangTask.isCompleted || currentProgress >= totalProgress - 5)) {
+          logger.addLog('success', `[${accountName}] 今日「使用1小时」挂机任务已达成 (${currentProgress}/${totalProgress}秒)，无需重复挂机`);
+          options.onProgress?.(currentProgress, totalProgress);
+          return { success: true, message: `今日挂机任务已达成 (${currentProgress}/${totalProgress}秒)`, isCompleted: true };
+        }
+      }
+    } catch {}
+
+    // 4. 获取 Clink 接入信道与双向 SSL 证书
+    let desktopInfo: DesktopInfo | null = null;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        desktopInfo = await client.connectDesktop(targetDesktop);
+        if (desktopInfo && desktopInfo.clinkLvsOutHost) break;
+      } catch (e: any) {
+        if (attempt === 5) {
+          return { success: false, message: `获取云电脑连接信息失败: ${e.message}` };
+        }
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+
+    if (!desktopInfo || !desktopInfo.clinkLvsOutHost) {
+      return { success: false, message: '获取云电脑网关参数异常' };
+    }
+
+    // 5. 纯协议握手长连接
+    const hostParts = desktopInfo.clinkLvsOutHost.split(':');
+    const wsUrl = `wss://${desktopInfo.clinkLvsOutHost}/clinkProxy/${dId}/MAIN`;
+
+    logger.addLog(
+      'info',
+      options.onlyLoginTask
+        ? `[${accountName}] 纯协议连接云电脑完成登录任务 (${desktopInfo.clinkLvsOutHost})...`
+        : `[${accountName}] 纯协议启动挂机：当前累计 ${currentProgress}/${totalProgress}秒，连接网关中...`,
+    );
+
+    let ws: WebSocket | null = null;
+    let heartbeatTimer: NodeJS.Timeout | null = null;
+    let progressPollTimer: NodeJS.Timeout | null = null;
+    let isTerminated = false;
+    let sessionResult: { success: boolean; message: string; isCompleted?: boolean } = {
+      success: true,
+      message: '挂机完成',
+    };
+
+    const cleanup = async () => {
+      isTerminated = true;
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+      if (progressPollTimer) {
+        clearInterval(progressPollTimer);
+        progressPollTimer = null;
+      }
+      if (ws) {
+        try {
+          if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+            ws.close(1000, 'Normal Close');
+          }
+        } catch {}
+        ws = null;
+      }
+    };
+
+    const session: HangTaskSession = {
+      accountName,
+      startTime: Date.now(),
+      status: 'running',
+      currentProgress,
+      totalProgress,
+      message: options.onlyLoginTask ? '纯协议激活会话中' : `纯协议挂机中 (${currentProgress}/${totalProgress}秒)`,
+      stop: async () => {
+        sessionResult = { success: true, message: '挂机任务已被手动中止' };
+        await cleanup();
+      },
+    };
+    activeHangSessions.set(accountName, session);
+
+    try {
+      const connectPromise = new Promise<{ success: boolean; message: string }>((resolve) => {
+        ws = new WebSocket(wsUrl, ['binary'], {
+          headers: {
+            Origin: 'https://pc.ctyun.cn',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          },
+          rejectUnauthorized: false,
+        });
+
+        ws.on('open', () => {
+          logger.addLog('info', `[${accountName}] 纯协议信道已建立，发送 SSL 认证握手...`);
+
+          // 1. 发送连接握手 JSON
+          const connectMessage = {
+            type: 1,
+            ssl: 1,
+            host: hostParts[0],
+            port: hostParts.length > 1 ? hostParts[1] : '443',
+            ca: desktopInfo!.caCert,
+            cert: desktopInfo!.clientCert,
+            key: desktopInfo!.clientKey,
+            servername: `${desktopInfo!.host}:${desktopInfo!.port}`,
+            oqs: 0,
+          };
+
+          try {
+            ws?.send(JSON.stringify(connectMessage));
+          } catch (e: any) {
+            resolve({ success: false, message: `发送握手配置失败: ${e.message}` });
+            return;
+          }
+
+          // 2. 500ms 后发送原生初始握手二进制帧
+          setTimeout(() => {
+            if (isTerminated || !ws || ws.readyState !== WebSocket.OPEN) return;
+            try {
+              const initialPayload = Buffer.from('UkVEUQIAAAACAAAAGgAAAAAAAAABAAEAAAABAAAAEgAAAAkAAAAECAAA', 'base64');
+              ws.send(initialPayload);
+            } catch {}
+          }, 500);
+        });
+
+        ws.on('message', async (data: WebSocket.RawData) => {
+          if (isTerminated || !ws || ws.readyState !== WebSocket.OPEN) return;
+          const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+
+          // A. 收到 REDQ 保活校验帧 -> 动态响应
+          if (buffer.length >= 4 && buffer.subarray(0, 4).toString('ascii') === 'REDQ') {
+            try {
+              const response = Protocol.executeRedqEncryption(buffer);
+              ws.send(response);
+            } catch (err: any) {
+              logger.addLog('warn', `[${accountName}] 处理 REDQ 异常: ${err.message}`);
+            }
+            return;
+          }
+
+          // B. 解析服务端下发的 CLINK 协议消息
+          try {
+            const infos = Protocol.parseSendInfo(buffer);
+            for (const info of infos) {
+              // 收到服务端 Type 103 用户认证挑战
+              if (info.type === 103) {
+                logger.addLog('info', `[${accountName}] 收到云电脑 103 握手认证，正在回传用户凭证与通道认领包...`);
+
+                // 1. 回传 Type 118 用户身份包
+                const userPayload = JSON.stringify({
+                  type: 1,
+                  userName: client.loginInfo!.userName,
+                  userInfo: '',
+                  userId: client.loginInfo!.userId,
+                });
+                const msg118 = Protocol.buildSendInfoBuffer(118, Buffer.from(userPayload, 'utf-8'), true);
+                ws.send(msg118);
+
+                // 2. 发送 Type 112 会话认领包 (CLINK_MSGC_MAIN_CLIENT_LOGIN_INFO)
+                // 官方任务中心由此确认终端正式登入并接入云电脑，瞬间达成「登录AI云电脑」！
+                const msg112 = Protocol.buildMainClientLoginInfo(
+                  dId,
+                  desktopInfo!.token || '',
+                  '60',
+                  client.getDeviceCode(),
+                  client.loginInfo!.userName,
+                );
+                ws.send(msg112);
+
+                // 3. 发送 Type 104 通道挂接就绪包 (CLINK_MSGC_MAIN_ATTACH_CHANNELS)
+                const msg104 = Protocol.buildMessage(104);
+                ws.send(msg104);
+
+                logger.addLog('success', `[${accountName}] ✅ 桌面会话认领与通道挂接完成，在线状态已激活！`);
+                session.connectedAt = Date.now();
+
+                // 若本次只做「登录AI云电脑」任务，握手完成后等待 3 秒确保服务端确认即可优雅退出
+                if (options.onlyLoginTask) {
+                  setTimeout(() => {
+                    resolve({ success: true, message: '已完成纯协议桌面登录激活 (+100积分)' });
+                  }, 3000);
+                  return;
+                }
+
+                // 4. 若为「挂机1小时」任务，启动每 5 秒发送 1 次 Type 7 心跳，服务端累计在线秒数
+                if (!heartbeatTimer) {
+                  heartbeatTimer = setInterval(() => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                      try {
+                        const hbBuf = Protocol.buildMessage(7); // Type 7 心跳包
+                        ws.send(hbBuf);
+                      } catch {}
+                    }
+                  }, 5000);
+                }
+
+                // 5. 启动进度轮询与达标检测 (每 20 秒查一次任务接口)
+                if (!progressPollTimer) {
+                  progressPollTimer = setInterval(async () => {
+                    if (isTerminated || !ws || ws.readyState !== WebSocket.OPEN) return;
+                    try {
+                      const summary = await SignTask.getPointsAndTasks(client);
+                      const t = summary.tasks.find((item) => item.name.includes('使用1小时') || item.name.includes('使用'));
+                      if (t) {
+                        const cur = t.currentProgress || 0;
+                        const tot = t.totalProgress || 3600;
+                        session.currentProgress = cur;
+                        session.totalProgress = tot;
+                        options.onProgress?.(cur, tot);
+
+                        if (t.isCompleted || cur >= tot - 5 || (t as any).status === 2) {
+                          logger.addLog('success', `[${accountName}] 🎉 今日使用 AI 云电脑 1 小时挂机任务已圆满达成 (+100积分)！纯协议长连接主动释放。`);
+                          resolve({ success: true, message: `今日挂机任务已圆满达成 (${cur}/${tot}秒)` });
+                        }
+                      }
+                    } catch {}
+                  }, 20000);
+                }
+              }
+
+              // C. 互踢避让与抢占保护：收到 Type 119/120/137 服务端离线通知或多端抢占通知
+              if (info.type === 119 || info.type === 120 || info.type === 137) {
+                logger.addLog('info', `[${accountName}] 收到服务端会话通知 (Type ${info.type})，用户客户端已接入，纯协议通道主动让位...`);
+                resolve({ success: true, message: '检测到官方客户端接入，纯协议通道主动避让' });
+                return;
+              }
+            }
+          } catch {}
+        });
+
+        ws.on('close', (code, reason) => {
+          const reasonStr = reason?.toString() || '';
+          if (isTerminated) return;
+          if (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) {
+            logger.addLog('warn', `[${accountName}] 网关通知桌面被真实客户端接入，纯协议任务主动让位`);
+            resolve({ success: true, message: '客户端主动接入，任务让位' });
+          } else {
+            resolve({ success: false, message: `网络连接关闭 (Code: ${code})` });
+          }
+        });
+
+        ws.on('error', (err) => {
+          if (!isTerminated) {
+            resolve({ success: false, message: `WebSocket 连接异常: ${err.message}` });
+          }
+        });
+      });
+
+      const res = await connectPromise;
+      sessionResult = res;
+    } catch (e: any) {
+      sessionResult = { success: false, message: `挂机执行异常: ${e.message}` };
+    } finally {
+      await cleanup();
+      activeHangSessions.delete(accountName);
+    }
+
+    return sessionResult;
+  }
+
+  /**
+   * 兼容入口：执行智能挂机
    */
   public static async executeSmartHang(
     accountName: string,
@@ -262,271 +418,9 @@ export class HangTask {
     logger: Logger,
     onProgress?: (cur: number, total: number) => void,
   ): Promise<{ success: boolean; message: string; isCompleted?: boolean }> {
-    if (!client.loginInfo) {
-      return { success: false, message: '账号未登录，无法执行挂机任务' };
-    }
-
-    if (activeHangTasks.has(accountName)) {
-      return { success: true, message: '当前已有挂机任务在后台守护运行中，请勿重复启动' };
-    }
-
-    // 1. 动态核验官方任务最新进度
-    let currentProgress = 0;
-    let totalProgress = 3600;
-    // 冗余容错设计：官方计算可能有 1~5 秒统计偏差，留出 5 秒容错阈值；并在计划挂机时长上追加 60 秒充裕缓冲，确保稳妥拿满积分
-    const REDUNDANCY_SECONDS = 5;
-    const BUFFER_PLAN_SECONDS = 60;
-
-    try {
-      const summary = await SignTask.getPointsAndTasks(client);
-      const hangTask = summary.tasks.find((t) => t.name.includes('使用1小时') || t.name.includes('使用'));
-      if (hangTask) {
-        currentProgress = hangTask.currentProgress || 0;
-        totalProgress = hangTask.totalProgress || 3600;
-        if (hangTask.isCompleted || currentProgress >= (totalProgress - REDUNDANCY_SECONDS)) {
-          logger.addLog('success', `[${accountName}] 今日「使用1小时」挂机任务已达成 (${currentProgress}/${totalProgress}秒)！+100 积分已入账，无需重复挂机`);
-          onProgress?.(currentProgress, totalProgress);
-          return { success: true, message: `今日挂机任务已达成 (${currentProgress}/${totalProgress}秒)` };
-        }
-      }
-    } catch {}
-
-    const remainingSeconds = Math.max(0, totalProgress - currentProgress) + BUFFER_PLAN_SECONDS;
-    const estimatedMinutes = Math.ceil(remainingSeconds / 60);
-    logger.addLog(
-      'info',
-      `[${accountName}] 启动智能挂机：当前累计 ${currentProgress}/${totalProgress}秒，开始补足约 ${estimatedMinutes} 分钟`,
-    );
-
-    // 2. 从多账号单例池中获取隔离上下文
-    let browserContextHandle: { context: any; close: () => Promise<void> } | null = null;
-    let isTerminated = false;
-
-    const stopFn = async () => {
-      isTerminated = true;
-      if (browserContextHandle) {
-        await browserContextHandle.close();
-        browserContextHandle = null;
-      }
-    };
-    activeHangTasks.set(accountName, {
-      startTime: Date.now(),
-      status: 'running',
-      currentProgress,
-      totalProgress,
-      message: `智能挂机补时中 (${currentProgress}/${totalProgress}秒)`,
-      stop: stopFn,
+    return this.executeProtocolHang(accountName, client, logger, {
+      onlyLoginTask: false,
+      onProgress,
     });
-    onProgress?.(currentProgress, totalProgress);
-
-    try {
-      browserContextHandle = await BrowserPool.acquireContext();
-      const page = await browserContextHandle.context.newPage();
-      page.setDefaultNavigationTimeout(60000);
-      page.setDefaultTimeout(60000);
-      await page.setViewport({ width: 1280, height: 800 });
-      await page.setUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
-      );
-
-      const loginInfo = client.loginInfo;
-      const deviceCode = client.getDeviceCode();
-
-      // 在页面初始化前注入原生登录会话凭证
-      await page.evaluateOnNewDocument((info: any, code: string) => {
-        localStorage.setItem('web_device_code', code);
-        localStorage.setItem('authExpiredAt', String(Date.now() + 72 * 3600 * 1000));
-        localStorage.setItem('authData', JSON.stringify(info));
-      }, loginInfo, deviceCode);
-
-      // 进入列表页：使用 CDP 直连导航，避免 SPA 持续加载第三方资源导致 goto 导航超时
-      const cdp = await page.target().createCDPSession();
-      await cdp.send('Page.enable');
-      await cdp.send('Page.navigate', { url: 'https://pc.ctyun.cn/#/desktop-list' });
-      logger.addLog('info', `[${accountName}] 已开启无头浏览器会话，等待天翼云电脑实例列表就绪...`);
-
-      // 轮询检测进入按钮或自动切入桌面路由（最长等待 60 秒）
-      let desktopEntered = false;
-      let clickedEnter = false;
-      for (let i = 0; i < 60; i++) {
-        if (isTerminated) break;
-        await new Promise((r) => setTimeout(r, 1000));
-        const check = await page.evaluate(() => {
-          const loc = (globalThis as any).location;
-          const href = loc?.href || '';
-          if (href.includes('desktop?id=')) {
-            return { entered: true, clicked: false, foundCount: 0, state: 'entered' };
-          }
-          const doc = (globalThis as any).document;
-          if (!doc) return { entered: false, clicked: false, foundCount: 0, state: 'no_doc' };
-
-          // 检查是否在加载动画中
-          const anim = doc.querySelector('.rotate-animtion, .loading, .ant-spin');
-          if (anim) {
-            return { entered: false, clicked: false, foundCount: 0, state: 'loading' };
-          }
-
-          // 1. 全面扫描进入云电脑按钮选择器 (div.desktopcom-enter, button, card 进入链接等)
-          const enters = Array.from(
-            doc.querySelectorAll('div.desktopcom-enter, .desktopcom-enter, .desktop-item, .enter-btn, button, [role="button"]')
-          ) as any[];
-
-          const target = enters.find((el: any) => {
-            const text = (el.innerText || el.textContent || '').trim();
-            return (
-              text === '进入AI云电脑' ||
-              text === '进入' ||
-              text.includes('进入AI云电脑') ||
-              text.includes('进入云电脑') ||
-              (text.startsWith('进入') && text.length < 15)
-            );
-          });
-
-          if (target) {
-            target.click();
-            return { entered: false, clicked: true, foundCount: enters.length, state: 'clicked' };
-          }
-
-          // 备用兜底：尝试点击首个 .desktopcom-enter
-          const fallback = doc.querySelector('div.desktopcom-enter, .desktopcom-enter');
-          if (fallback) {
-            fallback.click();
-            return { entered: false, clicked: true, foundCount: 1, state: 'fallback_clicked' };
-          }
-
-          const empty = doc.querySelector('div.empty-desc, .empty, .no-data');
-          if (empty) {
-            return { entered: false, clicked: false, foundCount: 0, state: 'empty' };
-          }
-
-          return { entered: false, clicked: false, foundCount: enters.length, state: 'waiting' };
-        });
-
-        if (check.entered) {
-          desktopEntered = true;
-          break;
-        }
-        if (check.clicked) {
-          clickedEnter = true;
-          logger.addLog('info', `[${accountName}] 已检测到并点击进入云电脑按钮，正在等待桌面会话建立...`);
-          break;
-        }
-
-        // 容错重试：如果非动画加载状态且等待超过 15 秒仍未出现按钮，主动触发一次页面重新导航/刷新
-        if ((i === 15 || i === 30 || i === 45) && check.state !== 'loading') {
-          try {
-            logger.addLog('info', `[${accountName}] 列表加载等待中，触发主动刷新重试 (${i}s)...`);
-            await page.evaluate(() => (globalThis as any).location?.reload());
-          } catch {}
-        }
-      }
-
-      // 等待成功切入官方桌面路由 (https://pc.ctyun.cn/#/desktop?id=...)
-      if (!desktopEntered && !isTerminated) {
-        for (let i = 0; i < 30; i++) {
-          await new Promise((r) => setTimeout(r, 1000));
-          const href = await page.evaluate(() => (globalThis as any).location?.href || '');
-          if (href.includes('desktop?id=')) {
-            desktopEntered = true;
-            break;
-          }
-        }
-      }
-
-      if (isTerminated) {
-        return { success: true, message: '挂机任务已主动终止' };
-      }
-
-      if (!desktopEntered) {
-        throw new Error('未找到进入AI云电脑按钮，或账号名下暂无可用实例');
-      }
-
-      logger.addLog('success', `[${accountName}] 成功接入云电脑会话，开始智能挂机`);
-
-      // 记录挂机会话接入时间戳与基准进度，用于前端毫秒级平滑时间推演
-      const hangItem = activeHangTasks.get(accountName);
-      if (hangItem) {
-        hangItem.connectedAt = Date.now();
-        hangItem.baseProgress = currentProgress;
-      }
-
-      // 3. 动态计时守望循环
-      // 核心机制：天翼云云电脑在用户会话断开时触发网关结算。
-      // 本地依据真实会话时长实时推进进度，挂满预定补足时长后主动优雅断开连接触发官方结算。
-      let elapsedSeconds = 0;
-      const checkIntervalSec = 5; // 每 5 秒推演刷新一次内部进度
-
-      while (!isTerminated && elapsedSeconds < remainingSeconds) {
-        if (page.isClosed()) {
-          throw new Error('云电脑桌面会话页面意外关闭');
-        }
-        await new Promise((r) => setTimeout(r, checkIntervalSec * 1000));
-        elapsedSeconds += checkIntervalSec;
-
-        const currentEstimated = Math.min(totalProgress, currentProgress + elapsedSeconds);
-        const item = activeHangTasks.get(accountName);
-        if (item) {
-          item.currentProgress = currentEstimated;
-          item.totalProgress = totalProgress;
-          item.message = `智能挂机中 (${currentEstimated}/${totalProgress}秒)`;
-        }
-        onProgress?.(currentEstimated, totalProgress);
-      }
-
-      logger.addLog('info', `[${accountName}] 预定挂机时长已满足，正在结算入账...`);
-      if (browserContextHandle) {
-        try {
-          await browserContextHandle.close();
-          browserContextHandle = null;
-        } catch {}
-      }
-
-      // 等待 3 秒让天翼云官方网关完成结算写入
-      await new Promise((r) => setTimeout(r, 3000));
-
-      let hangResultMsg = '预定挂机时长已满足，任务已完成';
-      let isCompletedTarget = false;
-      try {
-        const finalSum = await SignTask.getPointsAndTasks(client);
-        const t = finalSum.tasks.find((task) => task.name.includes('使用1小时') || task.name.includes('使用'));
-        if (t) {
-          const cur = t.currentProgress || 0;
-          if (cur >= (totalProgress - REDUNDANCY_SECONDS) || t.isCompleted) {
-            isCompletedTarget = true;
-            hangResultMsg = `官方结算确认达标 (${cur}/${totalProgress}秒)！+100 积分已到账`;
-            logger.addLog('success', `[${accountName}] 🎉 ${hangResultMsg}`);
-          } else {
-            hangResultMsg = `官方网关已结算当前累计 ${cur}/${totalProgress}秒`;
-            logger.addLog('info', `[${accountName}] ${hangResultMsg}`);
-          }
-        }
-      } catch {}
-
-      return { success: true, message: hangResultMsg, isCompleted: isCompletedTarget };
-    } catch (err: any) {
-      logger.addLog('error', `[${accountName}] 云电脑智能挂机异常: ${err.message}`);
-      return { success: false, message: err.message, isCompleted: false };
-    } finally {
-      activeHangTasks.delete(accountName);
-      if (browserContextHandle) {
-        try {
-          const handle = browserContextHandle;
-          browserContextHandle = null;
-          await handle.close();
-          logger.addLog('info', `[${accountName}] 账号挂机会话已关闭并释放资源`);
-        } catch {}
-      }
-    }
-  }
-
-  /**
-   * 停止指定账号的挂机任务
-   */
-  public static async stopHang(accountName: string): Promise<void> {
-    const task = activeHangTasks.get(accountName);
-    if (task) {
-      await task.stop();
-      activeHangTasks.delete(accountName);
-    }
   }
 }

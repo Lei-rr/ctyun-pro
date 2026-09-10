@@ -85,7 +85,7 @@ export class TaskScheduler {
           try {
             this.logger.addLog('info', `[${name}] ⏰ 命中每日做任务定时 (${targetTime})，正在按策略自动执行...`);
             const dId = this.accountManager.getAccountState(name)?.desktops?.[0]?.desktopId;
-            const res = await TaskRunner.executeDailyTasks(client, dId, tConf);
+            const res = await TaskRunner.executeDailyTasks(client, dId, tConf, this.logger);
             acc.lastSignDate = today;
             tConf.lastRunDate = today;
             acc.taskConfig = tConf;

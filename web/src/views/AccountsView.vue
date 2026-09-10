@@ -486,7 +486,7 @@ onUnmounted(() => {
                           :class="account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'bg-emerald-500 animate-pulse' : (desktop.status === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-muted-foreground/30')"
                         ></span>
                         <span :class="account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'" class="truncate">
-                           {{ account.hangStatus?.running || desktop.status === 'hanging' ? '浏览器挂机' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : '未连接') }}
+                           {{ account.hangStatus?.running || desktop.status === 'hanging' ? '纯协议挂机' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : '未连接') }}
                         </span>
                       </div>
                     </TableCell>
@@ -611,7 +611,7 @@ onUnmounted(() => {
                     :class="account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'bg-emerald-500 animate-pulse' : (desktop.status === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-muted-foreground/30')"
                   ></span>
                   <span :class="account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'">
-                     {{ account.hangStatus?.running || desktop.status === 'hanging' ? '浏览器挂机' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : '未连接') }}
+                     {{ account.hangStatus?.running || desktop.status === 'hanging' ? '纯协议挂机' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : '未连接') }}
                   </span>
                 </div>
                 <div class="inline-flex items-center gap-1">
