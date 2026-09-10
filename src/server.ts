@@ -628,6 +628,19 @@ export async function createServer() {
     return { success: true, data: inst };
   });
 
+  // 指定 Instance 免密直接访问官方 Web 桌面（新窗口无多余 UI 直连）
+  fastify.get('/api/instances/:id/direct-url', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const params = request.params as { id: string };
+      const query = request.query as { account?: string };
+      const res = await manager.getDesktopDirectUrlByDesktopId(params.id, query.account);
+      return { success: true, data: res };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
   // 指定 Instance 直连流媒体参数与机房 WebSocket 网关 (秒级直连，一等公民顶级资源)
   fastify.get('/api/instances/:id/stream', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;

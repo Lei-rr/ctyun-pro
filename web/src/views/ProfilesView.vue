@@ -90,18 +90,27 @@ async function confirmPowerOperate() {
 const directUrlLoading = ref<string | null>(null);
 
 async function openDirectDesktop(accountName: string, desktopId?: string) {
-  // 根据全局唯一 desktopId 精准寻址跳转至内置纯前端推流播放器
-  if (desktopId) {
-    router.push(`/live/${encodeURIComponent(desktopId)}?account=${encodeURIComponent(accountName)}`);
-  } else {
-    // 若未带 desktopId 则取该 Profile 绑定的第一个云实例
+  // 彻底剥离多余 UI，新窗口直接通过官方免密链接直连进入云桌面
+  let targetId = desktopId;
+  if (!targetId) {
     const acc = store.accounts.find((a) => a.name === accountName);
-    const firstId = acc?.desktops?.[0]?.desktopId;
-    if (firstId) {
-      router.push(`/live/${encodeURIComponent(firstId)}?account=${encodeURIComponent(accountName)}`);
-    } else {
-      store.fetchStatus();
+    targetId = acc?.desktops?.[0]?.desktopId;
+  }
+
+  if (!targetId) {
+    toast.error('未找到可用的云电脑实例');
+    return;
+  }
+
+  const loadKey = `${accountName}_${targetId}`;
+  directUrlLoading.value = loadKey;
+  try {
+    const url = await store.getDesktopDirectUrl(targetId, accountName);
+    if (url) {
+      window.open(url, '_blank');
     }
+  } finally {
+    directUrlLoading.value = null;
   }
 }
 

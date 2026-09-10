@@ -339,6 +339,80 @@ export class ProfileManager {
   }
 
   /**
+   * 通过全局唯一 desktopId 反查账号与桌面，生成远程桌面免密直连链接（新窗口直接打开官方界面）
+   */
+  public async getDesktopDirectUrlByDesktopId(
+    desktopId: string,
+    accountHint?: string,
+  ): Promise<{ url: string; desktopCode?: string; accountName: string }> {
+    if (!desktopId) {
+      throw new Error('缺少全局唯一 desktopId');
+    }
+
+    const dIdStr = String(desktopId).trim();
+    let matchedAccountName: string | undefined;
+    let targetDesktop: ManagedDesktopState | undefined;
+
+    // 1. 如果提供了账号提示，优先快速排查
+    if (accountHint) {
+      const state = this.accountStates.get(accountHint);
+      if (state) {
+        const d = state.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+        if (d) {
+          matchedAccountName = state.name;
+          targetDesktop = d;
+        }
+      }
+    }
+
+    // 2. 全局遍历所有已托管账号的桌面状态进行精准反查
+    if (!targetDesktop) {
+      for (const [name, state] of this.accountStates.entries()) {
+        const d = state.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+        if (d) {
+          matchedAccountName = name;
+          targetDesktop = d;
+          break;
+        }
+      }
+    }
+
+    // 3. 如果内存状态中未命中，尝试全量刷新一次各账号桌面后再查
+    if (!targetDesktop) {
+      for (const name of this.accounts.keys()) {
+        try {
+          await this.reloadDesktops(name);
+          const state = this.accountStates.get(name);
+          const d = state?.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+          if (d) {
+            matchedAccountName = name;
+            targetDesktop = d;
+            break;
+          }
+        } catch {}
+      }
+    }
+
+    if (!matchedAccountName || !targetDesktop) {
+      throw new Error(`未找到 ID 为 [${desktopId}] 的云电脑实例`);
+    }
+
+    const client = this.getClient(matchedAccountName);
+    if (!client || !client.loginInfo) {
+      throw new Error(`云电脑所属账号 [${matchedAccountName}] 未登录或凭据失效`);
+    }
+
+    const token = await client.genLoginToken(300);
+    const desktopCode = targetDesktop.desktopCode || '';
+    const directUrl = desktopCode
+      ? `https://pc.ctyun.cn/#/oauth?token=${encodeURIComponent(token)}&desktopOid=${encodeURIComponent(desktopCode)}`
+      : `https://pc.ctyun.cn/#/oauth?token=${encodeURIComponent(token)}`;
+
+    this.logger.addLog('info', `[${matchedAccountName}] 生成远程桌面免密直连链接成功 (有效期 5 分钟)`);
+    return { url: directUrl, desktopCode, accountName: matchedAccountName };
+  }
+
+  /**
    * 通过全局唯一 desktopId 反查账号与桌面，并获取推流直连参数
    * （彻底解决账号重名/改名与同名寻址冲突问题）
    */

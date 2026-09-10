@@ -3,9 +3,11 @@ import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ArrowLeft, Monitor, RefreshCw, Maximize2, Minimize2, AlertCircle } from 'lucide-vue-next';
 import { Button } from '@/shared/ui/button';
+import { useAppStore } from '@/stores/app';
 
 const route = useRoute();
 const router = useRouter();
+const store = useAppStore();
 // 全局唯一标识：通过路由传递 desktopId，同时接收可选的账号提示
 const desktopId = ref<string>(String(route.params.desktopId || ''));
 const accountHint = ref<string>(String(route.query.account || ''));
@@ -85,8 +87,10 @@ const initDesktop = async () => {
   errorMsg.value = '';
   statusText.value = '正在获取机房直连凭证...';
   try {
-    // 1. 获取直连参数 (标准 RESTful API: /api/instances/:id/stream)
-    const res = await fetch(`/api/instances/${encodeURIComponent(desktopId.value)}/stream`);
+    // 1. 获取直连参数 (标准 RESTful API: /api/instances/:id/stream，带管理认证头)
+    const res = await fetch(`/api/instances/${encodeURIComponent(desktopId.value)}/stream`, {
+      headers: store.getHeaders(),
+    });
     const json = await res.json();
     if (!json.success || !json.data) {
       throw new Error(json.msg || json.error || '获取机房连接凭据失败');
@@ -195,10 +199,11 @@ const initDesktop = async () => {
       ssl: true,
       servername: desktopInfo.clinkServerName || '',
       oqs: 0,
-      token: desktopInfo.ticket,
-      ticket: desktopInfo.ticket,
+      token: desktopInfo.token || desktopInfo.ticket || '',
+      ticket: desktopInfo.token || desktopInfo.ticket || '',
       desktopId: data.desktopId,
       deviceCode: data.deviceCode || 'web_chrome_desktop',
+      userAccount: data.userAccount || '',
       deviceType: 100,
       productName: 'ctyun-pro',
       projectionInfo: {

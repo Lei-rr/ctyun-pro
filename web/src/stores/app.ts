@@ -1150,6 +1150,24 @@ export const useAppStore = defineStore('app', () => {
         return false;
       }
     },
+    async getDesktopDirectUrl(instanceId: string, accountName?: string): Promise<string | null> {
+      try {
+        const query = accountName ? `?account=${encodeURIComponent(accountName)}` : '';
+        const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/direct-url${query}`, {
+          headers: getHeaders(),
+        });
+        const json = await res.json();
+        if (json.success && json.data?.url) {
+          return json.data.url;
+        } else {
+          toast.error(json.msg || '获取桌面免密直连失败');
+          return null;
+        }
+      } catch (e: any) {
+        toast.error(e.message || '获取桌面直连异常');
+        return null;
+      }
+    },
     async clearLogs() {
       logs.value = [];
       try {
