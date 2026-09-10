@@ -1,6 +1,12 @@
+import dns from 'node:dns';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+
+// 强制全局 IPv4 优先，防止双栈/容器内 IPv6 无路由造成网络黑洞或连接挂起
+try {
+  dns.setDefaultResultOrder('ipv4first');
+} catch {}
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';

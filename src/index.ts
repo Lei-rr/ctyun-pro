@@ -1,5 +1,11 @@
+import dns from 'dns';
 import { Config } from './config.js';
 import { createServer } from './server.js';
+
+// 强制 IPv4 优先解析，彻底规避双栈/无 IPv6 路由导致的连接挂起与超时
+try {
+  dns.setDefaultResultOrder('ipv4first');
+} catch {}
 
 async function main() {
   Config.initDirs();

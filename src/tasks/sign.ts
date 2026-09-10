@@ -50,7 +50,7 @@ export class SignTask {
     }
 
     // 2. 精准匹配官方连续签到打卡任务 (eventType === 9)
-    const checkInTask = taskJson.data.find((item) => item.eventType === 9 || item.eventType === '9');
+    const checkInTask = taskJson.data?.find((item: any) => item.eventType === 9 || item.eventType === '9');
     if (!checkInTask) {
       return { success: true, message: '当前账号无需或不支持云手机签到，三大每日任务已全部正常就绪' };
     }

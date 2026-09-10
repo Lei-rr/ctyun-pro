@@ -8,6 +8,50 @@ class BrowserPool {
   private static browserInstance: any = null;
   private static activeCount = 0;
   private static launchPromise: Promise<any> | null = null;
+  private static isClosing = false;
+
+  /**
+   * 优雅或强制关闭指定的 Browser 进程，带 5 秒超时 SIGKILL 强杀守卫，彻底杜绝僵尸/孤儿进程残留
+   */
+  public static async closeBrowserSafely(b: any, reason = '挂机结束'): Promise<void> {
+    if (!b) return;
+    const pid = b.process()?.pid;
+    let timer: NodeJS.Timeout | null = null;
+
+    try {
+      // 5 秒超时熔断强杀保护
+      const timeoutPromise = new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          try {
+            if (pid) {
+              process.kill(pid, 'SIGKILL');
+            }
+          } catch {}
+          resolve();
+        }, 5000);
+      });
+
+      const closePromise = (async () => {
+        try {
+          if (b.isConnected?.()) {
+            await b.close();
+          }
+        } catch {}
+      })();
+
+      await Promise.race([closePromise, timeoutPromise]);
+    } catch {} finally {
+      if (timer) clearTimeout(timer);
+      try {
+        // 双重确保：若底层进程仍未退出，发送 SIGKILL 彻底清除
+        if (pid) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {}
+        }
+      } catch {}
+    }
+  }
 
   public static async acquireContext(): Promise<{ context: any; close: () => Promise<void> }> {
     if (!this.browserInstance || !this.browserInstance.isConnected?.()) {
@@ -91,6 +135,7 @@ class BrowserPool {
               '--disable-renderer-backgrounding',
               '--window-size=1280,800',
               '--mute-audio',
+              '--disable-ipv6', // 禁用 IPv6 握手黑洞，全面使用 IPv4 直连
             ],
           });
           this.browserInstance = b;
@@ -102,7 +147,8 @@ class BrowserPool {
     }
 
     this.activeCount++;
-    const context = await this.browserInstance.createBrowserContext();
+    const currentBrowser = this.browserInstance;
+    const context = await currentBrowser.createBrowserContext();
 
     let isClosed = false;
     const closeFn = async () => {
@@ -113,13 +159,16 @@ class BrowserPool {
       } catch {}
 
       this.activeCount = Math.max(0, this.activeCount - 1);
-      // 当所有账号挂机均已结束，自动销毁 Chromium 浏览器主进程，彻底释放全部系统内存
+      // 当所有并发账号挂机均已结束（activeCount === 0），才彻底关闭 Chromium 浏览器主进程
       if (this.activeCount === 0 && this.browserInstance) {
+        const b = this.browserInstance;
+        this.browserInstance = null;
+        this.isClosing = true;
         try {
-          const b = this.browserInstance;
-          this.browserInstance = null;
-          await b.close();
-        } catch {}
+          await BrowserPool.closeBrowserSafely(b, '所有挂机账号均已完成/结束');
+        } finally {
+          this.isClosing = false;
+        }
       }
     };
 
@@ -127,13 +176,16 @@ class BrowserPool {
   }
 
   public static async destroy(): Promise<void> {
+    this.activeCount = 0;
     if (this.browserInstance) {
+      const b = this.browserInstance;
+      this.browserInstance = null;
+      this.isClosing = true;
       try {
-        const b = this.browserInstance;
-        this.browserInstance = null;
-        this.activeCount = 0;
-        await b.close();
-      } catch {}
+        await BrowserPool.closeBrowserSafely(b, '系统销毁/退出');
+      } finally {
+        this.isClosing = false;
+      }
     }
   }
 }
@@ -458,7 +510,9 @@ export class HangTask {
       activeHangTasks.delete(accountName);
       if (browserContextHandle) {
         try {
-          await browserContextHandle.close();
+          const handle = browserContextHandle;
+          browserContextHandle = null;
+          await handle.close();
           logger.addLog('info', `[${accountName}] 账号挂机会话已关闭并释放资源`);
         } catch {}
       }

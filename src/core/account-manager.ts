@@ -601,14 +601,25 @@ export class AccountManager {
         }
       }
 
-      // 挂机完成（或异常退出）后：恢复底层 7x24 小时持久保活长连接
+      // 挂机完成（或异常退出）后：若账号开启了保活，才恢复底层 7x24 小时持久保活长连接
       try {
-        try {
-          const list = await client.getDesktopList();
+        const isKeepAliveEnabled = acc.autoStart !== false && (acc.taskConfig?.keepAliveHang ?? true);
+        if (isKeepAliveEnabled) {
+          try {
+            const list = await client.getDesktopList();
+            const state = this.accountStates.get(accountName);
+            const desktopStates = state?.desktops || [];
+            await this.keepAliveManager.syncWorkersForAccount(accountName, client, list, desktopStates);
+          } catch {}
+        } else {
+          // 若关闭了保活，确保云电脑状态置为 stopped，不维持常驻 Worker
           const state = this.accountStates.get(accountName);
-          const desktopStates = state?.desktops || [];
-          await this.keepAliveManager.syncWorkersForAccount(accountName, client, list, desktopStates);
-        } catch {}
+          if (state) {
+            for (const d of state.desktops) {
+              d.status = 'stopped';
+            }
+          }
+        }
 
         // 挂机完成后自动拉取官方最新积分并刷新今日积分看板缓存
         let finalPoints = 0;
