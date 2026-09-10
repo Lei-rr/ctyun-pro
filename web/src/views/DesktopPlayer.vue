@@ -1,16 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ArrowLeft, Monitor, RefreshCw, Maximize2, Minimize2, AlertCircle } from 'lucide-vue-next';
 import { Button } from '@/shared/ui/button';
-import { useAppStore } from '@/stores/app';
+import { Monitor, AlertCircle, RefreshCw, Maximize2, Minimize2 } from 'lucide-vue-next';
 
 const route = useRoute();
 const router = useRouter();
-const store = useAppStore();
-// 全局唯一标识：通过路由传递 desktopId，同时接收可选的账号提示
-const desktopId = ref<string>(String(route.params.desktopId || ''));
-const accountHint = ref<string>(String(route.query.account || ''));
+// 全局唯一标识：通过路由传递 desktopId
+const desktopId = ref<string>(String(route.params.instanceId || route.params.desktopId || ''));
 const desktopTitle = ref<string>('');
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
@@ -87,10 +84,8 @@ const initDesktop = async () => {
   errorMsg.value = '';
   statusText.value = '正在获取机房直连凭证...';
   try {
-    // 1. 获取直连参数 (标准 RESTful API: /api/instances/:id/stream，带管理认证头)
-    const res = await fetch(`/api/instances/${encodeURIComponent(desktopId.value)}/stream`, {
-      headers: store.getHeaders(),
-    });
+    // 1. 获取直连参数 (标准 RESTful API: /api/instances/:id/stream，公开免密直连)
+    const res = await fetch(`/api/instances/${encodeURIComponent(desktopId.value)}/stream`);
     const json = await res.json();
     if (!json.success || !json.data) {
       throw new Error(json.msg || json.error || '获取机房连接凭据失败');
