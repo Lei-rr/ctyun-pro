@@ -144,7 +144,7 @@ onUnmounted(() => {
           {{ log.message }}
           <span
             v-if="log.count && log.count > 1"
-            class="ml-1.5 inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-primary/10 text-primary border border-primary/20 select-none"
+            class="ml-1.5 inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-sky-500/15 text-sky-600 dark:bg-sky-400/20 dark:text-sky-300 border border-sky-500/30 select-none leading-none align-middle"
           >
             x{{ log.count }}
           </span>
