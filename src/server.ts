@@ -810,6 +810,116 @@ export async function createServer() {
     return { success: true, data: manager.getAccountState(acc.name) };
   });
 
+  // Profile 策略配置设置 (签到、任务与兑换策略)
+  fastify.post('/api/profiles/:id/policy', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) {
+      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+    }
+    const body = request.body as {
+      autoSign?: boolean;
+      taskConfig?: any;
+      redeemConfig?: any;
+    };
+    await manager.addOrUpdateAccount({
+      ...acc,
+      autoSign: body.autoSign !== undefined ? body.autoSign : (body.taskConfig?.enabled ?? acc.autoSign),
+      taskConfig: body.taskConfig !== undefined ? body.taskConfig : acc.taskConfig,
+      redeemConfig: body.redeemConfig !== undefined ? body.redeemConfig : acc.redeemConfig,
+    });
+    manager.addLog('info', `[${acc.name}] 自动化任务与兑换策略已保存`);
+    return { success: true, data: manager.getAccountState(acc.name) };
+  });
+
+  // Profile 手动执行日常任务
+  fastify.post('/api/profiles/:id/tasks/run', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) {
+      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+    }
+    try {
+      const msg = await manager.manualRunTasks(acc.name);
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // Profile 手动触发补足时长智能挂机
+  fastify.post('/api/profiles/:id/hang/run', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) {
+      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+    }
+    try {
+      const msg = await manager.manualHang(acc.name);
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // Profile 手动中止挂机
+  fastify.post('/api/profiles/:id/hang/stop', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) {
+      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+    }
+    try {
+      await manager.stopHang(acc.name);
+      return { success: true, msg: '已成功中止挂机任务，并恢复保活长连接' };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // Profile 手动触发打卡签到
+  fastify.post('/api/profiles/:id/sign', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) {
+      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+    }
+    try {
+      const msg = await manager.manualSignIn(acc.name);
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // Profile 手动触发积分兑换
+  fastify.post('/api/profiles/:id/redeem', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) {
+      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+    }
+    const body = (request.body as { prodId?: number; costPoints?: number; prodType?: string; desktopId?: string }) || {};
+    try {
+      const msg = await manager.manualRedeem(
+        acc.name,
+        body.prodId,
+        body.costPoints,
+        body.prodType,
+        body.desktopId,
+      );
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
   // 全局 Instances 一等公民资源列表 (秒级直读本地缓存与保活心跳)
   fastify.get('/api/instances', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
