@@ -86,7 +86,7 @@ export class TaskScheduler {
           const jitterMs = Math.floor(Math.random() * 14000) + 1000;
           setTimeout(async () => {
             try {
-              this.logger.addLog('info', `[${name}] ⏰ 命中每日做任务定时 (${targetTime}，抖动延时 ${(jitterMs/1000).toFixed(1)}s)，正在按策略自动执行...`);
+              this.logger.addLog('info', `[${name}] 命中每日做任务定时 (${targetTime}，抖动延时 ${(jitterMs/1000).toFixed(1)}s)，正在按策略自动执行...`);
               const dId = this.accountManager.getAccountState(name)?.desktops?.[0]?.desktopId;
               const res = await TaskRunner.executeDailyTasks(client, dId, tConf, this.logger);
               acc.lastSignDate = today;

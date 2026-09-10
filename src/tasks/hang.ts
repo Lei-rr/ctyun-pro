@@ -339,7 +339,7 @@ export class HangTask {
                 const msg104 = Protocol.buildMessage(104);
                 ws.send(msg104);
 
-                logger.addLog('success', `[${accountName}] ✅ 桌面会话认领与通道挂接完成，在线状态已激活！`);
+                logger.addLog('success', `[${accountName}] 桌面会话认领与通道挂接完成，在线状态已激活！`);
                 session.connectedAt = Date.now();
 
                 // 若本次只做「登录AI云电脑」任务，握手完成后等待 3 秒确保服务端确认即可优雅退出
@@ -382,10 +382,10 @@ export class HangTask {
                         const summary = await SignTask.getPointsAndTasks(client);
                         const t = summary.tasks.find((item) => item.name.includes('使用1小时') || item.name.includes('使用'));
                         const isDone = t ? (t.isCompleted || (t as any).status === 2 || (t.currentProgress || 0) >= (t.totalProgress || 3600)) : true;
-                        logger.addLog('success', `[${accountName}] 🎉 今日使用 AI 云电脑 1 小时挂机任务已圆满达成 (+100积分)！`);
+                        logger.addLog('success', `[${accountName}] 今日使用 AI 云电脑 1 小时挂机任务已圆满达成 (+100积分)！`);
                         resolve({ success: true, message: `今日挂机任务已达成 (${cur}/${totalProgress}秒)`, isCompleted: isDone });
                       } catch (err: any) {
-                        logger.addLog('success', `[${accountName}] 🎉 今日挂机时长已累计完毕，会话已正常结算。`);
+                        logger.addLog('success', `[${accountName}] 今日挂机时长已累计完毕，会话已正常结算。`);
                         resolve({ success: true, message: `今日挂机任务已圆满达成 (${cur}/${totalProgress}秒)` });
                       }
                     }
