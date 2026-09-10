@@ -49,7 +49,7 @@ export class AccountManager {
   public adminPassword = '';
   public webhookUrl = '';
   public rewardsCache: RewardItem[] = [...DEFAULT_LOCAL_REWARDS];
-  private todayPointsCache: Map<string, { todayPoints: number; updatedAt: number }> = new Map();
+  private todayPointsCache: Map<string, { todayPoints: number; summary?: PointsSummary; updatedAt: number }> = new Map();
   private expiredNotifiedAccounts: Set<string> = new Set();
 
   constructor() {
@@ -558,12 +558,18 @@ export class AccountManager {
       this.keepAliveManager.stopWorkers(accountName);
     }
 
+    // 立即登记并预设挂机 Session，让前端秒级感知到进度条和挂机状态
+    const cachedEntry = this.todayPointsCache.get(accountName);
+    const hangTask = cachedEntry?.summary?.tasks?.find((t: any) => t.name.includes('使用1小时') || t.name.includes('使用'));
+    HangTask.initPendingSession(accountName, hangTask?.currentProgress || 0, hangTask?.totalProgress || 3600);
+
     // 将桌面状态置为 hanging 并更新挂机状态，保证主页保活在线数不失联
     const state = this.accountStates.get(accountName);
     if (state) {
       for (const d of state.desktops) {
         (d as any).status = 'hanging';
       }
+      state.hangStatus = HangTask.getHangInfo(accountName) || undefined;
       this.notifyStatusChange();
     }
 
@@ -606,6 +612,15 @@ export class AccountManager {
 
       // 挂机完成（或异常退出）后：若账号开启了保活(autoStart)，恢复底层 7x24 小时持久保活长连接 (挂机与保活解耦)
       try {
+        const state = this.accountStates.get(accountName);
+        if (state) {
+          state.hangStatus = undefined;
+          for (const d of state.desktops) {
+            if ((d as any).status === 'hanging') {
+              (d as any).status = 'connected';
+            }
+          }
+        }
         const isKeepAliveEnabled = acc.autoStart !== false;
         if (isKeepAliveEnabled) {
           // 优先通过 resumeWorkers 恢复连接，若无对应 Worker 则走同步初始化
@@ -613,14 +628,12 @@ export class AccountManager {
           if (!resumed) {
             try {
               const list = await client.getDesktopList();
-              const state = this.accountStates.get(accountName);
               const desktopStates = state?.desktops || [];
               await this.keepAliveManager.syncWorkersForAccount(accountName, client, list, desktopStates);
             } catch {}
           }
         } else {
           // 若关闭了保活，确保云电脑状态置为 stopped，不维持常驻 Worker
-          const state = this.accountStates.get(accountName);
           if (state) {
             for (const d of state.desktops) {
               d.status = 'stopped';
@@ -661,17 +674,28 @@ export class AccountManager {
     if (!acc || !client) throw new Error(`未找到账号: ${accountName}`);
 
     await HangTask.stopHang(accountName);
-    this.logger.addLog('info', `[${accountName}] 用户已手动中止挂机任务`);
+    this.logger.addLog('info', `[${accountName}] 用户已手动中止挂机任务，正在恢复正常保活...`);
 
     const state = this.accountStates.get(accountName);
     if (state) {
       state.hangStatus = undefined;
+      for (const d of state.desktops) {
+        if ((d as any).status === 'hanging') {
+          (d as any).status = 'connected';
+        }
+      }
     }
 
     try {
-      const list = await client.getDesktopList();
-      const desktopStates = state?.desktops || [];
-      await this.keepAliveManager.syncWorkersForAccount(accountName, client, list, desktopStates);
+      const isKeepAliveEnabled = acc.autoStart !== false;
+      if (isKeepAliveEnabled) {
+        const resumed = this.keepAliveManager.resumeWorkers(accountName);
+        if (!resumed) {
+          const list = await client.getDesktopList();
+          const desktopStates = state?.desktops || [];
+          await this.keepAliveManager.syncWorkersForAccount(accountName, client, list, desktopStates);
+        }
+      }
     } catch {}
 
     this.notifyStatusChange();
@@ -793,7 +817,7 @@ export class AccountManager {
         todayEarned += Number(t.rewardPoints || 0);
       }
     }
-    this.todayPointsCache.set(accountName, { todayPoints: todayEarned, updatedAt: Date.now() });
+    this.todayPointsCache.set(accountName, { todayPoints: todayEarned, summary, updatedAt: Date.now() });
     const state = this.accountStates.get(accountName);
     if (state) {
       state.todayPoints = todayEarned;

@@ -15,13 +15,13 @@ export interface KeepAliveWorkerOptions {
 }
 
 /**
- * 经典纯协议保活工作者 (旁观者脉冲模式)
+ * 经典纯协议保活工作者 (后台静默保活模式)
  * 核心机制：
- * 1. 严格对齐开源仓库 (muyicn/ctyun-dashboard 与 vay1314/CtYun-Keeper)：
+ * 1. 严格对齐官方长连接协议标准：
  *    单个 MAIN WebSocket + 30s 活跃心跳 (Type 7) + REDQ/103 响应
- * 2. 旁观者模式安全守则：绝不发送 Type 112 (会话认领) 与 Type 104 (通道就绪)，
- *    使通道仅维持实例活跃和重置天翼云官方 1 小时自动休眠关机计时器，官方客户端随时连入绝不互踢！
- * 3. 监听 Type 119/120/137 与 4001 客户端状态通知，感知真机用户上线
+ * 2. 静默保活安全守则：仅响应保活心跳与握手，绝不发送独占性会话指令，
+ *    使通道持续维持实例活跃并重置官方休眠计时器，官方客户端随时连入互不挤占。
+ * 3. 监听 Type 119/120/137 与 4001 状态通知，感知真机用户上线
  * 4. 支持 pause() 与 resume() 软暂停/恢复，与挂机任务无缝优雅交接
  */
 export class KeepAliveWorker {
@@ -136,7 +136,7 @@ export class KeepAliveWorker {
     const hostParts = desktopInfo.clinkLvsOutHost.split(':');
     const mainUrl = `wss://${desktopInfo.clinkLvsOutHost}/clinkProxy/${desktop.desktopId}/MAIN`;
 
-    this.log('info', `建立持久旁观者 WebSocket 连接 (${desktopInfo.clinkLvsOutHost})...`);
+    this.log('info', `建立云电脑长连接 (${desktopInfo.clinkLvsOutHost})...`);
 
     const ws = new WebSocket(mainUrl, ['binary'], {
       headers: {
@@ -154,9 +154,9 @@ export class KeepAliveWorker {
       this.options.onStatusChange?.('reconnecting');
       const reasonStr = reason?.toString() || '';
       
-      // 检测是否为官方客户端接入导致的抢占避让
+      // 检测是否为官方客户端接入导致的避让
       if (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) {
-        this.log('info', `检测到官方客户端接入 (Code ${code})，旁观通道主动避让，将在 5 分钟后静默恢复...`);
+        this.log('info', `检测到客户端在线接入 (Code ${code})，通道主动避让，将在 5 分钟后恢复保活...`);
       } else {
         this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
       }
@@ -212,7 +212,7 @@ export class KeepAliveWorker {
         try {
           const initialPayload = Buffer.from('UkVEUQIAAAACAAAAGgAAAAAAAAABAAEAAAABAAAAEgAAAAkAAAAECAAA', 'base64');
           ws.send(initialPayload);
-          this.log('success', '进入保活监听状态（旁观者姿态，不抢占会话）');
+          this.log('success', '云电脑保活会话建立成功');
           this.options.onStatusChange?.('connected');
 
           // 3. 启动官方标准的 30s 活跃心跳定时器
@@ -242,7 +242,7 @@ export class KeepAliveWorker {
         return;
       }
 
-      // 收到 Type 103 用户状态探测 -> 仅响应 Type 118 用户身份（坚决不发 112/104，保持纯旁观）
+      // 收到 Type 103 用户状态探测 -> 仅响应 Type 118 用户身份（后台静默保活，不抢占会话）
       try {
         const infos = Protocol.parseSendInfo(buffer);
         for (const info of infos) {
@@ -261,7 +261,7 @@ export class KeepAliveWorker {
 
           // 监听官方客户端状态通知 (Type 119/120/137)
           if (info.type === 119 || info.type === 120 || info.type === 137) {
-            this.log('info', `收到客户端状态通知 (Type ${info.type})，旁观通道持续待命`);
+            this.log('info', `收到会话状态通知 (Type ${info.type})，保活通道正常维持`);
           }
         }
       } catch {}

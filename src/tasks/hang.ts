@@ -60,6 +60,19 @@ export class HangTask {
     };
   }
 
+  public static initPendingSession(accountName: string, cur: number = 0, total: number = 3600): void {
+    if (activeHangSessions.has(accountName)) return;
+    activeHangSessions.set(accountName, {
+      accountName,
+      startTime: Date.now(),
+      status: 'running',
+      currentProgress: cur,
+      totalProgress: total,
+      message: '正在准备挂机会话...',
+      stop: async () => {},
+    });
+  }
+
   public static async stopHang(accountName: string): Promise<void> {
     const s = activeHangSessions.get(accountName);
     if (s) {
@@ -88,7 +101,8 @@ export class HangTask {
       return { success: false, message: '账号未登录，无法执行任务' };
     }
 
-    if (activeHangSessions.has(accountName)) {
+    const existingSession = activeHangSessions.get(accountName);
+    if (existingSession && existingSession.connectedAt) {
       return { success: true, message: '当前已有挂机任务在运行中，请勿重复启动' };
     }
 
@@ -142,11 +156,14 @@ export class HangTask {
       }
     }
 
-    // 3. 动态核验当前任务进度
+    // 3. 动态核验当前任务进度（优先取缓存，无缓存再网络查）
     let currentProgress = 0;
     let totalProgress = 3600;
     try {
-      const summary = await SignTask.getPointsAndTasks(client);
+      let summary = SignTask.getCachedPointsAndTasks?.(accountName);
+      if (!summary) {
+        summary = await SignTask.getPointsAndTasks(client);
+      }
       const hangTask = summary.tasks.find((t) => t.name.includes('使用1小时') || t.name.includes('使用'));
       if (hangTask) {
         currentProgress = hangTask.currentProgress || 0;
