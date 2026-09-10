@@ -1,0 +1,7 @@
+{
+  "system": {
+    "adminPassword": "",
+    "keepAliveSeconds": 60,
+    "webhookUrl": ""
+  }
+}

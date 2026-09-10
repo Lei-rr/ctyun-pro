@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { Config, getRandomScheduleTime, DEFAULT_REDEEM_CONFIG, type AccountConfig, type TaskConfig, type RedeemConfig } from '../config.js';
 import { CtYunClient, type Desktop, type DesktopInfo, type LoginInfo } from './client.js';
 import { KeepAliveManager, type ManagedDesktopState } from '../keepalive/keepalive-manager.js';
@@ -12,7 +13,8 @@ import { HangTask } from '../tasks/hang.js';
 import { safeWriteFileSync, sendWebhookNotification } from './utils.js';
 
 export interface ManagedAccount {
-  name: string;
+  id: string; // 全局唯一不可变 UUID (主键)
+  name: string; // 展示备注名
   user: string;
   deviceCode: string;
   status: 'idle' | 'login_needed' | 'need_sms' | 'online' | 'error';
@@ -96,11 +98,18 @@ export class AccountManager {
     return this.accounts;
   }
 
-  public getAccount(nameOrUser: string): AccountConfig | undefined {
-    let acc = this.accounts.get(nameOrUser);
+  public getAccount(keyOrId: string): AccountConfig | undefined {
+    if (!keyOrId) return undefined;
+    // 1. 优先按不可变 id (UUID) 匹配
+    for (const a of this.accounts.values()) {
+      if (a.id === keyOrId) return a;
+    }
+    // 2. 兼容按 Map Key 查找
+    let acc = this.accounts.get(keyOrId);
     if (!acc) {
+      // 3. 兼容按 user (手机号) 或 name 模糊回退匹配
       for (const a of this.accounts.values()) {
-        if (a.user === nameOrUser || a.name === nameOrUser) {
+        if (a.user === keyOrId || a.name === keyOrId) {
           acc = a;
           break;
         }
@@ -109,11 +118,18 @@ export class AccountManager {
     return acc;
   }
 
-  public getAccountState(nameOrUser: string): ManagedAccount | undefined {
-    let state = this.accountStates.get(nameOrUser);
+  public getAccountState(keyOrId: string): ManagedAccount | undefined {
+    if (!keyOrId) return undefined;
+    // 1. 优先按不可变 id (UUID) 匹配
+    for (const s of this.accountStates.values()) {
+      if (s.id === keyOrId) return s;
+    }
+    // 2. 兼容按 Map Key 查找
+    let state = this.accountStates.get(keyOrId);
     if (!state) {
+      // 3. 兼容按 user (手机号) 或 name 模糊回退匹配
       for (const s of this.accountStates.values()) {
-        if (s.user === nameOrUser || s.name === nameOrUser) {
+        if (s.user === keyOrId || s.name === keyOrId) {
           state = s;
           break;
         }
@@ -122,9 +138,9 @@ export class AccountManager {
     return state;
   }
 
-  public getClient(nameOrUser: string): CtYunClient {
-    const acc = this.getAccount(nameOrUser);
-    const key = acc?.name || nameOrUser;
+  public getClient(keyOrId: string): CtYunClient {
+    const acc = this.getAccount(keyOrId);
+    const key = acc?.name || keyOrId;
     let client = this.clients.get(key);
     if (!client) {
       const devCode = acc?.deviceCode || Config.resolveDeviceCode(key);
@@ -141,6 +157,9 @@ export class AccountManager {
     for (const [name, acc] of this.accounts.entries()) {
       const state = this.accountStates.get(name);
       if (state) {
+        if (!state.id && acc.id) {
+          state.id = acc.id;
+        }
         if (acc.loginInfo?.mobilephone) {
           state.user = acc.loginInfo.mobilephone;
           acc.user = acc.loginInfo.mobilephone;
@@ -166,6 +185,34 @@ export class AccountManager {
       }
     }
     return Array.from(this.accountStates.values());
+  }
+
+  /**
+   * 获取全局一等公民实例列表 (合并所属 Profile 信息与实时保活状态)
+   */
+  public getAllInstancesSummary(): any[] {
+    const list: any[] = [];
+    for (const [name, acc] of this.accounts.entries()) {
+      const state = this.accountStates.get(name);
+      const desktops = state?.desktops?.length ? state.desktops : (acc.desktops || []);
+      for (const d of desktops) {
+        list.push({
+          id: d.desktopId,
+          instanceId: d.desktopId,
+          instanceName: d.desktopName,
+          instanceCode: d.desktopCode,
+          flavorName: d.flavorName || d.desktopName,
+          imageName: d.imageName,
+          useStatusText: d.useStatusText || '空闲',
+          status: d.status || 'idle',
+          lastHeartbeat: d.lastHeartbeat,
+          profileId: acc.id || state?.id,
+          profileName: acc.name,
+          profileUser: acc.user,
+        });
+      }
+    }
+    return list;
   }
 
   public async startAccount(accountName: string): Promise<void> {
@@ -289,6 +336,101 @@ export class AccountManager {
 
     this.logger.addLog('info', `[${accountName}] 生成远程桌面免密直连链接成功 (有效期 5 分钟)`);
     return { url: directUrl, desktopCode };
+  }
+
+  /**
+   * 通过全局唯一 desktopId 反查账号与桌面，并获取推流直连参数
+   * （彻底解决账号重名/改名与同名寻址冲突问题）
+   */
+  public async getDesktopConnectionParamsByDesktopId(
+    desktopId: string,
+    accountHint?: string,
+  ): Promise<{
+    wsHost: string;
+    desktopId: string;
+    desktopInfo: any;
+    deviceCode: string;
+    userAccount: string;
+    desktopName?: string;
+    accountName: string;
+  }> {
+    if (!desktopId) {
+      throw new Error('缺少全局唯一 desktopId');
+    }
+
+    const dIdStr = String(desktopId).trim();
+    let matchedAccountName: string | undefined;
+    let targetDesktop: ManagedDesktopState | undefined;
+
+    // 1. 如果提供了账号提示，优先快速排查
+    if (accountHint) {
+      const state = this.accountStates.get(accountHint);
+      if (state) {
+        const d = state.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+        if (d) {
+          matchedAccountName = state.name;
+          targetDesktop = d;
+        }
+      }
+    }
+
+    // 2. 全局遍历所有已托管账号的桌面状态进行精准反查
+    if (!targetDesktop) {
+      for (const [name, state] of this.accountStates.entries()) {
+        const d = state.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+        if (d) {
+          matchedAccountName = name;
+          targetDesktop = d;
+          break;
+        }
+      }
+    }
+
+    // 3. 如果内存状态中未命中，尝试全量刷新一次各账号桌面后再查
+    if (!targetDesktop) {
+      for (const name of this.accounts.keys()) {
+        try {
+          await this.reloadDesktops(name);
+          const state = this.accountStates.get(name);
+          const d = state?.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+          if (d) {
+            matchedAccountName = name;
+            targetDesktop = d;
+            break;
+          }
+        } catch {}
+      }
+    }
+
+    if (!matchedAccountName || !targetDesktop) {
+      throw new Error(`全局未找到 ID 为 [${desktopId}] 的云电脑实例`);
+    }
+
+    const client = this.getClient(matchedAccountName);
+    if (!client || !client.loginInfo) {
+      throw new Error(`云电脑所属账号 [${matchedAccountName}] 未登录或凭据失效`);
+    }
+
+    const dId = String(targetDesktop.desktopId);
+    const objType = targetDesktop.objType ?? 0;
+    const desktopInfo = await client.connectDesktop(dId, objType);
+
+    // 官方 Clink WebSocket 网关地址，优先使用 desktopInfo.clinkLvsOutHost，备用默认网关
+    const gateway = desktopInfo.clinkLvsOutHost
+      ? `wss://${desktopInfo.clinkLvsOutHost}:9011/clinkProxy`
+      : 'wss://deskmsgz.ctyun.cn:9011/clinkProxy';
+
+    this.logger.addLog('info', `[${matchedAccountName}] 全局命中云电脑 [${dId}] 直连凭证与推流网关: ${gateway}`);
+
+    return {
+      wsHost: gateway,
+      desktopId: dId,
+      desktopInfo,
+      deviceCode: client.getDeviceCode(),
+      userAccount: ((client.loginInfo as any)?.account as string) || matchedAccountName,
+      desktopName: targetDesktop.desktopName,
+      accountName: matchedAccountName,
+    };
   }
 
   /**
@@ -453,6 +595,18 @@ export class AccountManager {
       };
     });
 
+    // 【关键落盘缓存】：将云电脑列表快照持久化同步回写至 accounts.json
+    acc.desktops = state.desktops.map((d) => ({
+      desktopId: d.desktopId,
+      desktopName: d.desktopName,
+      desktopCode: d.desktopCode,
+      useStatusText: d.useStatusText,
+      imageName: d.imageName,
+      flavorName: d.flavorName,
+      lastHeartbeat: d.lastHeartbeat,
+    }));
+    this.saveToDisk();
+
     // 检查是否开启了保活长连接 (由 autoStart 控制，与挂机做任务完全解耦)
     const isKeepAliveEnabled = acc.autoStart !== false;
     if (!isKeepAliveEnabled) {
@@ -470,7 +624,8 @@ export class AccountManager {
     const user = config.loginInfo?.mobilephone || config.user;
     const name = config.name || user;
     const deviceCode = config.deviceCode || Config.resolveDeviceCode(name);
-    const existingAcc = this.accounts.get(name);
+    const existingAcc = this.getAccount(config.id || name);
+    const id = config.id || existingAcc?.id || crypto.randomUUID();
     const taskConfig = config.taskConfig || existingAcc?.taskConfig || {
       enabled: true,
       autoSign: true,
@@ -483,12 +638,13 @@ export class AccountManager {
       taskConfig.scheduleTime = getRandomScheduleTime();
     }
     const redeemConfig = config.redeemConfig || { ...DEFAULT_REDEEM_CONFIG };
-    const fullAcc: AccountConfig = { ...config, name, user, deviceCode, taskConfig, redeemConfig };
+    const fullAcc: AccountConfig = { ...config, id, name, user, deviceCode, taskConfig, redeemConfig };
 
     this.accounts.set(name, fullAcc);
     let state = this.accountStates.get(name);
     if (!state) {
       state = {
+        id,
         name,
         user,
         deviceCode,
@@ -498,16 +654,16 @@ export class AccountManager {
         lastSignDate: config.lastSignDate,
         taskConfig,
         redeemConfig,
-        desktops: [],
+        desktops: existingAcc?.desktops || [],
       };
       this.accountStates.set(name, state);
     } else {
+      state.id = id;
+      state.name = name;
       state.user = user;
       state.deviceCode = deviceCode;
-      state.autoSign = config.autoSign ?? state.autoSign;
-      state.lastSignDate = config.lastSignDate ?? state.lastSignDate;
       state.taskConfig = taskConfig;
-      state.redeemConfig = config.redeemConfig ?? state.redeemConfig ?? redeemConfig;
+      state.redeemConfig = redeemConfig;
       if (config.loginInfo) {
         state.loginInfo = config.loginInfo;
         state.status = 'online';
@@ -982,7 +1138,9 @@ export class AccountManager {
         taskConfig.scheduleTime = getRandomScheduleTime();
       }
       const redeemConfig = acc.redeemConfig || { ...DEFAULT_REDEEM_CONFIG };
-      const fullAcc: AccountConfig = { ...acc, name, user, deviceCode, taskConfig, redeemConfig };
+      const id = acc.id || crypto.randomUUID();
+      const desktops = Array.isArray(acc.desktops) ? acc.desktops : [];
+      const fullAcc: AccountConfig = { ...acc, id, name, user, deviceCode, taskConfig, redeemConfig, desktops };
       this.accounts.set(name, fullAcc);
 
       const client = this.getClient(name);
@@ -991,6 +1149,7 @@ export class AccountManager {
       }
 
       const state: ManagedAccount = {
+        id,
         name,
         user,
         deviceCode: acc.deviceCode || client.getDeviceCode(),
@@ -1000,7 +1159,16 @@ export class AccountManager {
         lastSignDate: acc.lastSignDate,
         taskConfig,
         redeemConfig,
-        desktops: [],
+        desktops: desktops.map((d: any) => ({
+          desktopId: d.desktopId,
+          desktopName: d.desktopName,
+          desktopCode: d.desktopCode,
+          useStatusText: d.useStatusText || '空闲',
+          imageName: d.imageName || '',
+          flavorName: d.flavorName || d.desktopName || '',
+          status: 'idle',
+          lastHeartbeat: d.lastHeartbeat,
+        })),
       };
       this.accountStates.set(name, state);
     }

@@ -42,8 +42,9 @@ export interface TaskConfig {
 }
 
 export interface AccountConfig {
-  name: string;
-  user: string;
+  id?: string; // 全局唯一不可变 UUID (主键)
+  name: string; // 账号别名/备注名 (允许重名)
+  user: string; // 手机号或账号名
   password?: string;
   deviceCode?: string;
   autoStart?: boolean;
@@ -52,6 +53,7 @@ export interface AccountConfig {
   taskConfig?: TaskConfig; // 做任务策略设置
   redeemConfig?: RedeemConfig; // 自动兑换策略设置
   loginInfo?: any;
+  desktops?: any[]; // 本地缓存持久化的云电脑列表快照
 }
 
 export interface SystemConfig {

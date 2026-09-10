@@ -9,7 +9,10 @@ export const router = createRouter({
   routes: [
     { path: '/login', component: LoginView, meta: { public: true } },
     { path: '/', component: AccountsView },
+    { path: '/profiles', component: AccountsView },
     { path: '/logs', component: LogsView },
+    { path: '/live/:instanceId', component: () => import('@/views/DesktopPlayer.vue') },
+    { path: '/desktop/:desktopId', redirect: to => `/live/${to.params.desktopId}` },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 });

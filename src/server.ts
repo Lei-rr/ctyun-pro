@@ -734,6 +734,144 @@ export async function createServer() {
     }
   });
 
+  // 8.2 获取纯前端内置云电脑播放器直连参数 (以全局唯一 desktopId 反查定位，免除账号重名冲突)
+  fastify.get('/api/account/desktop/connect-params', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const query = request.query as { desktopId: string; accountName?: string };
+      if (!query?.desktopId) {
+        return reply.code(400).send({ success: false, msg: '缺少全局唯一 desktopId 参数' });
+      }
+      const res = await manager.getDesktopConnectionParamsByDesktopId(query.desktopId, query.accountName);
+      return { success: true, data: res };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // ==========================================
+  // 标准 RESTful 优雅 API 体系 (v1: profiles & instances)
+  // ==========================================
+
+  // Profiles 列表 (所有身份档案及所属云实例快照)
+  fastify.get('/api/v1/profiles', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    return { success: true, data: manager.getAccountsSummary() };
+  });
+
+  // 单个 Profile 详情
+  fastify.get('/api/v1/profiles/:id', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    const state = manager.getAccountState(params.id);
+    if (!acc && !state) {
+      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+    }
+    return { success: true, data: state || acc };
+  });
+
+  // 删除 Profile
+  fastify.delete('/api/v1/profiles/:id', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) {
+      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+    }
+    manager.removeAccount(acc.name);
+    return { success: true, msg: 'Profile 已成功注销' };
+  });
+
+  // 重命名 Profile 备注名
+  fastify.post('/api/v1/profiles/:id/rename', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const body = request.body as { name: string };
+    if (!body?.name?.trim()) {
+      return reply.code(400).send({ success: false, msg: '名称不能为空' });
+    }
+    const acc = manager.getAccount(params.id);
+    if (!acc) {
+      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+    }
+    manager.updateAccountName(acc.name, body.name.trim());
+    return { success: true, msg: '重命名成功' };
+  });
+
+  // 触发指定 Profile 的实例列表同步与本地落盘
+  fastify.post('/api/v1/profiles/:id/sync', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) {
+      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+    }
+    await manager.reloadDesktops(acc.name);
+    return { success: true, data: manager.getAccountState(acc.name) };
+  });
+
+  // 全局 Instances 一等公民资源列表 (秒级直读本地缓存与保活心跳)
+  fastify.get('/api/v1/instances', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    return { success: true, data: manager.getAllInstancesSummary() };
+  });
+
+  // 全局强制同步刷新所有 Instances
+  fastify.post('/api/v1/instances/sync', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    for (const name of manager.getAllAccounts().keys()) {
+      await manager.reloadDesktops(name).catch(() => {});
+    }
+    return { success: true, data: manager.getAllInstancesSummary() };
+  });
+
+  // 指定 Instance 详情
+  fastify.get('/api/v1/instances/:id', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const instances = manager.getAllInstancesSummary();
+    const inst = instances.find(i => i.id === params.id || i.instanceId === params.id);
+    if (!inst) {
+      return reply.code(404).send({ success: false, msg: '云实例未找到' });
+    }
+    return { success: true, data: inst };
+  });
+
+  // 指定 Instance 直连流媒体参数与机房 WebSocket 网关 (秒级直连，一等公民顶级资源)
+  fastify.get('/api/v1/instances/:id/stream', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const params = request.params as { id: string };
+      const res = await manager.getDesktopConnectionParamsByDesktopId(params.id);
+      return { success: true, data: res };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // 指定 Instance 电源操作 (开机/关机/重启)
+  fastify.post('/api/v1/instances/:id/power', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const params = request.params as { id: string };
+      const body = request.body as { action: 'on' | 'off' | 'reboot' | 'start' | 'stop' | 'restart' };
+      const instances = manager.getAllInstancesSummary();
+      const inst = instances.find(i => i.id === params.id || i.instanceId === params.id);
+      if (!inst) {
+        return reply.code(404).send({ success: false, msg: '云实例未找到' });
+      }
+      let op: 'on' | 'shutdown' | 'reset' = 'on';
+      if (body.action === 'off' || body.action === 'stop') op = 'shutdown';
+      else if (body.action === 'reboot' || body.action === 'restart') op = 'reset';
+
+      const msg = await manager.operateDesktop(inst.profileName, inst.instanceId, op);
+      return { success: true, msg: msg || `电源操作 [${op}] 指令已下发` };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
   // 9. SSE 实时日志推流 (带 token 验证)
   fastify.get('/api/logs/stream', (request: any, reply) => {
     const token = request.query?.token;

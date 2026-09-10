@@ -88,15 +88,19 @@ async function confirmPowerOperate() {
 const directUrlLoading = ref<string | null>(null);
 
 async function openDirectDesktop(accountName: string, desktopId?: string) {
-  const loadingKey = `${accountName}_${desktopId || 'default'}`;
-  directUrlLoading.value = loadingKey;
-  try {
-    const url = await store.getDesktopDirectUrl(accountName, desktopId);
-    if (url) {
-      window.open(url, '_blank');
+  // 根据全局唯一 desktopId 精准寻址跳转至内置纯前端推流播放器
+  if (desktopId) {
+    router.push(`/live/${encodeURIComponent(desktopId)}?account=${encodeURIComponent(accountName)}`);
+  } else {
+    // 兼容回退
+    const loadingKey = `${accountName}_default`;
+    directUrlLoading.value = loadingKey;
+    try {
+      const url = await store.getDesktopDirectUrl(accountName);
+      if (url) window.open(url, '_blank');
+    } finally {
+      directUrlLoading.value = null;
     }
-  } finally {
-    directUrlLoading.value = null;
   }
 }
 
