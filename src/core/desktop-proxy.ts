@@ -112,7 +112,7 @@ export function registerDesktopProxyRoutes(
   fastify.get('/desktop-view', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
 
-    const query = request.query as { desktopId?: string; account?: string };
+    const query = request.query as { desktopId?: string };
     const desktopId = query.desktopId;
     if (!desktopId) {
       reply.code(400).type('text/html; charset=utf-8').send('<h3 style="font-family:sans-serif;padding:20px;">缺少云电脑 ID</h3>');
@@ -120,7 +120,7 @@ export function registerDesktopProxyRoutes(
     }
 
     try {
-      const connParams = await manager.getDesktopConnectionParamsByDesktopId(desktopId, query.account);
+      const connParams = await manager.getDesktopConnectionParamsByDesktopId(desktopId);
       const accountName = connParams.accountName;
       const client = manager.getClient(accountName);
       if (!client || !client.loginInfo) {
@@ -133,7 +133,8 @@ export function registerDesktopProxyRoutes(
 
       const objId = connParams.desktopInfo?.desktopId || desktopId;
       const b64Id = Buffer.from(String(objId)).toString('base64');
-      const desktopDisplayName = connParams.desktopName || accountName;
+      // 精确展示云电脑名称（优先云电脑自身名称/编号，绝不用账号名称混淆多台云电脑）
+      const desktopDisplayName = connParams.desktopName || `云电脑 ${desktopId}`;
 
       const authDataObj = {
         ...client.loginInfo,
@@ -248,24 +249,7 @@ export function registerDesktopProxyRoutes(
     console.error('Failed to set localStorage', e);
   }
 
-  // 2. 前台 Web 视窗活跃心跳与避让同步机制 (让后端保活无感避让防踢线)
-  function sendWebHeartbeat() {
-    try {
-      fetch('/api/instances/' + encodeURIComponent(desktopId) + '/web-active?account=' + encodeURIComponent(accountName), {
-        method: 'POST',
-      }).catch(() => {});
-    } catch (e) {}
-  }
-  setInterval(sendWebHeartbeat, 15000);
-
-  // 页面关闭或卸载时通知后端立即恢复保活连接
-  window.addEventListener('beforeunload', function() {
-    try {
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon('/api/instances/' + encodeURIComponent(desktopId) + '/web-close?account=' + encodeURIComponent(accountName));
-      }
-    } catch (e) {}
-  });
+  // 2. 前台 Web 视窗活跃心跳与避让同步机制 (基于桌面唯一 ID 寻址，免传 account)\n  function sendWebHeartbeat() {\n    try {\n      fetch('/api/instances/' + encodeURIComponent(desktopId) + '/web-active', {\n        method: 'POST',\n      }).catch(() => {});\n    } catch (e) {}\n  }\n  setInterval(sendWebHeartbeat, 15000);\n\n  // 页面关闭或卸载时通知后端立即恢复保活连接 (基于桌面唯一 ID 寻址，免传 account)\n  window.addEventListener('beforeunload', function() {\n    try {\n      if (navigator.sendBeacon) {\n        navigator.sendBeacon('/api/instances/' + encodeURIComponent(desktopId) + '/web-close');\n      }\n    } catch (e) {}\n  });
 
   // 3. 现代流媒体代理拦截器 (优雅重写跨域与 Origin 防盗链)
   const proxyBase = '/api/ctyun-proxy?target=';
@@ -371,18 +355,14 @@ export function registerDesktopProxyRoutes(
   // 2. 接收前台 Web 用户活跃心跳 (刷新避让时长 30s)
   fastify.post('/api/instances/:id/web-active', async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
-    const query = request.query as { account?: string };
-    const accountName = query.account || '';
-    manager.touchWebUserActive(accountName, id, 30);
+    manager.touchWebUserActive('', id, 30);
     reply.send({ success: true });
   });
 
   // 3. 接收前台 Web 用户退出通知 (提前解除避让恢复保活)
   fastify.post('/api/instances/:id/web-close', async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
-    const query = request.query as { account?: string };
-    const accountName = query.account || '';
-    manager.releaseWebUserActive(accountName, id);
+    manager.releaseWebUserActive('', id);
     reply.send({ success: true });
   });
 

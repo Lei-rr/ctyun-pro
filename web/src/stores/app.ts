@@ -1150,10 +1150,9 @@ export const useAppStore = defineStore('app', () => {
         return false;
       }
     },
-    async getDesktopDirectUrl(instanceId: string, accountName?: string): Promise<string | null> {
+    async getDesktopDirectUrl(instanceId: string): Promise<string | null> {
       try {
-        const query = accountName ? `?account=${encodeURIComponent(accountName)}` : '';
-        const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/direct-url${query}`, {
+        const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/direct-url`, {
           headers: getHeaders(),
         });
         const json = await res.json();

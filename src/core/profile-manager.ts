@@ -66,12 +66,23 @@ export class ProfileManager {
     return this.keepAliveManager;
   }
 
+  public getAccountNameByDesktopId(desktopId: string): string | undefined {
+    const dIdStr = String(desktopId).trim();
+    for (const [name, state] of this.accountStates.entries()) {
+      const d = state.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+      if (d) return name;
+    }
+    return undefined;
+  }
+
   public touchWebUserActive(accountName: string, desktopId: string, durationSec: number = 60): void {
-    this.keepAliveManager.touchWebUserActive(accountName, desktopId, durationSec);
+    const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopId) || '默认账号';
+    this.keepAliveManager.touchWebUserActive(matchedAccount, desktopId, durationSec);
   }
 
   public releaseWebUserActive(accountName: string, desktopId: string): void {
-    this.keepAliveManager.releaseWebUserActive(accountName, desktopId);
+    const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopId) || '默认账号';
+    this.keepAliveManager.releaseWebUserActive(matchedAccount, desktopId);
   }
 
   public isManualShutdown(desktopId: string): boolean {

@@ -89,23 +89,17 @@ async function confirmPowerOperate() {
 
 const directUrlLoading = ref<string | null>(null);
 
-async function openDirectDesktop(accountName: string, desktopId?: string) {
-  let targetId = desktopId;
-  if (!targetId) {
-    const acc = store.accounts.find((a) => a.name === accountName);
-    targetId = acc?.desktops?.[0]?.desktopId;
-  }
-
-  if (!targetId) {
+async function openDirectDesktop(desktopId: string) {
+  if (!desktopId) {
     toast.error('未找到可用的云电脑实例');
     return;
   }
 
-  directUrlLoading.value = targetId;
+  directUrlLoading.value = desktopId;
   try {
-    // 纯净新窗口独立加载官方原生云电脑视窗（拉取官方 HTML 骨架并免密注入凭据，全功能原生体验）
-    const token = localStorage.getItem('token') || '';
-    const url = `/desktop-view?desktopId=${encodeURIComponent(targetId)}&account=${encodeURIComponent(accountName)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+    // 纯净新窗口独立加载官方原生云电脑视窗（基于桌面唯一 desktopId 寻址，免暴露任何账号名称参数）
+    const adminToken = store.adminToken || localStorage.getItem('ctyun_admin_token') || '';
+    const url = `/desktop-view?desktopId=${encodeURIComponent(desktopId)}${adminToken ? `&token=${encodeURIComponent(adminToken)}` : ''}`;
     const win = window.open(url, '_blank');
     if (!win) {
       toast.error('直连视窗被浏览器拦截，请允许弹出窗口');
@@ -113,7 +107,7 @@ async function openDirectDesktop(accountName: string, desktopId?: string) {
   } finally {
     setTimeout(() => {
       directUrlLoading.value = null;
-    }, 600);
+    }, 1000);
   }
 }
 
@@ -534,11 +528,11 @@ onUnmounted(() => {
                           size="icon"
                           class="size-7 text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer"
                           :title="desktop.useStatusText === '运行中' ? '进入远程桌面 (官方Web直连)' : '获取免密直连 (若未开机需先开机)'"
-                          :disabled="directUrlLoading === `${account.name}_${desktop.desktopId}`"
-                          @click="openDirectDesktop(account.name, desktop.desktopId)"
+                          :disabled="directUrlLoading === desktop.desktopId"
+                          @click="openDirectDesktop(desktop.desktopId)"
                         >
                           <RotateCw
-                            v-if="directUrlLoading === `${account.name}_${desktop.desktopId}`"
+                            v-if="directUrlLoading === desktop.desktopId"
                             class="size-3.5 animate-spin text-primary"
                           />
                           <ExternalLink v-else class="size-3.5" />
@@ -669,11 +663,11 @@ onUnmounted(() => {
                     size="icon"
                     class="size-7 text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer"
                     :title="desktop.useStatusText === '运行中' ? '进入远程桌面 (官方Web直连)' : '获取免密直连 (若未开机需先开机)'"
-                    :disabled="directUrlLoading === `${account.name}_${desktop.desktopId}`"
-                    @click="openDirectDesktop(account.name, desktop.desktopId)"
+                    :disabled="directUrlLoading === desktop.desktopId"
+                    @click="openDirectDesktop(desktop.desktopId)"
                   >
                     <RotateCw
-                      v-if="directUrlLoading === `${account.name}_${desktop.desktopId}`"
+                      v-if="directUrlLoading === desktop.desktopId"
                       class="size-3.5 animate-spin text-primary"
                     />
                     <ExternalLink v-else class="size-3.5" />

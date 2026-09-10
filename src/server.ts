@@ -81,6 +81,12 @@ export async function createServer() {
   const smsSessionCache = new Map<string, { captchaKey?: string; smsKey?: string }>();
 
   // 校验中间件 (如果设置了 adminPassword)
+  const parseCookieToken = (cookieHeader?: string): string => {
+    if (!cookieHeader) return '';
+    const match = cookieHeader.match(/(?:^|;\\s*)ctyun_admin_token=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  };
+
   const verifyAuth = (request: any, reply: any): boolean => {
     if (!manager.adminPassword) {
       return true;
@@ -88,7 +94,8 @@ export async function createServer() {
     const token =
       request.headers['x-admin-token'] ||
       (request.query && request.query.token) ||
-      (request.headers.authorization ? request.headers.authorization.replace(/^Bearer\s+/i, '') : '');
+      (request.headers.authorization ? request.headers.authorization.replace(/^Bearer\\s+/i, '') : '') ||
+      parseCookieToken(request.headers.cookie);
     if (!isValidToken(token as string)) {
       reply.code(401).send({ success: false, msg: '未授权或登录已过期，请重新登录' });
       return false;
@@ -131,6 +138,7 @@ export async function createServer() {
     const token = `${ts}.${sig}`;
     sessions.add(token);
     saveSessions();
+    reply.header('Set-Cookie', `ctyun_admin_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=${30 * 24 * 3600}`);
     return { success: true, token };
   });
 
@@ -634,8 +642,7 @@ export async function createServer() {
     if (!verifyAuth(request, reply)) return;
     try {
       const params = request.params as { id: string };
-      const query = request.query as { account?: string };
-      const res = await manager.getDesktopDirectUrlByDesktopId(params.id, query.account);
+      const res = await manager.getDesktopDirectUrlByDesktopId(params.id);
       return { success: true, data: res };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });
