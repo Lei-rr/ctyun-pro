@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAppStore, type Account } from '@/stores/app';
 import {
   Monitor,
@@ -42,6 +43,7 @@ import {
   EmptyContent,
 } from '@/shared/ui/empty';
 
+const router = useRouter();
 const store = useAppStore();
 
 // 账号备注重命名
