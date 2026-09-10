@@ -12,6 +12,8 @@ const desktopTitle = ref<string>('');
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const containerRef = ref<HTMLDivElement | null>(null);
+const mainRef = ref<HTMLElement | null>(null);
+const isAutoAdaptive = ref<boolean>(true);
 
 const statusText = ref<string>('正在获取机房直连凭证...');
 const isConnected = ref<boolean>(false);
@@ -24,6 +26,35 @@ let canvasCtx: CanvasRenderingContext2D | null = null;
 let videoDecoder: any = null;
 let currentWidth = 1920;
 let currentHeight = 1080;
+
+let resizeObserver: ResizeObserver | null = null;
+let resizeTimer: any = null;
+
+// 自适应窗口大小协商
+const triggerAdaptiveResize = () => {
+  if (!clinkClient || !mainRef.value || !isAutoAdaptive.value) return;
+  const rect = mainRef.value.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  // 计算实际像素尺寸，并约束步进为偶数对齐
+  let targetW = Math.round(rect.width * dpr);
+  let targetH = Math.round(rect.height * dpr);
+  if (targetW % 2 !== 0) targetW -= 1;
+  if (targetH % 2 !== 0) targetH -= 1;
+
+  if (targetW < 800) targetW = 800;
+  if (targetH < 600) targetH = 600;
+  // 限制最大 2560x1600
+  if (targetW > 2560) targetW = 2560;
+  if (targetH > 1600) targetH = 1600;
+
+  if (Math.abs(targetW - currentWidth) > 16 || Math.abs(targetH - currentHeight) > 16) {
+    try {
+      clinkClient.resize({ width: targetW, height: targetH, x: 0, y: 0 });
+    } catch (e) {
+      console.warn('Adaptive resize failed:', e);
+    }
+  }
+};
 
 // 加载 SDK 脚本
 const loadSdk = (): Promise<void> => {
@@ -195,6 +226,8 @@ const initDesktop = async () => {
       if (e.state === 2 || e.state === 3) {
         isConnected.value = true;
         statusText.value = '云电脑已连接 (直连机房长连接)';
+        // 连通后根据当前窗口尺寸主动发起一次自适应协商
+        setTimeout(() => triggerAdaptiveResize(), 500);
       } else if (e.state === 4 || e.state === 5) {
         isConnected.value = false;
         statusText.value = '连接已断开';
@@ -330,12 +363,31 @@ const toggleFullscreen = () => {
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
   window.addEventListener('keyup', handleKeyUp);
+  
+  if (mainRef.value) {
+    resizeObserver = new ResizeObserver(() => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        triggerAdaptiveResize();
+      }, 300);
+    });
+    resizeObserver.observe(mainRef.value);
+  }
+
   initDesktop();
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeyDown);
   window.removeEventListener('keyup', handleKeyUp);
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+    resizeObserver = null;
+  }
+  if (resizeTimer) {
+    clearTimeout(resizeTimer);
+    resizeTimer = null;
+  }
   if (clinkClient) {
     try { clinkClient.stop(); } catch (e) {}
     clinkClient = null;
@@ -382,7 +434,7 @@ onBeforeUnmount(() => {
     </header>
 
     <!-- 主画布视口区域 -->
-    <main class="relative flex-1 w-full h-full flex items-center justify-center bg-black/95 overflow-hidden">
+    <main ref="mainRef" class="relative flex-1 w-full h-full flex items-center justify-center bg-black/95 overflow-hidden">
       <!-- 错误警报遮罩 -->
       <div v-if="errorMsg" class="absolute inset-0 z-20 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
         <div class="max-w-md w-full bg-neutral-900 border border-destructive/40 rounded-xl p-6 text-center space-y-4 shadow-2xl">
