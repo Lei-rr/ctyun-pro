@@ -102,8 +102,8 @@ async function openDirectDesktop(accountName: string, desktopId?: string) {
     return;
   }
 
-  // 纯净新窗口独立加载 /live/:desktopId
-  const url = `/live/${encodeURIComponent(targetId)}?account=${encodeURIComponent(accountName)}`;
+  // 纯净新窗口独立加载 /live/:desktopId（基于全局唯一 ID 自动寻址）
+  const url = `/live/${encodeURIComponent(targetId)}`;
   window.open(url, '_blank');
 }
 

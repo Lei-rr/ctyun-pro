@@ -192,11 +192,11 @@ const initDesktop = async () => {
 
     // 6. 构造 Clink 连接参数并启动
     const desktopInfo = data.desktopInfo || {};
-    const servername = desktopInfo.internalIp ? `${desktopInfo.internalIp}:${desktopInfo.internalPort || 3389}` : '';
+    const servername = (desktopInfo.host && desktopInfo.port) ? `${desktopInfo.host}:${desktopInfo.port}` : (desktopInfo.internalIp ? `${desktopInfo.internalIp}:${desktopInfo.internalPort || 3389}` : '');
     const clinkConfig = {
       uri: data.wsHost,
-      host: desktopInfo.internalIp || desktopInfo.host || '127.0.0.1',
-      port: desktopInfo.internalPort || desktopInfo.port || 3389,
+      host: desktopInfo.host || desktopInfo.internalIp || '127.0.0.1',
+      port: desktopInfo.port || desktopInfo.internalPort || 3389,
       servername: servername,
       cert: desktopInfo.clientCert,
       ca: desktopInfo.caCert,

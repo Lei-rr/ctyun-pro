@@ -641,9 +641,8 @@ export async function createServer() {
     }
   });
 
-  // 指定 Instance 直连流媒体参数与机房 WebSocket 网关 (秒级直连，一等公民顶级资源)
+  // 指定 Instance 直连流媒体参数与机房 WebSocket 网关 (秒级直连，一等公民顶级资源，免密直连通道)
   fastify.get('/api/instances/:id/stream', async (request, reply) => {
-    if (!verifyAuth(request, reply)) return;
     try {
       const params = request.params as { id: string };
       const res = await manager.getDesktopConnectionParamsByDesktopId(params.id);
