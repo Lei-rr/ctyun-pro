@@ -75,6 +75,28 @@ export class ProfileManager {
     return undefined;
   }
 
+  /**
+   * 通过全局唯一 desktopId 反查账号与桌面实例信息
+   */
+  public findDesktopById(desktopId: string): { accountName: string; desktop: ManagedDesktopState } | undefined {
+    if (!desktopId) return undefined;
+    const dIdStr = String(desktopId).trim();
+    for (const [name, state] of this.accountStates.entries()) {
+      const d = state.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+      if (d) {
+        return { accountName: name, desktop: d };
+      }
+    }
+    // 兜底查 accounts 原生配置
+    for (const [name, acc] of this.accounts.entries()) {
+      const d = (acc.desktops || []).find((item: any) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+      if (d) {
+        return { accountName: name, desktop: d as ManagedDesktopState };
+      }
+    }
+    return undefined;
+  }
+
   public touchWebUserActive(accountName: string, desktopId: string, durationSec: number = 60): void {
     const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopId) || '默认账号';
     this.keepAliveManager.touchWebUserActive(matchedAccount, desktopId, durationSec);

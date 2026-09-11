@@ -149,21 +149,32 @@ export function registerDesktopProxyRoutes(
     }
 
     try {
-      const connParams = await manager.getDesktopConnectionParamsByDesktopId(desktopId);
-      const accountName = connParams.accountName;
-      const client = manager.getClient(accountName);
-      if (!client || !client.loginInfo) {
-        reply.code(401).type('text/html; charset=utf-8').send('<h3 style="font-family:sans-serif;padding:20px;">账号未登录或凭据失效</h3>');
+      // 1. 通过 desktopId 查找对应的账号与桌面
+      const target = manager.findDesktopById(desktopId);
+      if (!target) {
+        reply.code(404).type('text/html; charset=utf-8').send(`<h3 style="font-family:sans-serif;padding:20px;">未检测到可用云电脑 (ID: ${desktopId})</h3>`);
         return;
       }
 
-      // 视窗打开，立即主动让位并登记 Web 活跃态（避让 60 秒）
-      manager.touchWebUserActive(accountName, desktopId);
+      const { accountName, desktop } = target;
+      const client = manager.getClient(accountName);
+      if (!client) {
+        reply.code(401).type('text/html; charset=utf-8').send('<h3 style="font-family:sans-serif;padding:20px;">账号不存在或未初始化</h3>');
+        return;
+      }
 
-      const objId = connParams.desktopInfo?.desktopId || desktopId;
+      if (!client.loginInfo) {
+        reply.code(401).type('text/html; charset=utf-8').send(`<h3 style="font-family:sans-serif;padding:20px;">账号【${accountName}】未登录或凭据已失效，请在控制台重新登录</h3>`);
+        return;
+      }
+
+      // 2. 核心避让机制：用户准备打开浏览器独立操作云电脑，后台长连接保活自动断开让位
+      // 杜绝“AI云电脑在其他地方登录，您已被强制下线”的互踢冲突！
+      manager.touchWebUserActive(accountName, desktopId, 60);
+
+      const objId = desktop.objId || desktop.desktopId || desktopId;
       const b64Id = Buffer.from(String(objId)).toString('base64');
-      // 精确展示云电脑名称（优先云电脑自身名称/编号，绝不用账号名称混淆多台云电脑）
-      const desktopDisplayName = connParams.desktopName || `云电脑 ${desktopId}`;
+      const desktopDisplayName = desktop.desktopName || `云电脑 ${desktopId}`;
 
       const authDataObj = {
         ...client.loginInfo,
@@ -226,9 +237,9 @@ export function registerDesktopProxyRoutes(
 (function() {
   const desktopId = ${JSON.stringify(desktopId)};
   const accountName = ${JSON.stringify(accountName)};
-  const token = ${JSON.stringify(connParams.desktopInfo?.token || (client.loginInfo as any)?.token || '')};
+  const token = ${JSON.stringify((client.loginInfo as any)?.token || '')};
   const authData = ${JSON.stringify(authDataObj)};
-  const deviceCode = ${JSON.stringify(connParams.deviceCode)};
+  const deviceCode = ${JSON.stringify(client.getDeviceCode())};
   const expiredAt = ${JSON.stringify(String(Date.now() + 72 * 3600 * 1000))};
 
   // 1. 多标签页同源隔离：透明沙箱化 Storage (以 desktopId 为命名空间彻底防串号)
