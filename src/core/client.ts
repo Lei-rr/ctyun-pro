@@ -637,4 +637,16 @@ export class CtYunClient {
     }
     throw new Error(json.msg || `获取免密 Token 失败 (Code: ${json.code})`);
   }
+
+  /**
+   * 7. 无感静默轮转刷新 Token (通过现有会话生成免密票据并重新登录换取全新凭据)
+   */
+  public async renewToken(): Promise<LoginInfo> {
+    if (!this.loginInfo) {
+      throw new Error('账号尚未登录，无法续期');
+    }
+    const loginToken = await this.genLoginToken(300);
+    const newInfo = await this.loginByToken(loginToken);
+    return newInfo;
+  }
 }

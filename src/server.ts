@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 try {
   dns.setDefaultResultOrder('ipv4first');
 } catch {}
-import Fastify from 'fastify';
+import Fastify, { FastifyRequest, FastifyReply } from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -37,6 +37,12 @@ export async function createServer() {
       err.statusCode = 400;
       done(err, undefined);
     }
+  });
+
+  // 兼容代理通道和其他 POST 请求（如 application/x-www-form-urlencoded、text/plain、二进制等）
+  // 避免 Fastify 报 415 (FST_ERR_CTP_INVALID_MEDIA_TYPE)
+  fastify.addContentTypeParser('*', { parseAs: 'buffer' }, (req, body, done) => {
+    done(null, body);
   });
 
   await fastify.register(cors, {
@@ -244,8 +250,8 @@ export async function createServer() {
   });
 
   // ==========================================
-  // 标准 RESTful 优雅 API 体系 (profiles & instances)
-  // 彻底废除历史老旧兼容垫片 (/api/account/*)
+  // 标准 RESTful 优雅 API 体系 (profiles & desktops)
+  // 彻底废除历史老旧兼容垫片 (/api/account/*, /api/instances/*)
   // ==========================================
 
   // Profiles 列表 (所有身份档案及所属云实例快照)
@@ -628,14 +634,18 @@ export async function createServer() {
     }
   });
 
-  // 全局 Instances 一等公民资源列表 (秒级直读本地缓存与保活心跳)
-  fastify.get('/api/instances', async (request, reply) => {
+  // ==========================================
+  // 标准 RESTful 体系: Desktops (一等公民顶级资源)
+  // ==========================================
+
+  // 全局 Desktops 汇总列表 (秒级直读本地缓存与保活心跳)
+  fastify.get('/api/desktops', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     return { success: true, data: manager.getAllInstancesSummary() };
   });
 
-  // 全局强制同步刷新所有 Instances
-  fastify.post('/api/instances/sync', async (request, reply) => {
+  // 全局强制同步刷新全量 Desktops
+  fastify.post('/api/desktops/sync', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     for (const name of manager.getAllAccounts().keys()) {
       await manager.reloadDesktops(name).catch(() => {});
@@ -643,20 +653,20 @@ export async function createServer() {
     return { success: true, data: manager.getAllInstancesSummary() };
   });
 
-  // 指定 Instance 详情
-  fastify.get('/api/instances/:id', async (request, reply) => {
+  // 指定 Desktop 详情
+  fastify.get('/api/desktops/:id', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
     const instances = manager.getAllInstancesSummary();
-    const inst = instances.find(i => i.id === params.id || i.instanceId === params.id);
+    const inst = instances.find(i => i.id === params.id || i.desktopId === params.id);
     if (!inst) {
-      return reply.code(404).send({ success: false, msg: '云实例未找到' });
+      return reply.code(404).send({ success: false, msg: '云电脑未找到' });
     }
     return { success: true, data: inst };
   });
 
-  // 指定 Instance 免密直接访问官方 Web 桌面（新窗口无多余 UI 直连）
-  fastify.get('/api/instances/:id/direct-url', async (request, reply) => {
+  // 指定 Desktop 免密直接访问官方 Web 桌面（直连地址生成）
+  fastify.get('/api/desktops/:id/direct-url', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     try {
       const params = request.params as { id: string };
@@ -667,22 +677,22 @@ export async function createServer() {
     }
   });
 
-  // 指定 Instance 电源操作 (开机/关机/重启)
-  fastify.post('/api/instances/:id/power', async (request, reply) => {
+  // 指定 Desktop 电源操作 (开机/关机/重启)
+  fastify.post('/api/desktops/:id/power', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     try {
       const params = request.params as { id: string };
       const body = request.body as { action: 'on' | 'off' | 'reboot' | 'start' | 'stop' | 'restart' };
       const instances = manager.getAllInstancesSummary();
-      const inst = instances.find(i => i.id === params.id || i.instanceId === params.id);
+      const inst = instances.find(i => i.id === params.id || i.desktopId === params.id);
       if (!inst) {
-        return reply.code(404).send({ success: false, msg: '云实例未找到' });
+        return reply.code(404).send({ success: false, msg: '云电脑未找到' });
       }
       let op: 'on' | 'shutdown' | 'reset' = 'on';
       if (body.action === 'off' || body.action === 'stop') op = 'shutdown';
       else if (body.action === 'reboot' || body.action === 'restart') op = 'reset';
 
-      const msg = await manager.operateDesktop(inst.profileName, inst.instanceId, op);
+      const msg = await manager.operateDesktop(inst.profileName, inst.desktopId || inst.id, op);
       return { success: true, msg: msg || `电源操作 [${op}] 指令已下发` };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });

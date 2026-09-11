@@ -54,12 +54,59 @@ export class ProfileManager {
   private todayPointsCache: Map<string, { todayPoints: number; date: string; summary?: PointsSummary; updatedAt: number }> = new Map();
   private expiredNotifiedAccounts: Set<string> = new Set();
   private manualShutdownDesktops: Set<string> = new Set();
+  private tokenRenewTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     this.keepAliveManager = new KeepAliveManager(this.logger, () => this.notifyStatusChange());
     this.taskScheduler = new TaskScheduler(this, this.logger);
     this.loadFromDisk();
     this.taskScheduler.start();
+    this.startTokenRenewLoop();
+  }
+
+  /**
+   * 启动 Token 无感静默轮转与续签保鲜守护协程
+   * 每 12 小时智能巡检一次，针对在线账号在凌晨或闲时执行静默换票，杜绝长期运行登录态失效
+   */
+  private startTokenRenewLoop(): void {
+    if (this.tokenRenewTimer) return;
+
+    // 每 12 小时自动巡检在线账号并进行 Token 保鲜
+    this.tokenRenewTimer = setInterval(() => {
+      this.renewAllOnlineTokens().catch(() => {});
+    }, 12 * 3600 * 1000);
+
+    // 服务启动后 15 分钟执行一次轻量巡检
+    setTimeout(() => {
+      this.renewAllOnlineTokens().catch(() => {});
+    }, 15 * 60 * 1000);
+  }
+
+  /**
+   * 巡检并静默续签所有在线账号的凭证
+   */
+  public async renewAllOnlineTokens(): Promise<void> {
+    for (const [name, acc] of this.accounts.entries()) {
+      if (!acc.loginInfo) continue;
+      const client = this.getClient(name);
+      if (!client || !client.loginInfo) continue;
+
+      try {
+        this.logger.addLog('info', `[${name}] 正在执行凭证静默无感保鲜续签...`);
+        const newInfo = await client.renewToken();
+        acc.loginInfo = newInfo;
+        const state = this.accountStates.get(name);
+        if (state) {
+          state.loginInfo = newInfo;
+          state.status = 'online';
+        }
+        this.saveToDisk();
+        this.logger.addLog('info', `[${name}] 凭证静默保鲜成功，已无缝持久化落盘`);
+      } catch (err: any) {
+        // 若当前静默续签失败，不阻断主流程，仅记日志
+        this.logger.addLog('warn', `[${name}] 凭证静默保鲜巡检跳过: ${err.message}`);
+      }
+    }
   }
 
   public getKeepAliveManager(): KeepAliveManager {
@@ -98,12 +145,16 @@ export class ProfileManager {
   }
 
   public touchWebUserActive(accountName: string, desktopId: string, durationSec: number = 60): void {
-    const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopId) || '默认账号';
+    const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopId);
+    if (!matchedAccount) return;
     this.keepAliveManager.touchWebUserActive(matchedAccount, desktopId, durationSec);
+    // 协同让位：若该账号正在执行后台纯协议挂机，立即主动中止挂机释放推流信道，彻底防止双端互踢冲突
+    HangTask.stopHang(matchedAccount).catch(() => {});
   }
 
   public releaseWebUserActive(accountName: string, desktopId: string): void {
-    const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopId) || '默认账号';
+    const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopId);
+    if (!matchedAccount) return;
     this.keepAliveManager.releaseWebUserActive(matchedAccount, desktopId);
   }
 
@@ -333,6 +384,10 @@ export class ProfileManager {
   }
 
   public async stopAll(): Promise<void> {
+    if (this.tokenRenewTimer) {
+      clearInterval(this.tokenRenewTimer);
+      this.tokenRenewTimer = null;
+    }
     this.taskScheduler.stop();
     this.keepAliveManager.stopAll();
     await HangTask.destroy();

@@ -1085,7 +1085,7 @@ export const useAppStore = defineStore('app', () => {
       operation: 'on' | 'shutdown' | 'reset',
     ) => {
       try {
-        const res = await fetch(`/api/instances/${encodeURIComponent(desktopId)}/power`, {
+        const res = await fetch(`/api/desktops/${encodeURIComponent(desktopId)}/power`, {
           method: 'POST',
           headers: getHeaders(),
           body: JSON.stringify({ action: operation, accountName }),
@@ -1152,7 +1152,7 @@ export const useAppStore = defineStore('app', () => {
     },
     async getDesktopDirectUrl(instanceId: string): Promise<string | null> {
       try {
-        const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/direct-url`, {
+        const res = await fetch(`/api/desktops/${encodeURIComponent(instanceId)}/direct-url`, {
           headers: getHeaders(),
         });
         const json = await res.json();

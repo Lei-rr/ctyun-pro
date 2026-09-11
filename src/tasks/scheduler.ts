@@ -89,8 +89,8 @@ export class TaskScheduler {
         // 准点命中判定：仅在到达设定时间的当分钟 (currentHHmm === targetTime) 且今日未执行时触发
         // 若服务重启或时间已过 (currentHHmm > targetTime)，绝不补跑，避免重启误触
         if (tConf.lastRunDate !== today && currentHHmm === targetTime) {
-          // 加入 1~15 秒的账号级执行随机抖动 (Jitter)，防止多账号同一时刻并发冲击官方风控
-          const jitterMs = Math.floor(Math.random() * 14000) + 1000;
+          // 仿生随机抖动：引入 3~25 秒阶梯式动态延迟，彻底打散多账号并发特征，防范官方批量风控
+          const jitterMs = Math.floor(Math.random() * 22000) + 3000;
           setTimeout(async () => {
             try {
               this.logger.addLog('info', `[${name}] 命中每日做任务定时 (${targetTime}，抖动延时 ${(jitterMs/1000).toFixed(1)}s)，正在按策略自动执行...`);
@@ -178,7 +178,11 @@ export class TaskScheduler {
         }
 
         if (shouldRedeem) {
-          this.logger.addLog('info', `[${name}] ${reason}，准备自动下单兑换...`);
+          // 仿生抖动：多账号自动兑换引入 1~12 秒离散延迟，避免多账号同一秒向商城并发下单
+          const redeemJitterMs = Math.floor(Math.random() * 11000) + 1000;
+          await new Promise((r) => setTimeout(r, redeemJitterMs));
+
+          this.logger.addLog('info', `[${name}] ${reason} (仿生延迟 ${(redeemJitterMs/1000).toFixed(1)}s)，准备自动下单兑换...`);
           const targetDesktopId = rConf.targetDesktopId || this.accountManager.getAccountState(name)?.desktops?.[0]?.desktopId;
           if (!targetDesktopId) {
             this.logger.addLog('warn', `[${name}] 自动兑换跳过: 名下未找到绑定的云电脑`);

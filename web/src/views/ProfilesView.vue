@@ -97,12 +97,12 @@ async function openDirectDesktop(desktopId: string) {
 
   directUrlLoading.value = desktopId;
   try {
-    // 纯净新窗口独立加载官方原生云电脑视窗（极简 /view?desktopId=... 寻址，免暴露任何账号名称参数）
+    // 顶级 RESTful 直连视窗 (标准 /desktop/:id 直连推流，符合全局 Desktops 架构标准)
     const adminToken = store.adminToken || localStorage.getItem('ctyun_admin_token') || '';
-    const url = `/view?desktopId=${encodeURIComponent(desktopId)}${adminToken ? `&token=${encodeURIComponent(adminToken)}` : ''}`;
+    const url = `/desktop/${encodeURIComponent(desktopId)}${adminToken ? `?token=${encodeURIComponent(adminToken)}` : ''}`;
     const win = window.open(url, '_blank');
     if (!win) {
-      toast.error('直连视窗被浏览器拦截，请允许弹出窗口');
+      toast.error('直连视窗被浏览器拦截，请在地址栏允许弹出窗口');
     }
   } finally {
     setTimeout(() => {
