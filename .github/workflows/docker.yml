@@ -99,9 +99,12 @@ jobs:
         id: repos
         run: |
           IMAGES="ghcr.io/${{ github.repository }}"
-          if [ "$ALIYUN_LOGGED_IN" = "true" ]; then
+          # 规则：仅当发布正式版本（Tag: v*）时，才推送到阿里云 ACR 镜像；日常 dev 分支不推阿里云
+          if [ "$ALIYUN_LOGGED_IN" = "true" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             IMAGES="${IMAGES}"$'\n'"crpi-kbafcu5p49r7b1k1.cn-hangzhou.personal.cr.aliyuncs.com/lei-rr/ctyun-pro"
-            echo "Push target includes Aliyun ACR."
+            echo "Release tag detected: Push target includes Aliyun ACR."
+          else
+            echo "Non-release build or Aliyun not logged in: Skipping Aliyun ACR push."
           fi
           echo "images<<EOF" >> $GITHUB_OUTPUT
           echo "$IMAGES" >> $GITHUB_OUTPUT
