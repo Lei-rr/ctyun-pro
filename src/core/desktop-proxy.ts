@@ -142,17 +142,17 @@ export function registerDesktopProxyRoutes(
     if (!verifyAuth(request, reply)) return;
 
     const params = request.params as { id?: string };
-    const desktopId = params?.id;
-    if (!desktopId) {
-      reply.code(400).type('text/html; charset=utf-8').send('<h3 style="font-family:sans-serif;padding:20px;">缺少云电脑 ID</h3>');
+    const desktopCode = params?.id;
+    if (!desktopCode) {
+      reply.code(400).type('text/html; charset=utf-8').send('<h3 style="font-family:sans-serif;padding:20px;">缺少云电脑设备编码 (desktopCode)</h3>');
       return;
     }
 
     try {
-      // 1. 通过 desktopId 查找对应的账号与桌面
-      const target = manager.findDesktopById(desktopId);
+      // 1. 通过 desktopCode 查找对应的账号与桌面
+      const target = manager.findDesktopById(desktopCode);
       if (!target) {
-        reply.code(404).type('text/html; charset=utf-8').send(`<h3 style="font-family:sans-serif;padding:20px;">未检测到可用云电脑 (ID: ${desktopId})</h3>`);
+        reply.code(404).type('text/html; charset=utf-8').send(`<h3 style="font-family:sans-serif;padding:20px;">未检测到可用云电脑 (设备编码: ${desktopCode})</h3>`);
         return;
       }
 
@@ -170,11 +170,11 @@ export function registerDesktopProxyRoutes(
 
       // 2. 核心避让机制：用户准备打开浏览器独立操作云电脑，后台长连接保活自动断开让位
       // 杜绝“AI云电脑在其他地方登录，您已被强制下线”的互踢冲突！
-      manager.touchWebUserActive(accountName, desktopId, 60);
+      manager.touchWebUserActive(accountName, desktop.desktopCode, 60);
 
-      const objId = desktop.objId || desktop.desktopId || desktopId;
+      const objId = desktop.objId || desktop.desktopId;
       const b64Id = Buffer.from(String(objId)).toString('base64');
-      const desktopDisplayName = desktop.desktopName || `云电脑 ${desktopId}`;
+      const desktopDisplayName = desktop.desktopName || `云电脑 ${desktop.desktopCode}`;
 
       const authDataObj = {
         ...client.loginInfo,
@@ -235,7 +235,7 @@ export function registerDesktopProxyRoutes(
 </div>
 <script>
 (function() {
-  const desktopId = ${JSON.stringify(desktopId)};
+  const desktopCode = ${JSON.stringify(desktop.desktopCode)};
   const accountName = ${JSON.stringify(accountName)};
   const token = ${JSON.stringify((client.loginInfo as any)?.token || '')};
   const authData = ${JSON.stringify(authDataObj)};
@@ -269,8 +269,8 @@ export function registerDesktopProxyRoutes(
     window.WebTransport = undefined;
   } catch (e) {}
 
-  // 1. 多标签页同源隔离：透明沙箱化 Storage (以 desktopId 为命名空间彻底防串号)
-  const nsPrefix = 'ctyun_' + desktopId + '_';
+  // 1. 多标签页同源隔离：透明沙箱化 Storage (以 desktopCode 为命名空间彻底防串号)
+  const nsPrefix = 'ctyun_' + desktopCode + '_';
   const isolateKeys = new Set([
     'web_device_code', 'authExpiredAt', 'authData', 'judgeUserEId', 
     'loginAt', 'user_name', 'userId', 'token', 'commonLoginReqHeader',
@@ -323,21 +323,21 @@ export function registerDesktopProxyRoutes(
     console.error('Failed to set localStorage', e);
   }
 
-  // 2. 前台 Web 视窗活跃心跳与避让同步机制 (基于桌面唯一 ID 寻址，免传 account)
+  // 2. 前台 Web 视窗活跃心跳与避让同步机制 (基于桌面唯一 desktopCode 寻址，免传 account)
   function sendWebHeartbeat() {
     try {
-      fetch('/api/desktops/' + encodeURIComponent(desktopId) + '/web-active', {
+      fetch('/api/desktops/' + encodeURIComponent(desktopCode) + '/web-active', {
         method: 'POST',
       }).catch(() => {});
     } catch (e) {}
   }
   setInterval(sendWebHeartbeat, 15000);
 
-  // 页面关闭或卸载时通知后端立即恢复保活连接 (基于桌面唯一 ID 寻址，免传 account)
+  // 页面关闭或卸载时通知后端立即恢复保活连接 (基于桌面唯一 desktopCode 寻址，免传 account)
   window.addEventListener('beforeunload', function() {
     try {
       if (navigator.sendBeacon) {
-        navigator.sendBeacon('/api/desktops/' + encodeURIComponent(desktopId) + '/web-close');
+        navigator.sendBeacon('/api/desktops/' + encodeURIComponent(desktopCode) + '/web-close');
       }
     } catch (e) {}
   });

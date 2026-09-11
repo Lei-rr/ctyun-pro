@@ -5,9 +5,9 @@ import { confirmDelete } from '@/shared/ui/confirm';
 import { router } from '@/router';
 
 export interface Desktop {
-  desktopId: string;
-  desktopName: string;
+  id: string;
   desktopCode: string;
+  desktopName: string;
   useStatusText: string;
   status: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
   lastHeartbeat?: string;
@@ -1081,11 +1081,11 @@ export const useAppStore = defineStore('app', () => {
     manualRedeem,
     operateDesktopPower: async (
       accountName: string,
-      desktopId: string,
+      desktopCode: string,
       operation: 'on' | 'shutdown' | 'reset',
     ) => {
       try {
-        const res = await fetch(`/api/desktops/${encodeURIComponent(desktopId)}/power`, {
+        const res = await fetch(`/api/desktops/${encodeURIComponent(desktopCode)}/power`, {
           method: 'POST',
           headers: getHeaders(),
           body: JSON.stringify({ action: operation, accountName }),
@@ -1101,7 +1101,7 @@ export const useAppStore = defineStore('app', () => {
               polls++;
               await fetchStatus();
               const acc = accounts.value.find((a) => a.name === accountName);
-              const dt = acc?.desktops.find((d) => d.desktopId === desktopId);
+              const dt = acc?.desktops.find((d) => d.desktopCode === desktopCode);
               if (dt && (dt.useStatusText === '运行中' || dt.status === 'connected' || polls >= 60)) {
                 clearInterval(pollTimer);
               }

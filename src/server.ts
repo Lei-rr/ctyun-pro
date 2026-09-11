@@ -658,7 +658,7 @@ export async function createServer() {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
     const instances = manager.getAllInstancesSummary();
-    const inst = instances.find(i => i.id === params.id || i.desktopId === params.id);
+    const inst = instances.find(i => i.desktopCode === params.id || i.id === params.id);
     if (!inst) {
       return reply.code(404).send({ success: false, msg: '云电脑未找到' });
     }
@@ -684,7 +684,7 @@ export async function createServer() {
       const params = request.params as { id: string };
       const body = request.body as { action: 'on' | 'off' | 'reboot' | 'start' | 'stop' | 'restart' };
       const instances = manager.getAllInstancesSummary();
-      const inst = instances.find(i => i.id === params.id || i.desktopId === params.id);
+      const inst = instances.find(i => i.desktopCode === params.id || i.id === params.id);
       if (!inst) {
         return reply.code(404).send({ success: false, msg: '云电脑未找到' });
       }
@@ -692,8 +692,8 @@ export async function createServer() {
       if (body.action === 'off' || body.action === 'stop') op = 'shutdown';
       else if (body.action === 'reboot' || body.action === 'restart') op = 'reset';
 
-      const msg = await manager.operateDesktop(inst.profileName, inst.desktopId || inst.id, op);
-      return { success: true, msg: msg || `电源操作 [${op}] 指令已下发` };
+      const msg = await manager.operateDesktop(inst.profileName, inst.desktopCode, op);
+      return { success: true, msg };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });
     }

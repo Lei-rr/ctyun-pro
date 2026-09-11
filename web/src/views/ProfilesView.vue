@@ -56,16 +56,16 @@ const renameLoading = ref(false);
 const showPowerModal = ref(false);
 const powerTarget = ref<{
   accountName: string;
-  desktopId: string;
+  desktopCode: string;
   action: 'on' | 'shutdown' | 'reset';
   desktopName?: string;
 } | null>(null);
 const powerLoading = ref(false);
 
-function openPowerConfirm(accountName: string, desktopId: string, action: 'on' | 'shutdown' | 'reset', desktopName?: string) {
+function openPowerConfirm(accountName: string, desktopCode: string, action: 'on' | 'shutdown' | 'reset', desktopName?: string) {
   powerTarget.value = {
     accountName,
-    desktopId,
+    desktopCode,
     action,
     desktopName,
   };
@@ -78,7 +78,7 @@ async function confirmPowerOperate() {
   try {
     await store.operateDesktopPower(
       powerTarget.value.accountName,
-      powerTarget.value.desktopId,
+      powerTarget.value.desktopCode,
       powerTarget.value.action
     );
     showPowerModal.value = false;
@@ -89,17 +89,17 @@ async function confirmPowerOperate() {
 
 const directUrlLoading = ref<string | null>(null);
 
-async function openDirectDesktop(desktopId: string) {
-  if (!desktopId) {
+async function openDirectDesktop(desktopCode: string) {
+  if (!desktopCode) {
     toast.error('未找到可用的云电脑实例');
     return;
   }
 
-  directUrlLoading.value = desktopId;
+  directUrlLoading.value = desktopCode;
   try {
-    // 顶级 RESTful 直连视窗 (标准 /desktop/:id 直连推流，符合全局 Desktops 架构标准)
+    // 顶级 RESTful 直连视窗 (标准 /desktop/:desktopCode 直连推流，符合全局 Desktops 架构标准)
     const adminToken = store.adminToken || localStorage.getItem('ctyun_admin_token') || '';
-    const url = `/desktop/${encodeURIComponent(desktopId)}${adminToken ? `?token=${encodeURIComponent(adminToken)}` : ''}`;
+    const url = `/desktop/${encodeURIComponent(desktopCode)}${adminToken ? `?token=${encodeURIComponent(adminToken)}` : ''}`;
     const win = window.open(url, '_blank');
     if (!win) {
       toast.error('直连视窗被浏览器拦截，请在地址栏允许弹出窗口');
@@ -472,7 +472,7 @@ onUnmounted(() => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                <template v-for="desktop in account.desktops" :key="desktop.desktopId">
+                <template v-for="desktop in account.desktops" :key="desktop.desktopCode">
                   <TableRow class="border-border/30 hover:bg-muted/30 transition-colors">
                     <TableCell class="py-2.5 font-medium text-foreground truncate">
                       <div class="flex items-center gap-2 min-w-0">
@@ -491,7 +491,7 @@ onUnmounted(() => {
                       </div>
                     </TableCell>
                     <TableCell class="py-2.5 font-mono text-xs text-muted-foreground truncate">
-                      <span class="truncate block" :title="desktop.desktopCode || desktop.desktopId">{{ desktop.desktopCode || desktop.desktopId }}</span>
+                      <span class="truncate block" :title="desktop.desktopCode">{{ desktop.desktopCode }}</span>
                     </TableCell>
                     <TableCell class="py-2.5 whitespace-nowrap">
                       <Badge
@@ -528,11 +528,11 @@ onUnmounted(() => {
                           size="icon"
                           class="size-7 text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer"
                           :title="desktop.useStatusText === '运行中' ? '进入远程桌面 (官方Web直连)' : '获取免密直连 (若未开机需先开机)'"
-                          :disabled="directUrlLoading === desktop.desktopId"
-                          @click="openDirectDesktop(desktop.desktopId)"
+                          :disabled="directUrlLoading === desktop.desktopCode"
+                          @click="openDirectDesktop(desktop.desktopCode)"
                         >
                           <RotateCw
-                            v-if="directUrlLoading === desktop.desktopId"
+                            v-if="directUrlLoading === desktop.desktopCode"
                             class="size-3.5 animate-spin text-primary"
                           />
                           <ExternalLink v-else class="size-3.5" />
@@ -544,7 +544,7 @@ onUnmounted(() => {
                           size="icon"
                           class="size-7 text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10 cursor-pointer"
                           title="开机"
-                          @click="openPowerConfirm(account.name, desktop.desktopId, 'on', desktop.desktopName || desktop.desktopCode)"
+                          @click="openPowerConfirm(account.name, desktop.desktopCode, 'on', desktop.desktopName || desktop.desktopCode)"
                         >
                           <Power class="size-3.5" />
                         </Button>
@@ -555,7 +555,7 @@ onUnmounted(() => {
                             size="icon"
                             class="size-7 text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 cursor-pointer"
                             title="重启"
-                            @click="openPowerConfirm(account.name, desktop.desktopId, 'reset', desktop.desktopName || desktop.desktopCode)"
+                            @click="openPowerConfirm(account.name, desktop.desktopCode, 'reset', desktop.desktopName || desktop.desktopCode)"
                           >
                             <RotateCw class="size-3.5" />
                           </Button>
@@ -564,7 +564,7 @@ onUnmounted(() => {
                             size="icon"
                             class="size-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
                             title="关机"
-                            @click="openPowerConfirm(account.name, desktop.desktopId, 'shutdown', desktop.desktopName || desktop.desktopCode)"
+                            @click="openPowerConfirm(account.name, desktop.desktopCode, 'shutdown', desktop.desktopName || desktop.desktopCode)"
                           >
                             <Power class="size-3.5" />
                           </Button>
@@ -619,7 +619,7 @@ onUnmounted(() => {
           <div class="sm:hidden space-y-2">
             <div
               v-for="desktop in account.desktops"
-              :key="desktop.desktopId"
+              :key="desktop.desktopCode"
               class="p-3 rounded-xl bg-muted/30 border border-border/40 space-y-2"
             >
               <div class="flex items-center justify-between">
@@ -643,7 +643,7 @@ onUnmounted(() => {
                 </Badge>
               </div>
               <div class="flex items-center justify-between text-xs text-muted-foreground font-mono">
-                <span class="truncate">ID: {{ desktop.desktopCode || desktop.desktopId }}</span>
+                <span class="truncate">ID: {{ desktop.desktopCode }}</span>
                 <span class="shrink-0 ml-2">{{ desktop.lastHeartbeat || '无心跳' }}</span>
               </div>
               <div class="flex items-center justify-between pt-1 border-t border-border/30">
@@ -663,11 +663,11 @@ onUnmounted(() => {
                     size="icon"
                     class="size-7 text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer"
                     :title="desktop.useStatusText === '运行中' ? '进入远程桌面 (官方Web直连)' : '获取免密直连 (若未开机需先开机)'"
-                    :disabled="directUrlLoading === desktop.desktopId"
-                    @click="openDirectDesktop(desktop.desktopId)"
+                    :disabled="directUrlLoading === desktop.desktopCode"
+                    @click="openDirectDesktop(desktop.desktopCode)"
                   >
                     <RotateCw
-                      v-if="directUrlLoading === desktop.desktopId"
+                      v-if="directUrlLoading === desktop.desktopCode"
                       class="size-3.5 animate-spin text-primary"
                     />
                     <ExternalLink v-else class="size-3.5" />
@@ -679,7 +679,7 @@ onUnmounted(() => {
                     size="icon"
                     class="size-7 text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10 cursor-pointer"
                     title="开机"
-                    @click="openPowerConfirm(account.name, desktop.desktopId, 'on', desktop.desktopName || desktop.desktopCode)"
+                    @click="openPowerConfirm(account.name, desktop.desktopCode, 'on', desktop.desktopName || desktop.desktopCode)"
                   >
                     <Power class="size-3.5" />
                   </Button>
@@ -690,7 +690,7 @@ onUnmounted(() => {
                       size="icon"
                       class="size-7 text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 cursor-pointer"
                       title="重启"
-                      @click="openPowerConfirm(account.name, desktop.desktopId, 'reset', desktop.desktopName || desktop.desktopCode)"
+                      @click="openPowerConfirm(account.name, desktop.desktopCode, 'reset', desktop.desktopName || desktop.desktopCode)"
                     >
                       <RotateCw class="size-3.5" />
                     </Button>
@@ -699,7 +699,7 @@ onUnmounted(() => {
                       size="icon"
                       class="size-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
                       title="关机"
-                      @click="openPowerConfirm(account.name, desktop.desktopId, 'shutdown', desktop.desktopName || desktop.desktopCode)"
+                      @click="openPowerConfirm(account.name, desktop.desktopCode, 'shutdown', desktop.desktopName || desktop.desktopCode)"
                     >
                       <Power class="size-3.5" />
                     </Button>
@@ -951,7 +951,7 @@ onUnmounted(() => {
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">实例标识:</span>
-            <span class="font-mono text-foreground">{{ powerTarget.desktopName || powerTarget.desktopId }}</span>
+            <span class="font-mono text-foreground">{{ powerTarget.desktopName || powerTarget.desktopCode }}</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted-foreground">执行动作:</span>

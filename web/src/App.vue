@@ -696,8 +696,8 @@ onUnmounted(() => {
                   class="w-full h-9 px-3 text-xs rounded-lg bg-background border border-input text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                 >
                   <option value="">默认第一台云电脑</option>
-                  <option v-for="d in store.policyDesktops" :key="d.desktopId" :value="d.desktopId">
-                    {{ d.desktopName || '云电脑' }} ({{ d.desktopCode || d.desktopId }})
+                  <option v-for="d in store.policyDesktops" :key="d.desktopCode" :value="d.desktopCode">
+                    {{ d.desktopName || '云电脑' }} ({{ d.desktopCode }})
                   </option>
                 </select>
               </div>

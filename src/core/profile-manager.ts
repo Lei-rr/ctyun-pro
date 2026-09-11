@@ -113,30 +113,30 @@ export class ProfileManager {
     return this.keepAliveManager;
   }
 
-  public getAccountNameByDesktopId(desktopId: string): string | undefined {
-    const dIdStr = String(desktopId).trim();
+  public getAccountNameByDesktopId(desktopCode: string): string | undefined {
+    const codeStr = String(desktopCode).trim();
     for (const [name, state] of this.accountStates.entries()) {
-      const d = state.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+      const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
       if (d) return name;
     }
     return undefined;
   }
 
   /**
-   * 通过全局唯一 desktopId 反查账号与桌面实例信息
+   * 通过全局唯一 desktopCode 反查账号与桌面实例信息
    */
-  public findDesktopById(desktopId: string): { accountName: string; desktop: ManagedDesktopState } | undefined {
-    if (!desktopId) return undefined;
-    const dIdStr = String(desktopId).trim();
+  public findDesktopById(desktopCode: string): { accountName: string; desktop: ManagedDesktopState } | undefined {
+    if (!desktopCode) return undefined;
+    const codeStr = String(desktopCode).trim();
     for (const [name, state] of this.accountStates.entries()) {
-      const d = state.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+      const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
       if (d) {
         return { accountName: name, desktop: d };
       }
     }
     // 兜底查 accounts 原生配置
     for (const [name, acc] of this.accounts.entries()) {
-      const d = (acc.desktops || []).find((item: any) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+      const d = (acc.desktops || []).find((item: any) => String(item.desktopCode) === codeStr);
       if (d) {
         return { accountName: name, desktop: d as ManagedDesktopState };
       }
@@ -144,29 +144,29 @@ export class ProfileManager {
     return undefined;
   }
 
-  public touchWebUserActive(accountName: string, desktopId: string, durationSec: number = 60): void {
-    const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopId);
+  public touchWebUserActive(accountName: string, desktopCode: string, durationSec: number = 60): void {
+    const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopCode);
     if (!matchedAccount) return;
-    this.keepAliveManager.touchWebUserActive(matchedAccount, desktopId, durationSec);
+    this.keepAliveManager.touchWebUserActive(matchedAccount, desktopCode, durationSec);
     // 协同让位：若该账号正在执行后台纯协议挂机，立即主动中止挂机释放推流信道，彻底防止双端互踢冲突
     HangTask.stopHang(matchedAccount).catch(() => {});
   }
 
-  public releaseWebUserActive(accountName: string, desktopId: string): void {
-    const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopId);
+  public releaseWebUserActive(accountName: string, desktopCode: string): void {
+    const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopCode);
     if (!matchedAccount) return;
-    this.keepAliveManager.releaseWebUserActive(matchedAccount, desktopId);
+    this.keepAliveManager.releaseWebUserActive(matchedAccount, desktopCode);
   }
 
-  public isManualShutdown(desktopId: string): boolean {
-    return this.manualShutdownDesktops.has(desktopId);
+  public isManualShutdown(desktopCode: string): boolean {
+    return this.manualShutdownDesktops.has(desktopCode);
   }
 
-  public setManualShutdown(desktopId: string, manual: boolean): void {
+  public setManualShutdown(desktopCode: string, manual: boolean): void {
     if (manual) {
-      this.manualShutdownDesktops.add(desktopId);
+      this.manualShutdownDesktops.add(desktopCode);
     } else {
-      this.manualShutdownDesktops.delete(desktopId);
+      this.manualShutdownDesktops.delete(desktopCode);
     }
   }
 
@@ -325,11 +325,11 @@ export class ProfileManager {
       const state = this.accountStates.get(name);
       const desktops = state?.desktops?.length ? state.desktops : (acc.desktops || []);
       for (const d of desktops) {
+        const desktopCode = d.desktopCode || d.desktopId;
         list.push({
-          id: d.desktopId,
-          instanceId: d.desktopId,
-          instanceName: d.desktopName,
-          instanceCode: d.desktopCode,
+          id: desktopCode,
+          desktopCode,
+          desktopName: d.desktopName,
           flavorName: d.flavorName || d.desktopName,
           imageName: d.imageName,
           useStatusText: d.useStatusText || '空闲',
@@ -396,17 +396,21 @@ export class ProfileManager {
 
   public async operateDesktop(
     accountName: string,
-    desktopId: string,
+    desktopCode: string,
     operation: 'on' | 'shutdown' | 'reset',
   ): Promise<string> {
     const state = this.accountStates.get(accountName);
     const client = this.getClient(accountName);
-    const desktop = state?.desktops.find((item) => item.desktopId === desktopId);
+    const codeStr = String(desktopCode).trim();
+    const desktop = state?.desktops.find((item) => String(item.desktopCode) === codeStr);
     if (!state || !desktop || !client.loginInfo) throw new Error('未找到可操作的云电脑或账号未登录');
+
+    const canonicalDesktopCode = desktop.desktopCode;
+    const requestApiDesktopId = desktop.desktopId;
 
     if (operation === 'shutdown' || operation === 'reset') {
       if (operation === 'shutdown') {
-        this.setManualShutdown(desktopId, true);
+        this.setManualShutdown(canonicalDesktopCode, true);
       }
       this.keepAliveManager.stopWorkers(accountName);
       desktop.status = 'stopped';
@@ -414,7 +418,7 @@ export class ProfileManager {
       desktop.useStatusText = operation === 'shutdown' ? '已关机' : '重启中';
       this.notifyStatusChange();
     } else {
-      this.setManualShutdown(desktopId, false);
+      this.setManualShutdown(canonicalDesktopCode, false);
       desktop.status = 'connecting';
       desktop.useStatusText = '启动中';
       this.notifyStatusChange();
@@ -422,10 +426,10 @@ export class ProfileManager {
 
     try {
       const targetObjType = desktop.objType ?? 0;
-      const message = await client.operateDesktop(desktopId, operation, targetObjType);
+      const message = await client.operateDesktop(requestApiDesktopId, operation, targetObjType);
       this.logger.addLog('info', `[${accountName}] ${message}`);
       // 后台轮询跟踪云电脑电源状态，直至真正开机或关机完成
-      this.trackDesktopStatusAfterPower(accountName, desktopId, operation);
+      this.trackDesktopStatusAfterPower(accountName, canonicalDesktopCode, operation);
       return message;
     } catch (error) {
       desktop.status = 'stopped';
@@ -476,17 +480,17 @@ export class ProfileManager {
   }
 
   /**
-   * 通过全局唯一 desktopId 反查账号与桌面，生成远程桌面免密直连链接（新窗口直接打开官方界面）
+   * 通过全局唯一 desktopCode 反查账号与桌面，生成远程桌面免密直连链接（新窗口直接打开官方界面）
    */
   public async getDesktopDirectUrlByDesktopId(
-    desktopId: string,
+    desktopCode: string,
     accountHint?: string,
   ): Promise<{ url: string; desktopCode?: string; accountName: string }> {
-    if (!desktopId) {
-      throw new Error('缺少全局唯一 desktopId');
+    if (!desktopCode) {
+      throw new Error('缺少全局唯一 desktopCode');
     }
 
-    const dIdStr = String(desktopId).trim();
+    const codeStr = String(desktopCode).trim();
     let matchedAccountName: string | undefined;
     let targetDesktop: ManagedDesktopState | undefined;
 
@@ -494,7 +498,7 @@ export class ProfileManager {
     if (accountHint) {
       const state = this.accountStates.get(accountHint);
       if (state) {
-        const d = state.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+        const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
         if (d) {
           matchedAccountName = state.name;
           targetDesktop = d;
@@ -505,7 +509,7 @@ export class ProfileManager {
     // 2. 全局遍历所有已托管账号的桌面状态进行精准反查
     if (!targetDesktop) {
       for (const [name, state] of this.accountStates.entries()) {
-        const d = state.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+        const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
         if (d) {
           matchedAccountName = name;
           targetDesktop = d;
@@ -520,7 +524,7 @@ export class ProfileManager {
         try {
           await this.reloadDesktops(name);
           const state = this.accountStates.get(name);
-          const d = state?.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+          const d = state?.desktops.find((item) => String(item.desktopCode) === codeStr);
           if (d) {
             matchedAccountName = name;
             targetDesktop = d;
@@ -531,7 +535,7 @@ export class ProfileManager {
     }
 
     if (!matchedAccountName || !targetDesktop) {
-      throw new Error(`未找到 ID 为 [${desktopId}] 的云电脑实例`);
+      throw new Error(`未找到设备编码为 [${desktopCode}] 的云电脑实例`);
     }
 
     const client = this.getClient(matchedAccountName);
@@ -540,21 +544,21 @@ export class ProfileManager {
     }
 
     const token = await client.genLoginToken(300);
-    const desktopCode = targetDesktop.desktopCode || '';
-    const directUrl = desktopCode
-      ? `https://pc.ctyun.cn/#/oauth?token=${encodeURIComponent(token)}&desktopOid=${encodeURIComponent(desktopCode)}`
+    const code = targetDesktop.desktopCode || '';
+    const directUrl = code
+      ? `https://pc.ctyun.cn/#/oauth?token=${encodeURIComponent(token)}&desktopOid=${encodeURIComponent(code)}`
       : `https://pc.ctyun.cn/#/oauth?token=${encodeURIComponent(token)}`;
 
     this.logger.addLog('info', `[${matchedAccountName}] 生成远程桌面免密直连链接成功 (有效期 5 分钟)`);
-    return { url: directUrl, desktopCode, accountName: matchedAccountName };
+    return { url: directUrl, desktopCode: code, accountName: matchedAccountName };
   }
 
   /**
-   * 通过全局唯一 desktopId 反查账号与桌面，并获取推流直连参数
+   * 通过全局唯一 desktopCode 反查账号与桌面，并获取推流直连参数
    * （彻底解决账号重名/改名与同名寻址冲突问题）
    */
   public async getDesktopConnectionParamsByDesktopId(
-    desktopId: string,
+    desktopCode: string,
     accountHint?: string,
   ): Promise<{
     wsHost: string;
@@ -565,11 +569,11 @@ export class ProfileManager {
     desktopName?: string;
     accountName: string;
   }> {
-    if (!desktopId) {
-      throw new Error('缺少全局唯一 desktopId');
+    if (!desktopCode) {
+      throw new Error('缺少全局唯一 desktopCode');
     }
 
-    const dIdStr = String(desktopId).trim();
+    const codeStr = String(desktopCode).trim();
     let matchedAccountName: string | undefined;
     let targetDesktop: ManagedDesktopState | undefined;
 
@@ -577,7 +581,7 @@ export class ProfileManager {
     if (accountHint) {
       const state = this.accountStates.get(accountHint);
       if (state) {
-        const d = state.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+        const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
         if (d) {
           matchedAccountName = state.name;
           targetDesktop = d;
@@ -588,7 +592,7 @@ export class ProfileManager {
     // 2. 全局遍历所有已托管账号的桌面状态进行精准反查
     if (!targetDesktop) {
       for (const [name, state] of this.accountStates.entries()) {
-        const d = state.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+        const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
         if (d) {
           matchedAccountName = name;
           targetDesktop = d;
@@ -603,7 +607,7 @@ export class ProfileManager {
         try {
           await this.reloadDesktops(name);
           const state = this.accountStates.get(name);
-          const d = state?.desktops.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === dIdStr);
+          const d = state?.desktops.find((item) => String(item.desktopCode) === codeStr);
           if (d) {
             matchedAccountName = name;
             targetDesktop = d;
@@ -614,7 +618,7 @@ export class ProfileManager {
     }
 
     if (!matchedAccountName || !targetDesktop) {
-      throw new Error(`全局未找到 ID 为 [${desktopId}] 的云电脑实例`);
+      throw new Error(`全局未找到设备编码为 [${desktopCode}] 的云电脑实例`);
     }
 
     const client = this.getClient(matchedAccountName);
@@ -661,9 +665,9 @@ export class ProfileManager {
       attempts++;
       try {
         const list = await client.getDesktopList();
-        const current = list.find((d) => String(d.desktopId) === String(desktopId));
+        const current = list.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
         const state = this.accountStates.get(accountName);
-        const target = state?.desktops.find((d) => String(d.desktopId) === String(desktopId));
+        const target = state?.desktops.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
 
         if (current && target) {
           target.useStatusText = current.useStatusText;
@@ -1195,7 +1199,18 @@ export class ProfileManager {
     }
 
     const rConf: any = acc.redeemConfig || {};
-    const targetDesktopId = desktopId || rConf.targetDesktopId || this.accountStates.get(accountName)?.desktops?.[0]?.desktopId;
+    let targetDesktopId = desktopId || rConf.targetDesktopId;
+    if (!targetDesktopId) {
+      targetDesktopId = this.accountStates.get(accountName)?.desktops?.[0]?.desktopId;
+    } else {
+      // 兼容支持传入 desktopCode 反查底层数字 desktopId
+      const matched = this.accountStates.get(accountName)?.desktops?.find(
+        (d) => d.desktopCode === targetDesktopId || String(d.desktopId) === String(targetDesktopId),
+      );
+      if (matched) {
+        targetDesktopId = matched.desktopId;
+      }
+    }
     if (!targetDesktopId) {
       throw new Error('名下未找到云电脑实例，无法兑换');
     }
