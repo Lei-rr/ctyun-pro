@@ -23,12 +23,12 @@ _✨ 天翼云电脑多账号极轻量保活 · 智能自动做任务 · 现代�
 </p>
 
 <p align="center">
-  <a href="#-功能说明与特性">功能说明与特性</a> •
-  <a href="#-核心亮点">核心亮点</a> •
-  <a href="#-部署教程">部署教程</a> •
-  <a href="#-配置说明">配置说明</a> •
-  <a href="#-免责声明">免责声明</a> •
-  <a href="#-star-历史趋势">Star 历史趋势</a>
+  <a href="#免责声明">免责声明</a> •
+  <a href="#功能说明与特性">功能说明与特性</a> •
+  <a href="#核心亮点">核心亮点</a> •
+  <a href="#部署教程">部署教程</a> •
+  <a href="#配置说明">配置说明</a> •
+  <a href="#star-历史趋势">Star 历史趋势</a>
 </p>
 
 </div>
@@ -142,9 +142,10 @@ curl -fsSL https://raw.githubusercontent.com/Lei-rr/ctyun-pro/main/install.sh | 
 
 ---
 
-### 方式四：Windows / 独立二进制直接运行
+### 方式四：Windows 桌面原生运行
 
-- **Windows 用户**：前往 [GitHub Releases](https://github.com/Lei-rr/ctyun-pro/releases) 下载 `ctyun-pro-windows-x64.exe`，直接双击运行，打开浏览器访问 `http://127.0.0.1:3088` 即可使用。
+1. 前往 [GitHub Releases](https://github.com/Lei-rr/ctyun-pro/releases) 下载最新版本的 `ctyun-pro-windows-x64.exe`；
+2. 项目已贴心内置一键启动脚本 [`start-windows.bat`](start-windows.bat)：将脚本与 exe 放置于同一目录下，双击 `start-windows.bat` 即可自动完成数据目录初始化、环境配置并在默认浏览器中秒开控制台（`http://127.0.0.1:3088`）。
 
 ---
 
