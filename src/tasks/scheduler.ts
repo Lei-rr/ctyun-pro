@@ -214,17 +214,33 @@ export class TaskScheduler {
               break;
             } catch (e: any) {
               lastRedeemMsg = e.message;
+              // 若官方明确返回积分不足，重试无法解决，直接终止重试，避免刷屏与无谓请求
+              const isInsufficientPoints =
+                lastRedeemMsg.includes('积分不足') ||
+                lastRedeemMsg.includes('点数不足') ||
+                lastRedeemMsg.includes('余额不足');
+              if (isInsufficientPoints) {
+                this.logger.addLog('warn', `[${name}] 自动兑换失败: ${lastRedeemMsg}，无需重试`);
+                break;
+              }
               this.logger.addLog('warn', `[${name}] 第 ${attempt} 次自动兑换未成功: ${e.message}`);
             }
           }
 
           if (!redeemSuccess) {
-            this.logger.addLog('error', `[${name}] 自动兑换失败（重试3次）: ${lastRedeemMsg}`);
+            const isInsufficientPoints =
+              lastRedeemMsg.includes('积分不足') ||
+              lastRedeemMsg.includes('点数不足') ||
+              lastRedeemMsg.includes('余额不足');
+            const failTitle = isInsufficientPoints
+              ? `[${name}] 自动兑换跳过: 积分不足`
+              : `[${name}] 自动兑换失败（重试3次）: ${lastRedeemMsg}`;
+            this.logger.addLog('error', failTitle);
             if (this.accountManager.webhookUrl) {
               sendWebhookNotification(
                 this.accountManager.webhookUrl,
-                `天翼云电脑 - [${name}] 自动兑换失败`,
-                `策略触发: ${reason}\n失败原因: ${lastRedeemMsg}`,
+                `天翼云电脑 - [${name}] 自动兑换未达成`,
+                `策略触发: ${reason}\n原因: ${lastRedeemMsg}`,
               ).catch(() => {});
             }
           }
