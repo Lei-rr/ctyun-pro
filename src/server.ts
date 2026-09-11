@@ -24,6 +24,21 @@ export async function createServer() {
     logger: false,
   });
 
+  // 兼容前端 Content-Type: application/json 但未传 body 导致的 400 错误
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    if (!body || (typeof body === 'string' && body.trim() === '')) {
+      done(null, {});
+      return;
+    }
+    try {
+      const json = JSON.parse(body as string);
+      done(null, json);
+    } catch (err: any) {
+      err.statusCode = 400;
+      done(err, undefined);
+    }
+  });
+
   await fastify.register(cors, {
     origin: true,
   });
@@ -678,6 +693,7 @@ export async function createServer() {
       return reply.code(401).send('Unauthorized');
     }
 
+    reply.hijack();
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
     reply.raw.setHeader('Connection', 'keep-alive');
@@ -686,15 +702,20 @@ export async function createServer() {
     const recent = manager.getRecentLogs();
     reply.raw.write(`data: ${JSON.stringify({ type: 'init', logs: recent })}\n\n`);
 
+    let closed = false;
     const unsubscribe = manager.subscribeLogs((log) => {
-      if (log.message === '__CLEAR__') {
-        reply.raw.write(`data: ${JSON.stringify({ type: 'init', logs: [] })}\n\n`);
-      } else {
-        reply.raw.write(`data: ${JSON.stringify({ type: 'log', log })}\n\n`);
-      }
+      if (closed || reply.raw.writableEnded) return;
+      try {
+        if (log.message === '__CLEAR__') {
+          reply.raw.write(`data: ${JSON.stringify({ type: 'init', logs: [] })}\n\n`);
+        } else {
+          reply.raw.write(`data: ${JSON.stringify({ type: 'log', log })}\n\n`);
+        }
+      } catch {}
     });
 
     request.raw.on('close', () => {
+      closed = true;
       unsubscribe();
     });
   });

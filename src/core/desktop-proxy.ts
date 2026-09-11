@@ -417,6 +417,7 @@ export function registerDesktopProxyRoutes(
   const proxyHandler = async (request: FastifyRequest, reply: FastifyReply) => {
     const req = request.raw;
     const res = reply.raw;
+    reply.hijack();
 
     const parsedUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
     const targetUrl = parsedUrl.searchParams.get('target');

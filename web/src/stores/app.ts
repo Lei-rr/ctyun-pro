@@ -1174,6 +1174,7 @@ export const useAppStore = defineStore('app', () => {
         const res = await fetch('/api/logs/clear', {
           method: 'POST',
           headers: getHeaders(),
+          body: JSON.stringify({}),
         });
         const json = await res.json();
         if (json.success) {
