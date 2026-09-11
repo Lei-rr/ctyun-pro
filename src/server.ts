@@ -507,6 +507,9 @@ export async function createServer() {
     const cachedSmsKey = smsSessionCache.get(name)?.smsKey || '';
     try {
       await client.bindDevice(body.smsCode.trim(), cachedSmsKey);
+      if (acc && client.loginInfo) {
+        acc.loginInfo = client.loginInfo;
+      }
       manager.saveToDisk();
       manager.addLog('success', `[${name}] 设备绑定成功！正在启动保活...`);
       manager.startAccount(name).catch((e) => manager.addLog('error', `[${name}] 启动保活失败: ${e.message}`));

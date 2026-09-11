@@ -842,13 +842,17 @@ export class ProfileManager {
     this.notifyStatusChange();
 
     if (config.loginInfo) {
-      await this.reloadDesktops(name);
-      try {
-        await this.getPointsAndTasks(name);
-      } catch (e: any) {
-        this.logger.addLog('warn', `[${name}] 同步今日积分提示: ${e.message}`);
-      }
-      this.notifyStatusChange();
+      // 异步在后台并行拉取最新云电脑与同步积分，避免阻塞前台 HTTP 登录或更新接口
+      void (async () => {
+        try {
+          await this.reloadDesktops(name);
+          await this.getPointsAndTasks(name);
+        } catch (e: any) {
+          this.logger.addLog('warn', `[${name}] 后台同步提示: ${e.message}`);
+        } finally {
+          this.notifyStatusChange();
+        }
+      })();
     }
   }
 
