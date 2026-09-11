@@ -233,18 +233,30 @@ export const useAppStore = defineStore('app', () => {
             logs.value = (msg.logs || []).slice(-200);
           } else if (msg.type === 'log') {
             const incoming: LogItem = msg.log;
-            const lastItem = logs.value[logs.value.length - 1];
-            // 智能折叠：仅对紧邻的最后一条连续相同心跳执行就地更新计数与时间，保留严格时序轨迹
+            // 智能折叠：在当前末尾连续心跳波次（Block）内寻找同款心跳折叠，遇到业务日志立即打断
             const isHeartbeat = incoming.message && incoming.message.includes('发送客户端活跃心跳');
-            if (
-              isHeartbeat &&
-              lastItem &&
-              (lastItem.id === incoming.id ||
-                (lastItem.message === incoming.message && lastItem.level === incoming.level))
-            ) {
-              lastItem.count = incoming.count || (lastItem.count || 1) + 1;
-              lastItem.time = incoming.time;
-            } else {
+            let found = false;
+            if (isHeartbeat) {
+              for (let i = logs.value.length - 1; i >= 0; i--) {
+                const item = logs.value[i];
+                const itemIsHeartbeat = item.message && item.message.includes('发送客户端活跃心跳');
+                if (!itemIsHeartbeat) {
+                  // 遇到业务/报警日志，停止回溯
+                  break;
+                }
+                if (
+                  item.id === incoming.id ||
+                  (item.message === incoming.message && item.level === incoming.level)
+                ) {
+                  item.count = incoming.count || (item.count || 1) + 1;
+                  item.time = incoming.time;
+                  found = true;
+                  break;
+                }
+              }
+            }
+
+            if (!found) {
               logs.value.push(incoming);
               if (logs.value.length > 200) {
                 logs.value.splice(0, logs.value.length - 200);
