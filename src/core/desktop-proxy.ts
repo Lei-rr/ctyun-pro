@@ -377,16 +377,7 @@ export function registerDesktopProxyRoutes(
     return origOpen.apply(this, [method, url].concat(args));
   };
 
-  // 4. 视网膜高清与高分辨率锁定 (破解官方自适应协商降质算法)
-  try {
-    const rawDpr = window.devicePixelRatio || 1;
-    Object.defineProperty(window, 'devicePixelRatio', {
-      get: function() { return Math.max(rawDpr, 1.25); },
-      configurable: true
-    });
-  } catch (e) {}
-
-  // 5. 跨端双向剪贴板智能中转隧道 (窗口聚焦时静默读取并同步)
+  // 4. 跨端双向剪贴板智能中转隧道 (窗口聚焦时静默读取并同步)
   let lastCopiedText = '';
   async function syncClipboardToRemote() {
     try {
@@ -405,7 +396,7 @@ export function registerDesktopProxyRoutes(
     if (!document.hidden) syncClipboardToRemote();
   });
 
-  // 6. 全局快捷键锁定 (Keyboard Lock API: 拦截并透传 Alt+Tab, Win键, Ctrl+W 等系统快捷键)
+  // 5. 全局快捷键锁定 (Keyboard Lock API: 拦截并透传 Alt+Tab, Win键, Ctrl+W 等系统快捷键)
   async function requestKeyboardLock() {
     try {
       if ('keyboard' in navigator && typeof navigator.keyboard.lock === 'function') {
@@ -429,7 +420,7 @@ export function registerDesktopProxyRoutes(
     }
   }, { once: false });
 
-  // 7. 锁定目标云电脑推流哈希与防登出守卫
+  // 6. 锁定目标云电脑推流哈希与防登出守卫
   const targetHash = '#/desktop?id=' + ${JSON.stringify(encodeURIComponent(b64Id))};
   if (!window.location.hash || window.location.hash.includes('/login') || window.location.hash.includes('/desktop-list')) {
     window.location.hash = targetHash;
@@ -440,7 +431,7 @@ export function registerDesktopProxyRoutes(
     }
   });
 
-  // 8. 重定向 Web Worker 至本地代理通道
+  // 7. 重定向 Web Worker 至本地代理通道
   const OrigWorker = window.Worker;
   window.Worker = function(scriptUrl, options) {
     if (typeof scriptUrl === 'string' && scriptUrl.includes('bbenc.worker.js')) {
@@ -449,7 +440,7 @@ export function registerDesktopProxyRoutes(
     return new OrigWorker(scriptUrl, options);
   };
 
-  // 9. 画面就绪后平滑淡出加载层
+  // 8. 画面就绪后平滑淡出加载层
   const dismissLoader = () => {
     const loader = document.getElementById('ctyun-modern-loader');
     if (loader) {
