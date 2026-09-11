@@ -141,8 +141,9 @@ export function registerDesktopProxyRoutes(
   const renderDesktopView = async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
 
-    const query = request.query as { desktopId?: string };
-    const desktopId = query.desktopId;
+    const params = request.params as { id?: string };
+    const query = request.query as { desktopId?: string; id?: string };
+    const desktopId = params?.id || query.desktopId || query.id;
     if (!desktopId) {
       reply.code(400).type('text/html; charset=utf-8').send('<h3 style="font-family:sans-serif;padding:20px;">缺少云电脑 ID</h3>');
       return;
@@ -393,7 +394,9 @@ export function registerDesktopProxyRoutes(
   };
 
   fastify.get('/view', renderDesktopView);
+  fastify.get('/view/:id', renderDesktopView);
   fastify.get('/desktop-view', renderDesktopView);
+  fastify.get('/desktop-view/:id', renderDesktopView);
 
   // 2. 接收前台 Web 用户活跃心跳 (刷新避让时长 30s)
   fastify.post('/api/instances/:id/web-active', async (request: FastifyRequest, reply: FastifyReply) => {
