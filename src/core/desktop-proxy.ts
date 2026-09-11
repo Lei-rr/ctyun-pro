@@ -197,6 +197,9 @@ export function registerDesktopProxyRoutes(
       // 现代化注入脚本：深色质感骨架屏、凭据自动化注水、API 代理拦截、前台 Web 避让心跳保持
       const injectScript = `
 <style>
+  html, body {
+    background: #09090b !important;
+  }
   #ctyun-modern-loader {
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
@@ -208,7 +211,11 @@ export function registerDesktopProxyRoutes(
     justify-content: center;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     color: #e4e4e7;
-    transition: opacity 0.5s ease;
+    transition: opacity 0.4s ease;
+  }
+  #ctyun-modern-loader.fade-out {
+    opacity: 0;
+    pointer-events: none;
   }
   .c-spinner {
     width: 44px;
@@ -231,7 +238,7 @@ export function registerDesktopProxyRoutes(
 </style>
 <div id="ctyun-modern-loader">
   <div class="c-spinner"></div>
-  <div class="c-text">正在安全接入官方云电脑原生视窗...</div>
+  <div class="c-text">[ CTYUN-PRO ] 正在初始化连接云电脑...</div>
 </div>
 <script>
 (function() {
@@ -440,16 +447,56 @@ export function registerDesktopProxyRoutes(
     return new OrigWorker(scriptUrl, options);
   };
 
-  // 8. 画面就绪后平滑淡出加载层
+  // 8. 智能防穿透黑屏遮罩：严格遮蔽 desktop-list 初始化与握手阶段，无缝直达 desktop 视窗
+  let dismissed = false;
   const dismissLoader = () => {
+    if (dismissed) return;
+    dismissed = true;
     const loader = document.getElementById('ctyun-modern-loader');
     if (loader) {
       loader.classList.add('fade-out');
-      setTimeout(() => loader.remove(), 400);
+      setTimeout(() => {
+        try { loader.remove(); } catch (e) {}
+      }, 500);
     }
   };
-  window.addEventListener('DOMContentLoaded', () => setTimeout(dismissLoader, 1500));
-  setTimeout(dismissLoader, 4000);
+
+  let checkTimer = null;
+  const checkDesktopReady = () => {
+    if (dismissed) return;
+    const hash = window.location.hash || '';
+    // 如果仍在 desktop-list 列表页或登录拦截，绝对不放行遮罩，杜绝列表卡片闪烁
+    if (hash.includes('desktop-list') || hash.includes('/login')) {
+      return;
+    }
+    // 已经进入目标 desktop 视窗路由
+    if (hash.includes('/desktop')) {
+      const hasCanvas = !!document.querySelector('canvas');
+      const hasVideo = !!document.querySelector('video');
+      const hasBall = !!document.querySelector('.touch-ball-wrap, .btn-toolbar-ball-con, [class*="touch-ball"]');
+      if (hasCanvas || hasVideo || hasBall) {
+        if (checkTimer) {
+          clearInterval(checkTimer);
+          checkTimer = null;
+        }
+        // 画布/视频/悬浮球已挂载，平滑淡出，呈现直连视窗
+        setTimeout(dismissLoader, 300);
+      }
+    }
+  };
+
+  // 高频持续检测 (100ms)
+  checkTimer = setInterval(checkDesktopReady, 100);
+  window.addEventListener('hashchange', checkDesktopReady);
+
+  // 15秒安全保底：防止极端异常或未开机时无限黑屏
+  setTimeout(() => {
+    if (checkTimer) {
+      clearInterval(checkTimer);
+      checkTimer = null;
+    }
+    dismissLoader();
+  }, 15000);
 })();
 </script>
 `;
