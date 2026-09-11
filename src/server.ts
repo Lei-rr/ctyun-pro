@@ -104,7 +104,7 @@ export async function createServer() {
   // 校验中间件 (如果设置了 adminPassword)
   const parseCookieToken = (cookieHeader?: string): string => {
     if (!cookieHeader) return '';
-    const match = cookieHeader.match(/(?:^|;\\s*)ctyun_admin_token=([^;]+)/);
+    const match = cookieHeader.match(/(?:^|;\s*)ctyun_admin_token=([^;]+)/);
     return match ? decodeURIComponent(match[1]) : '';
   };
 
@@ -115,7 +115,7 @@ export async function createServer() {
     const token =
       request.headers['x-admin-token'] ||
       (request.query && request.query.token) ||
-      (request.headers.authorization ? request.headers.authorization.replace(/^Bearer\\s+/i, '') : '') ||
+      (request.headers.authorization ? request.headers.authorization.replace(/^Bearer\s+/i, '') : '') ||
       parseCookieToken(request.headers.cookie);
     if (!isValidToken(token as string)) {
       reply.code(401).send({ success: false, msg: '未授权或登录已过期，请重新登录' });

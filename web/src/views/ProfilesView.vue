@@ -99,6 +99,12 @@ async function openDirectDesktop(desktopCode: string) {
   try {
     // 顶级 RESTful 直连视窗 (标准 /desktop/:desktopCode 直连推流，符合全局 Desktops 架构标准)
     // 采用浏览器同源 Cookie 鉴权，地址栏严禁泄露 Token
+    const adminToken = store.adminToken || localStorage.getItem('ctyun_admin_token') || '';
+    if (adminToken) {
+      try {
+        document.cookie = `ctyun_admin_token=${encodeURIComponent(adminToken)}; path=/; max-age=${30 * 24 * 3600}; SameSite=Lax`;
+      } catch (e) {}
+    }
     const url = `/desktop/${encodeURIComponent(desktopCode)}`;
     const win = window.open(url, '_blank');
     if (!win) {

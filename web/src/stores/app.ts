@@ -118,6 +118,10 @@ export const useAppStore = defineStore('app', () => {
       if (!json.success) throw new Error(json.msg || '密码错误');
       adminToken.value = json.token;
       localStorage.setItem('ctyun_admin_token', json.token);
+      // 显式写入客户端同源 Cookie，保障新标签页直连与子页面始终能获取同源凭证 (30天长效)
+      try {
+        document.cookie = `ctyun_admin_token=${encodeURIComponent(json.token)}; path=/; max-age=${30 * 24 * 3600}; SameSite=Lax`;
+      } catch (e) {}
       adminPasswordInput.value = '';
       toast.success('登录成功');
       connectWebSocket();
@@ -135,6 +139,9 @@ export const useAppStore = defineStore('app', () => {
   function adminLogout() {
     adminToken.value = '';
     localStorage.removeItem('ctyun_admin_token');
+    try {
+      document.cookie = 'ctyun_admin_token=; path=/; max-age=0; SameSite=Lax';
+    } catch (e) {}
     disconnectWebSocket();
     accounts.value = [];
     toast.info('已退出登录或登录已过期，请重新登录');
