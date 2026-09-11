@@ -242,6 +242,25 @@ export function registerDesktopProxyRoutes(
   const deviceCode = ${JSON.stringify(client.getDeviceCode())};
   const expiredAt = ${JSON.stringify(String(Date.now() + 72 * 3600 * 1000))};
 
+  // 动态锁定并维持自定义标题：原有标题 + " - CTYUN-PRO"
+  const origOfficialTitle = '天翼量子AI云电脑';
+  const targetTitle = origOfficialTitle + ' - CTYUN-PRO';
+  document.title = targetTitle;
+
+  // 监控官方 SPA 路由动态篡改标题，持续锁定
+  try {
+    const titleEl = document.querySelector('title');
+    if (titleEl) {
+      titleEl.textContent = targetTitle;
+      const obs = new MutationObserver(() => {
+        if (document.title !== targetTitle) {
+          document.title = targetTitle;
+        }
+      });
+      obs.observe(titleEl, { childList: true, characterData: true, subtree: true });
+    }
+  } catch (e) {}
+
   // 0. 禁用 WebTransport，强制天翼云平滑降级至稳定的原生 WebSocket 通道 (消除 WebTransportError)
   try {
     delete window.WebTransport;
@@ -444,7 +463,7 @@ export function registerDesktopProxyRoutes(
 </script>
 `;
 
-      html = html.replace('<head>', `<head><title>CTYUN-PRO · ${desktopDisplayName}</title>${injectScript}`);
+      html = html.replace('<head>', `<head><title>天翼量子AI云电脑 - CTYUN-PRO</title>${injectScript}`);
       html = html.replace(/src="static\//g, 'src="/ctyun-static/static/');
       html = html.replace(/src="\.\/static\//g, 'src="/ctyun-static/static/');
       html = html.replace(/href="\.\/static\//g, 'href="/ctyun-static/static/');
