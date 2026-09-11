@@ -48,22 +48,18 @@ onMounted(() => {
            store.logs = (data.logs || []).slice(-200);
         } else if (data.type === 'log') {
           const incoming = data.log;
-          let found = false;
-          const searchLimit = Math.max(0, store.logs.length - 10);
-          for (let i = store.logs.length - 1; i >= searchLimit; i--) {
-            const item = store.logs[i];
-            if (item.id === incoming.id || (item.message === incoming.message && item.level === incoming.level)) {
-              item.count = incoming.count || (item.count || 1) + 1;
-              item.time = incoming.time;
-              if (i !== store.logs.length - 1) {
-                store.logs.splice(i, 1);
-                store.logs.push(item);
-              }
-              found = true;
-              break;
-            }
-          }
-          if (!found) {
+          const lastItem = store.logs[store.logs.length - 1];
+          // 智能折叠：仅对紧邻的最后一条连续相同心跳执行就地更新计数与时间，保留严格时序轨迹
+          const isHeartbeat = incoming.message && incoming.message.includes('发送客户端活跃心跳');
+          if (
+            isHeartbeat &&
+            lastItem &&
+            (lastItem.id === incoming.id ||
+              (lastItem.message === incoming.message && lastItem.level === incoming.level))
+          ) {
+            lastItem.count = incoming.count || (lastItem.count || 1) + 1;
+            lastItem.time = incoming.time;
+          } else {
             store.logs.push(incoming);
             if (store.logs.length > 200) store.logs.splice(0, store.logs.length - 200);
           }
