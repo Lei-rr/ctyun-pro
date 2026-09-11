@@ -19,17 +19,25 @@ export class Logger {
   }
 
   public addLog(level: 'info' | 'warn' | 'error' | 'success', message: string): void {
-    // 智能折叠：仅对紧邻的最后一条连续相同心跳执行就地折叠累加与时间更新，保留严格时序轨迹
+    // 智能折叠：在当前连续心跳波次（Block）内寻找同账号/同级别心跳折叠；一旦遇到非心跳业务日志立即打断，绝不跨事件回溯
     const isHeartbeat = message.includes('发送客户端活跃心跳');
-    const lastItem = this.logs[this.logs.length - 1];
-
-    if (isHeartbeat && lastItem && lastItem.level === level && lastItem.message === message) {
-      lastItem.count = (lastItem.count || 1) + 1;
-      lastItem.time = Logger.formatCstTime();
-      for (const listener of this.listeners) {
-        listener({ ...lastItem });
+    if (isHeartbeat) {
+      for (let i = this.logs.length - 1; i >= 0; i--) {
+        const item = this.logs[i];
+        const itemIsHeartbeat = item.message && item.message.includes('发送客户端活跃心跳');
+        if (!itemIsHeartbeat) {
+          // 遇到业务/报警日志，打断回溯，保证前后周期严格隔离
+          break;
+        }
+        if (item.level === level && item.message === message) {
+          item.count = (item.count || 1) + 1;
+          item.time = Logger.formatCstTime();
+          for (const listener of this.listeners) {
+            listener({ ...item });
+          }
+          return;
+        }
       }
-      return;
     }
 
     const item: LogItem = {
