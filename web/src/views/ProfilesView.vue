@@ -98,8 +98,8 @@ async function openDirectDesktop(desktopCode: string) {
   directUrlLoading.value = desktopCode;
   try {
     // 顶级 RESTful 直连视窗 (标准 /desktop/:desktopCode 直连推流，符合全局 Desktops 架构标准)
-    const adminToken = store.adminToken || localStorage.getItem('ctyun_admin_token') || '';
-    const url = `/desktop/${encodeURIComponent(desktopCode)}${adminToken ? `?token=${encodeURIComponent(adminToken)}` : ''}`;
+    // 采用浏览器同源 Cookie 鉴权，地址栏严禁泄露 Token
+    const url = `/desktop/${encodeURIComponent(desktopCode)}`;
     const win = window.open(url, '_blank');
     if (!win) {
       toast.error('直连视窗被浏览器拦截，请在地址栏允许弹出窗口');
