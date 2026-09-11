@@ -1,6 +1,6 @@
 {
   "name": "ctyun-pro",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "天翼云电脑多账号集中管理与自动做任务保活运维系统 (纯协议版)",
   "type": "module",
   "workspaces": [
