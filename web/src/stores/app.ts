@@ -234,19 +234,23 @@ export const useAppStore = defineStore('app', () => {
           } else if (msg.type === 'log') {
             const incoming: LogItem = msg.log;
             let found = false;
-            const searchLimit = Math.max(0, logs.value.length - 10);
-            for (let i = logs.value.length - 1; i >= searchLimit; i--) {
-              const item = logs.value[i];
-              if (item.id === incoming.id || (item.message === incoming.message && item.level === incoming.level)) {
-                item.count = incoming.count || (item.count || 1) + 1;
-                item.time = incoming.time;
-                // 将被刷新的日志上浮移动到列表最底部
-                if (i !== logs.value.length - 1) {
-                  logs.value.splice(i, 1);
-                  logs.value.push(item);
+            // 智能折叠：仅对心跳日志执行折叠置底防刷屏，其他业务与报警日志严格独立记录以保证排查透明
+            const isHeartbeat = incoming.message && incoming.message.includes('发送客户端活跃心跳');
+            if (isHeartbeat) {
+              const searchLimit = Math.max(0, logs.value.length - 10);
+              for (let i = logs.value.length - 1; i >= searchLimit; i--) {
+                const item = logs.value[i];
+                if (item.id === incoming.id || (item.message === incoming.message && item.level === incoming.level)) {
+                  item.count = incoming.count || (item.count || 1) + 1;
+                  item.time = incoming.time;
+                  // 将被刷新的日志上浮移动到列表最底部
+                  if (i !== logs.value.length - 1) {
+                    logs.value.splice(i, 1);
+                    logs.value.push(item);
+                  }
+                  found = true;
+                  break;
                 }
-                found = true;
-                break;
               }
             }
             if (!found) {

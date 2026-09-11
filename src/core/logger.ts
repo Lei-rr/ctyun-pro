@@ -19,22 +19,25 @@ export class Logger {
   }
 
   public addLog(level: 'info' | 'warn' | 'error' | 'success', message: string): void {
-    // 智能折叠：在最近 10 条日志中查找相同内容与级别的记录
-    const searchLimit = Math.max(0, this.logs.length - 10);
-    for (let i = this.logs.length - 1; i >= searchLimit; i--) {
-      const item = this.logs[i];
-      if (item.level === level && item.message === message) {
-        item.count = (item.count || 1) + 1;
-        item.time = Logger.formatCstTime();
-        // 如果不是最后一条，移至末尾，保证最新活动的一条始终排在最底部！
-        if (i !== this.logs.length - 1) {
-          this.logs.splice(i, 1);
-          this.logs.push(item);
+    // 智能折叠：仅对心跳日志执行折叠置底防刷屏，其他业务与报警日志严格独立记录以保证排查透明
+    const isHeartbeat = message.includes('发送客户端活跃心跳');
+    if (isHeartbeat) {
+      const searchLimit = Math.max(0, this.logs.length - 10);
+      for (let i = this.logs.length - 1; i >= searchLimit; i--) {
+        const item = this.logs[i];
+        if (item.level === level && item.message === message) {
+          item.count = (item.count || 1) + 1;
+          item.time = Logger.formatCstTime();
+          // 如果不是最后一条，移至末尾，保证最新活动的一条始终排在最底部！
+          if (i !== this.logs.length - 1) {
+            this.logs.splice(i, 1);
+            this.logs.push(item);
+          }
+          for (const listener of this.listeners) {
+            listener({ ...item });
+          }
+          return;
         }
-        for (const listener of this.listeners) {
-          listener({ ...item });
-        }
-        return;
       }
     }
 
