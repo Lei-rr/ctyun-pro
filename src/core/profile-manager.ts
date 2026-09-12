@@ -180,16 +180,22 @@ export class ProfileManager {
     return acc;
   }
 
+  /**
+   * 账号对外脱敏只读视图 (完全深拷贝隔离内部引用，杜绝污染与凭证泄露)
+   */
   public sanitizeAccount(accountOrState: any): any {
     if (!accountOrState) return accountOrState;
-    const clone = { ...accountOrState };
+    let clone: any;
+    try {
+      clone = structuredClone(accountOrState);
+    } catch {
+      clone = JSON.parse(JSON.stringify(accountOrState));
+    }
     if (clone.loginInfo) {
-      const sanitized: any = { ...clone.loginInfo };
-      delete sanitized.secretKey;
-      delete sanitized.clientKey;
-      delete sanitized.caCert;
-      delete sanitized.clientCert;
-      clone.loginInfo = sanitized;
+      delete clone.loginInfo.secretKey;
+      delete clone.loginInfo.clientKey;
+      delete clone.loginInfo.caCert;
+      delete clone.loginInfo.clientCert;
     }
     return clone;
   }

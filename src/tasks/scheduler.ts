@@ -3,6 +3,7 @@ import type { Logger } from '../core/logger.js';
 import { TaskRunner } from './task-runner.js';
 import { RedeemTask } from './redeem.js';
 import { HangTask } from './hang.js';
+import { SignTask, isHangTaskName } from './sign.js';
 import { sendWebhookNotification } from '../core/utils.js';
 import type { ProfileManager } from '../core/profile-manager.js';
 
@@ -203,7 +204,7 @@ export class TaskScheduler {
           if (Date.now() - lastWatchdog >= WATCHDOG_COOLDOWN_MS) {
             const cached = this.accountManager.getCachedTodayPoints(name);
             const hangTask = cached?.summary?.tasks?.find(
-              (t: any) => t.name.includes('使用1小时') || t.name.includes('使用') || t.name.includes('云电脑') || t.name.includes('体验') || t.name.includes('时长'),
+              (t: any) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress),
             );
             if (hangTask && !hangTask.isCompleted && (hangTask.currentProgress || 0) < (hangTask.totalProgress || 3600)) {
               const cur = hangTask.currentProgress || 0;
@@ -369,7 +370,7 @@ export class TaskScheduler {
             const sum = await this.accountManager.getPointsAndTasks(name);
             const total = (sum.generalPoints || 0) + (sum.phonePoints || 0);
             totalGeneral += total;
-            const hangTask = sum.tasks.find((t) => t.name.includes('使用1小时') || t.name.includes('使用') || t.name.includes('云电脑') || t.name.includes('体验') || t.name.includes('时长'));
+            const hangTask = sum.tasks.find((t) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress));
             const hangStatusText = hangTask?.isCompleted ? '已达标(100分)' : `${hangTask?.currentProgress || 0}秒`;
             pointInfo = `总积分: ${total} | 挂机: ${hangStatusText}`;
           } catch {

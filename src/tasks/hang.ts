@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { Protocol } from '../core/protocol.js';
 import type { CtYunClient, Desktop, DesktopInfo } from '../core/client.js';
 import type { Logger } from '../core/logger.js';
-import { SignTask } from './sign.js';
+import { SignTask, isHangTaskName } from './sign.js';
 
 export interface HangTaskSession {
   accountName: string;
@@ -175,7 +175,7 @@ export class HangTask {
     let totalProgress = 3600;
     try {
       const summary = await SignTask.getPointsAndTasks(client);
-      const hangTask = summary.tasks.find((t: any) => t.name.includes('使用1小时') || t.name.includes('使用') || t.name.includes('云电脑') || t.name.includes('体验') || t.name.includes('时长'));
+      const hangTask = summary.tasks.find((t: any) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress));
       if (hangTask) {
         currentProgress = hangTask.currentProgress || 0;
         totalProgress = hangTask.totalProgress || 3600;
@@ -400,7 +400,7 @@ export class HangTask {
                       try {
                         await new Promise((r) => setTimeout(r, 3000));
                         const summary = await SignTask.getPointsAndTasks(client);
-                        const t = summary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用') || item.name.includes('云电脑') || item.name.includes('体验') || item.name.includes('时长'));
+                        const t = summary.tasks.find((item: any) => item.type === 'hang' || isHangTaskName(item.name, item.totalProgress));
                         const cloudProgress = t?.currentProgress || 0;
                         const isDone = Boolean(t && (t.isCompleted || (t as any).status === 2 || cloudProgress >= totalProgress));
 
@@ -412,7 +412,7 @@ export class HangTask {
                           await new Promise((r) => setTimeout(r, 3000));
                           try {
                             const secondSummary = await SignTask.getPointsAndTasks(client);
-                            const t2 = secondSummary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用') || item.name.includes('云电脑') || item.name.includes('体验') || item.name.includes('时长'));
+                            const t2 = secondSummary.tasks.find((item: any) => item.type === 'hang' || isHangTaskName(item.name, item.totalProgress));
                             const cloudProgress2 = t2?.currentProgress || 0;
                             const isDone2 = Boolean(t2 && (t2.isCompleted || (t2 as any).status === 2 || cloudProgress2 >= totalProgress));
                             if (isDone2) {
@@ -461,7 +461,7 @@ export class HangTask {
           await new Promise((r) => setTimeout(r, 3000));
           try {
             const summary = await SignTask.getPointsAndTasks(client);
-            const t = summary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用') || item.name.includes('云电脑') || item.name.includes('体验') || item.name.includes('时长'));
+            const t = summary.tasks.find((item: any) => item.type === 'hang' || isHangTaskName(item.name, item.totalProgress));
             const cloudProgress = t?.currentProgress || 0;
             const isDone = Boolean(t && (t.isCompleted || (t as any).status === 2 || cloudProgress >= totalProgress));
 

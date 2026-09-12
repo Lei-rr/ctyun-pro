@@ -16,10 +16,14 @@ async function main() {
   try {
     await server.listen({ port, host });
     console.log(`\n======================================================`);
-    console.log(`🚀 天翼云电脑智能保活管理系统 (CtYun) 已就绪！`);
-    console.log(`📡 服务地址: http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`);
-    console.log(`📁 数据目录: ${Config.dataDir}`);
-    console.log(`✨ 免 OCR 人工直连 | 纯协议保活 | 现代化 Web 控制台`);
+    console.log(`天翼云电脑智能保活管理系统 (CtYun) 已就绪！`);
+    console.log(`服务地址: http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`);
+    console.log(`数据目录: ${Config.dataDir}`);
+    const manager = (server as any).manager;
+    if (manager && !manager.adminPassword) {
+      console.log(`[安全提示] 当前为免密访问模式，建议尽快在 Web 控制台「系统设置」中设置管理密码以保障安全。`);
+    }
+    console.log(`免 OCR 人工直连 | 纯协议保活 | 现代化 Web 控制台`);
     console.log(`======================================================\n`);
   } catch (err: any) {
     console.error('启动服务失败:', err.message);

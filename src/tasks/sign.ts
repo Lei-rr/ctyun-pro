@@ -1,7 +1,24 @@
 import type { CtYunClient } from '../core/client.js';
 import { safeFetch } from '../core/utils.js';
 
+export type TaskType = 'hang' | 'login' | 'chat' | 'other';
+
+export function getTaskType(name: string, totalProgress = 0): TaskType {
+  const n = name || '';
+  if (n.includes('登录')) return 'login';
+  if (n.includes('对话') || n.includes('AI') && !n.includes('云电脑')) return 'chat';
+  if (totalProgress >= 60 || n.includes('使用1小时') || ((n.includes('使用') || n.includes('体验') || n.includes('时长') || n.includes('挂机')) && !n.includes('登录'))) {
+    return 'hang';
+  }
+  return 'other';
+}
+
+export function isHangTaskName(name: string, totalProgress = 0): boolean {
+  return getTaskType(name, totalProgress) === 'hang';
+}
+
 export interface TaskItem {
+  type: TaskType;
   name: string;
   desc: string;
   rewardPoints: number;
@@ -158,15 +175,18 @@ export class SignTask {
             const cur = Number(t.currentProgress || 0);
             const tot = Number(t.totalProgress || 1);
             const reward = Number(t.pointsList?.[0]?.value || 100);
-            // 仅对挂机类任务 (tot >= 60 或名称含「使用」) 给予 5 秒冗余容错
-            // 普通计数类任务 (如「与AI对话1次」tot=1) 必须严格满足 cur >= tot 或官方 status === 2
-            const isHangTask = tot >= 60 || (t.taskDefName || '').includes('使用') || (t.taskDefName || '').includes('云电脑') || (t.taskDefName || '').includes('体验') || (t.taskDefName || '').includes('时长');
+            const taskName = t.taskDefName || '任务';
+            const taskType = getTaskType(taskName, tot);
+            // 仅对挂机类任务给予 5 秒冗余容错
+            // 普通计数类任务 (如「与AI对话1次」「登录AI云电脑」tot=1) 必须严格满足 cur >= tot 或官方 status === 2
+            const isHangTask = taskType === 'hang';
             const isCompleted = isHangTask
               ? (tot > 0 && cur >= Math.max(0, tot - 5)) || t.status === 2 || t.status === '2'
               : (tot > 0 && cur >= tot) || t.status === 2 || t.status === '2';
 
             tasks.push({
-              name: t.taskDefName || '任务',
+              type: taskType,
+              name: taskName,
               desc: t.taskDesc || '',
               rewardPoints: reward,
               currentProgress: cur,
