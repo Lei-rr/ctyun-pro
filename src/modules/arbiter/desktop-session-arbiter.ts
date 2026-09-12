@@ -156,6 +156,21 @@ export class DesktopSessionArbiter extends EventEmitter {
   }
 
   /**
+   * 获取系统中所有正在活跃中的租约快照
+   */
+  public getActiveLeases(): Record<string, { purpose: LeasePurpose; ownerId: string; acquiredAt: number }> {
+    const result: Record<string, { purpose: LeasePurpose; ownerId: string; acquiredAt: number }> = {};
+    for (const [key, val] of this.activeLeases.entries()) {
+      result[key] = {
+        purpose: val.purpose,
+        ownerId: val.ownerId,
+        acquiredAt: val.acquiredAt,
+      };
+    }
+    return result;
+  }
+
+  /**
    * 判定指定桌面当前是否正处于挂机或前台直连
    */
   public isBusy(desktopId: string): boolean {

@@ -12,8 +12,9 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { WebSocketServer, WebSocket } from 'ws';
 import QRCode from 'qrcode';
-import { Config } from './config.js';
+import { Config, getRandomScheduleTime } from './config.js';
 import { AccountManager } from './core/index.js';
+import { DesktopSessionArbiter } from './modules/arbiter/index.js';
 import { CtYunClient, type ChallengeData } from './core/client.js';
 import { safeWriteFileSync, sendWebhookNotification } from './core/utils.js';
 import { EMBEDDED_WEB_FILES } from './embedded-web.js';
@@ -205,7 +206,17 @@ export async function createServer() {
         webhookUrl: manager.webhookUrl,
         keepAliveSeconds: manager.keepAliveSeconds,
         accounts: manager.getAccountsSummary(),
+        leases: DesktopSessionArbiter.getInstance().getActiveLeases(),
       },
+    };
+  });
+
+  // 1.0 查询全局桌面租约状态 (仲裁器)
+  fastify.get('/api/arbiter/leases', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    return {
+      success: true,
+      data: DesktopSessionArbiter.getInstance().getActiveLeases(),
     };
   });
 
@@ -296,7 +307,7 @@ export async function createServer() {
       password: body.password || '',
       autoSign: body.autoSign !== false,
       autoStart: body.autoStart !== false,
-      taskConfig: body.taskConfig || { enabled: true, scheduleTime: '08:00', autoHang: true, autoAiChat: true },
+      taskConfig: body.taskConfig || { enabled: true, scheduleTime: getRandomScheduleTime(), autoHang: true, autoAiChat: true },
       redeemConfig: body.redeemConfig || { enabled: true, targetReward: '1G数据盘-4天', fallbackDays: 4 },
     });
     manager.addLog('info', `[${name}] 档案已创建`);

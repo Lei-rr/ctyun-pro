@@ -4,10 +4,12 @@ import { Config, getRandomScheduleTime, DEFAULT_REDEEM_CONFIG, type AccountConfi
 import { CtYunClient, type Desktop, type DesktopInfo, type LoginInfo } from './client.js';
 import { KeepAliveManager, type ManagedDesktopState } from '../modules/keepalive/index.js';
 import { Logger, type LogItem } from './logger.js';
-import { TaskScheduler } from '../modules/strategy/index.js';
-import { TaskRunner, SignTask, isHangTaskName, HangTask, AiChatTask, type PointsSummary } from '../modules/task/index.js';
-import { RedeemTask, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../modules/reward/index.js';
+import { TaskScheduler, StrategyService } from '../modules/strategy/index.js';
+import { TaskRunner, SignTask, isHangTaskName, HangTask, AiChatTask, TaskStrategyService, type PointsSummary } from '../modules/task/index.js';
+import { RedeemTask, RewardRedeemService, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../modules/reward/index.js';
 import { DesktopSessionArbiter } from '../modules/arbiter/desktop-session-arbiter.js';
+import { AccountService } from '../modules/account/index.js';
+import { KeepaliveService } from '../modules/keepalive/index.js';
 import { safeWriteFileSync, sendWebhookNotification, getCstDateString } from './utils.js';
 
 export interface ManagedAccount {
@@ -43,6 +45,8 @@ export class ProfileManager {
   private logger: Logger = new Logger();
   private keepAliveManager: KeepAliveManager;
   private taskScheduler: TaskScheduler;
+  private taskStrategyService: TaskStrategyService;
+  private keepaliveService: KeepaliveService;
   private statusListeners: Set<() => void> = new Set();
 
   public keepAliveSeconds = 60;
@@ -58,6 +62,8 @@ export class ProfileManager {
   constructor() {
     this.keepAliveManager = new KeepAliveManager(this.logger, () => this.notifyStatusChange());
     this.taskScheduler = new TaskScheduler(this, this.logger);
+    this.taskStrategyService = new TaskStrategyService(this.logger);
+    this.keepaliveService = new KeepaliveService(this.logger);
     this.loadFromDisk();
     this.taskScheduler.start();
   }
@@ -103,9 +109,11 @@ export class ProfileManager {
     this.keepAliveManager.touchWebUserActive(matchedAccount, desktopCode, durationSec);
     // 仲裁器注册 Web 直连高优先级租约，驱逐所有后台长连接
     const arbiter = DesktopSessionArbiter.getInstance();
-    arbiter.acquireLease(desktopCode, 'web_direct', matchedAccount, async () => {}).catch(() => {});
+    arbiter.acquireLease(desktopCode, 'web_direct', matchedAccount, async () => {
+      // 租约过期回调：无特殊释放操作
+    }).catch(() => {});
     // 协同让位：若该账号正在执行后台纯协议挂机，立即主动中止挂机释放推流信道，彻底防止双端互踢冲突
-    HangTask.stopHang(matchedAccount).catch(() => {});
+    this.taskStrategyService.stopHang(matchedAccount).catch(() => {});
   }
 
   public releaseWebUserActive(accountName: string, desktopCode: string): void {
@@ -189,20 +197,7 @@ export class ProfileManager {
    * 账号对外脱敏只读视图 (完全深拷贝隔离内部引用，杜绝污染与凭证泄露)
    */
   public sanitizeAccount(accountOrState: any): any {
-    if (!accountOrState) return accountOrState;
-    let clone: any;
-    try {
-      clone = structuredClone(accountOrState);
-    } catch {
-      clone = JSON.parse(JSON.stringify(accountOrState));
-    }
-    if (clone.loginInfo) {
-      delete clone.loginInfo.secretKey;
-      delete clone.loginInfo.clientKey;
-      delete clone.loginInfo.caCert;
-      delete clone.loginInfo.clientCert;
-    }
-    return clone;
+    return AccountService.sanitizeAccount(accountOrState);
   }
 
   public getAccountState(keyOrId: string): ManagedAccount | undefined {
@@ -379,6 +374,7 @@ export class ProfileManager {
     this.taskScheduler.stop();
     this.keepAliveManager.stopAll();
     await HangTask.destroy();
+    DesktopSessionArbiter.getInstance().clearAll();
     this.saveToDisk();
   }
 
@@ -437,13 +433,19 @@ export class ProfileManager {
     desktopId?: string,
   ): Promise<{ url: string; desktopCode?: string }> {
     const state = this.accountStates.get(accountName);
+    if (state && desktopId) {
+      const d = state.desktops.find((item) => item.desktopId === desktopId || item.desktopCode === desktopId);
+      if (d?.desktopCode) {
+        return this.getDesktopDirectUrlByDesktopId(d.desktopCode, accountName);
+      }
+    }
     const client = this.getClient(accountName);
     if (!state || !client || !client.loginInfo) {
       throw new Error('未找到该账号或账号未登录');
     }
 
     let targetDesktop = desktopId
-      ? state.desktops.find((item) => item.desktopId === desktopId)
+      ? state.desktops.find((item) => item.desktopId === desktopId || item.desktopCode === desktopId)
       : state.desktops[0];
 
     // 如果还没有加载过云电脑列表，则刷新一次
@@ -452,11 +454,15 @@ export class ProfileManager {
         await this.reloadDesktops(accountName);
         const updatedState = this.accountStates.get(accountName);
         targetDesktop = desktopId
-          ? updatedState?.desktops.find((item) => item.desktopId === desktopId)
+          ? updatedState?.desktops.find((item) => item.desktopId === desktopId || item.desktopCode === desktopId)
           : updatedState?.desktops[0];
       } catch (err: any) {
         this.logger.addLog('warn', `[${accountName}] 刷新云电脑列表失败: ${err.message}`);
       }
+    }
+
+    if (targetDesktop?.desktopCode) {
+      return this.getDesktopDirectUrlByDesktopId(targetDesktop.desktopCode, accountName);
     }
 
     const token = await client.genLoginToken(300);
@@ -1031,7 +1037,7 @@ export class ProfileManager {
             } catch {}
           }
 
-          hangResult = await HangTask.executeSmartHang(accountName, client, this.logger, (cur, tot) => {
+          hangResult = await this.taskStrategyService.executeHang(accountName, client, (cur, tot) => {
             const curState = this.accountStates.get(accountName);
             // 只要达到目标秒数，毫秒级就地清理 hangStatus 并广播，绝不在界面留存 3600/3600 滞留卡片
             if (cur >= tot && curState?.hangStatus) {
@@ -1120,7 +1126,7 @@ export class ProfileManager {
     const client = this.getClient(accountName);
     if (!acc || !client) throw new Error(`未找到账号: ${accountName}`);
 
-    await HangTask.stopHang(accountName);
+    await this.taskStrategyService.stopHang(accountName);
     this.logger.addLog('info', `[${accountName}] 用户已手动中止挂机任务，正在恢复正常保活...`);
 
     const state = this.accountStates.get(accountName);
@@ -1154,7 +1160,7 @@ export class ProfileManager {
     if (!acc || !client.loginInfo) {
       throw new Error('账号未登录，无法签到');
     }
-    const res = await SignTask.signIn(client);
+    const res = await this.taskStrategyService.executeSign(client);
     const today = getCstDateString();
     acc.lastSignDate = today;
     const state = this.accountStates.get(accountName);
@@ -1190,7 +1196,7 @@ export class ProfileManager {
     if (!acc || !client.loginInfo) {
       throw new Error('账号未登录，无法执行AI对话');
     }
-    const res = await AiChatTask.execute(client);
+    const res = await this.taskStrategyService.executeAiChat(client);
     this.logger.addLog('success', `[${accountName}] AI对话: ${res.message}`);
     setTimeout(() => {
       this.getPointsAndTasks(accountName)
@@ -1236,7 +1242,7 @@ export class ProfileManager {
       }
     }
 
-    const res = await RedeemTask.placeOrder(
+    const res = await RewardRedeemService.placeOrder(
       client,
       targetDesktopId,
       prodId || rConf.targetProdId,
@@ -1260,16 +1266,15 @@ export class ProfileManager {
     if (targetAccount && (forceRefresh || !this.rewardsCache || this.rewardsCache.length === 0)) {
       try {
         const client = this.getClient(targetAccount);
-        const items = await RedeemTask.getAvailableRewards(client);
-        if (items && items.length > 0) {
-          this.rewardsCache = items;
-          this.saveToDisk();
-          return items;
+        if (client && client.loginInfo) {
+          const fetched = await RewardRedeemService.getAvailableRewards(client);
+          if (fetched && fetched.length > 0) {
+            this.rewardsCache = fetched;
+            safeWriteFileSync(Config.rewardsFile, JSON.stringify(this.rewardsCache, null, 2));
+          }
         }
-      } catch (e: any) {
-        if (forceRefresh) {
-          this.logger.addLog('warn', `[${targetAccount}] 拉取官方商品列表失败: ${e.message}，使用缓存商品`);
-        }
+      } catch (err: any) {
+        this.logger.addLog('warn', `获取在线积分商品列表失败，回退使用本地缓存: ${err.message}`);
       }
     }
     // 若没有缓存则返回本地预设
