@@ -1269,6 +1269,25 @@ export class ProfileManager {
     if (state) {
       state.todayPoints = todayEarned;
     }
+
+    // 智能同步日常任务完成状态：若官方显示所有日常任务均已达成，同步标记 lastRunDate 防止调度器误判补跑
+    const acc = this.accounts.get(accountName);
+    if (acc && acc.taskConfig) {
+      const chatTask = summary.tasks.find((t) => t.type === 'chat');
+      const loginTask = summary.tasks.find((t) => t.type === 'login');
+      const hangTask = summary.tasks.find((t) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress));
+
+      const isChatDone = !chatTask || chatTask.isCompleted || (chatTask.totalProgress > 0 && chatTask.currentProgress >= chatTask.totalProgress);
+      const isLoginDone = !loginTask || loginTask.isCompleted || (loginTask.totalProgress > 0 && loginTask.currentProgress >= loginTask.totalProgress);
+      const isHangDone = !hangTask || hangTask.isCompleted || (hangTask.totalProgress > 0 && hangTask.currentProgress >= hangTask.totalProgress);
+
+      if (isChatDone && isLoginDone && isHangDone && acc.taskConfig.lastRunDate !== todayStr) {
+        acc.taskConfig.lastRunDate = todayStr;
+        acc.lastSignDate = todayStr;
+        this.saveToDisk();
+      }
+    }
+
     return summary;
   }
 
