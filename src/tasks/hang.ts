@@ -419,14 +419,36 @@ export class HangTask {
           } catch {}
         });
 
-        ws.on('close', (code, reason) => {
+        ws.on('close', async (code, reason) => {
           const reasonStr = reason?.toString() || '';
           if (isTerminated) return;
           if (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) {
             logger.addLog('warn', `[${accountName}] 网关通知桌面被真实客户端接入，纯协议任务主动让位`);
             resolve({ success: true, message: '客户端主动接入，任务让位' });
-          } else {
-            resolve({ success: false, message: `网络连接关闭 (Code: ${code})` });
+            return;
+          }
+
+          logger.addLog('warn', `[${accountName}] 挂机连接异常关闭 (${code}, ${reasonStr || '网络连接关闭'})，正在核验已结算时长...`);
+          await cleanup();
+
+          // 等待 3 秒让天翼云完成离线会话结算
+          await new Promise((r) => setTimeout(r, 3000));
+          try {
+            const summary = await SignTask.getPointsAndTasks(client);
+            const t = summary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用'));
+            const cloudProgress = t?.currentProgress || 0;
+            const isDone = Boolean(t && (t.isCompleted || (t as any).status === 2 || cloudProgress >= totalProgress));
+
+            if (isDone) {
+              logger.addLog('success', `[${accountName}] 官方接口复核确认：使用 AI 云电脑 1 小时任务已达成 (+100积分)！`);
+              resolve({ success: true, message: `挂机任务已达成 (${cloudProgress}/${totalProgress}秒)`, isCompleted: true });
+            } else {
+              const gap = Math.max(1, totalProgress - cloudProgress);
+              logger.addLog('info', `[${accountName}] 断线结算核验：当前累计 ${cloudProgress}/${totalProgress}秒，尚差 ${gap} 秒，准备自动续挂`);
+              resolve({ success: false, message: `断线需续挂 (当前 ${cloudProgress}/${totalProgress}秒)`, isCompleted: false });
+            }
+          } catch (err: any) {
+            resolve({ success: false, message: `网络连接关闭 (Code: ${code})，复核失败: ${err.message}` });
           }
         });
 

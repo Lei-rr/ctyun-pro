@@ -954,20 +954,20 @@ export class ProfileManager {
       this.notifyStatusChange();
     }
 
-    // 后台异步触发智能补足挂机 (内置智能重试机制：最多尝试 3 次)
+    // 后台异步触发智能补足挂机 (内置网络波动自愈与智能重试机制：最多尝试 5 次)
     (async () => {
       let hangResult: { success: boolean; message: string; isCompleted?: boolean } | null = null;
-      const MAX_ATTEMPTS = 3;
+      const MAX_ATTEMPTS = 5;
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
           if (attempt > 1) {
-            this.logger.addLog('info', `[${accountName}] 正在进行第 ${attempt}/${MAX_ATTEMPTS} 次挂机会话重试...`);
+            this.logger.addLog('info', `[${accountName}] 挂机会话异常或未达标，等待 5 秒进行第 ${attempt}/${MAX_ATTEMPTS} 次断线续挂...`);
+            await new Promise((r) => setTimeout(r, 5000));
             // 重试前刷新一次实例凭据
             try {
               await client.getDesktopList();
             } catch {}
-            await new Promise((r) => setTimeout(r, 3000));
           }
 
           hangResult = await HangTask.executeSmartHang(accountName, client, this.logger, () => {
