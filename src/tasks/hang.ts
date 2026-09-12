@@ -375,7 +375,7 @@ export class HangTask {
                 if (!progressUpdateTimer) {
                   progressUpdateTimer = setInterval(async () => {
                     if (isTerminated || !ws || ws.readyState !== WebSocket.OPEN) return;
-                    const elapsedSec = Math.floor((Date.now() - session.startTime) / 1000);
+                    const elapsedSec = Math.floor((Date.now() - (session.connectedAt || session.startTime)) / 1000);
                     const cur = Math.min(totalProgress, currentProgress + elapsedSec);
                     session.currentProgress = cur;
                     options.onProgress?.(cur, totalProgress);

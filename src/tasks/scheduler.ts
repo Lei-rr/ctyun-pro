@@ -2,6 +2,7 @@ import type { AccountConfig } from '../config.js';
 import type { Logger } from '../core/logger.js';
 import { TaskRunner } from './task-runner.js';
 import { RedeemTask } from './redeem.js';
+import { HangTask } from './hang.js';
 import { sendWebhookNotification } from '../core/utils.js';
 import type { ProfileManager } from '../core/profile-manager.js';
 
@@ -137,6 +138,28 @@ export class TaskScheduler {
               }
             }
           }, jitterMs);
+        } else if (
+          tConf.lastRunDate === today &&
+          currentHHmm >= targetTime &&
+          tConf.keepAliveHang !== false &&
+          !HangTask.isRunning(name)
+        ) {
+          // 2. 长时间网络故障/异常断线自愈兜底机制 (看门狗防漏挂)：
+          // 仅在「总开关开启 + 挂机子开关开启 + 今日定时已触发过 + 当前无进行中的挂机会话」时，
+          // 基于今日最新任务缓存检查官方时长是否已满 3600 秒。若因长时间断网未挂满，自动唤醒差额补挂
+          const cached = this.accountManager.getCachedTodayPoints(name);
+          const hangTask = cached?.summary?.tasks?.find(
+            (t: any) => t.name.includes('使用1小时') || t.name.includes('使用'),
+          );
+          if (hangTask && !hangTask.isCompleted && (hangTask.currentProgress || 0) < (hangTask.totalProgress || 3600)) {
+            const cur = hangTask.currentProgress || 0;
+            const tot = hangTask.totalProgress || 3600;
+            this.logger.addLog(
+              'info',
+              `[${name}] 智能调度检测到今日挂机时长未满额 (${cur}/${tot}秒)，自动触发差额续挂自愈...`,
+            );
+            this.accountManager.manualHang(name).catch(() => {});
+          }
         }
       }
 
