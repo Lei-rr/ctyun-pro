@@ -717,7 +717,8 @@ export async function createServer() {
     const acc = manager.getAccount(params.id);
     if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
     try {
-      const msg = await manager.manualRedeem(acc.name, body.prodId, body.costPoints, body.prodType, body.desktopId);
+      const desktopTarget = body.desktopCode || body.desktopId;
+      const msg = await manager.manualRedeem(acc.name, body.prodId, body.costPoints, body.prodType, desktopTarget);
       return { success: true, msg };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });

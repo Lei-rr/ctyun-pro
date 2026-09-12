@@ -886,6 +886,8 @@ export class ProfileManager {
     }
     const redeemConfig = config.redeemConfig || { ...DEFAULT_REDEEM_CONFIG };
     const fullAcc: AccountConfig = { ...config, id, name, user, deviceCode, taskConfig, redeemConfig };
+    delete (fullAcc as any).password;
+    delete (fullAcc as any).rawPassword;
 
     this.accounts.set(name, fullAcc);
     let state = this.accountStates.get(name);
@@ -1442,6 +1444,8 @@ export class ProfileManager {
       const id = acc.id || crypto.randomUUID();
       const desktops = Array.isArray(acc.desktops) ? acc.desktops : [];
       const fullAcc: AccountConfig = { ...acc, id, name, user, deviceCode, taskConfig, redeemConfig, desktops };
+      delete (fullAcc as any).password;
+      delete (fullAcc as any).rawPassword;
       this.accounts.set(name, fullAcc);
 
       const client = this.getClient(name);
