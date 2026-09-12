@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
+import { toast } from '@/shared/lib/toast';
 import { useAppStore, type Account } from '@/stores/app';
 import {
   Monitor,
@@ -855,10 +856,10 @@ onUnmounted(() => {
 
             <!-- 进度显示与单项手动执行控制 -->
             <div class="text-[11px] text-muted-foreground flex items-center justify-between font-mono pt-1">
-              <span>{{ task.name.includes('使用') ? `已累计挂机: ${Math.floor(task.currentProgress / 60)} / ${Math.floor(task.totalProgress / 60)} 分钟 (${task.currentProgress}/${task.totalProgress}秒)` : `完成度: ${task.currentProgress} / ${task.totalProgress}` }}</span>
+              <span>{{ (task.type === 'hang' || task.name.includes('使用') || task.name.includes('时长') || task.name.includes('体验')) ? `已累计挂机: ${Math.floor(task.currentProgress / 60)} / ${Math.floor(task.totalProgress / 60)} 分钟 (${task.currentProgress}/${task.totalProgress}秒)` : `完成度: ${task.currentProgress} / ${task.totalProgress}` }}</span>
               <div class="flex items-center gap-2">
-                <!-- 1. 使用1小时任务：智能补足时长 / 中止挂机 -->
-                <template v-if="task.name.includes('使用')">
+                <!-- 1. 挂机类任务：智能补足时长 / 中止挂机 -->
+                <template v-if="task.type === 'hang' || task.name.includes('使用') || task.name.includes('时长') || task.name.includes('体验')">
                   <Button
                     v-if="store.accounts.find((a) => a.name === pointsAccountName)?.hangStatus?.running"
                     variant="outline"

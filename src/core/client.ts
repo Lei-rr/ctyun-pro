@@ -1,57 +1,5 @@
-import https from 'node:https';
 import { Protocol } from './protocol.js';
 import { safeFetch } from './utils.js';
-
-function requestIpv4(
-  urlStr: string,
-  options: {
-    method?: string;
-    headers?: Record<string, string>;
-    body?: string;
-    timeoutMs?: number;
-  } = {},
-): Promise<{ status: number; headers: Record<string, any>; json: () => Promise<any> }> {
-  return new Promise((resolve, reject) => {
-    const url = new URL(urlStr);
-    const timeoutMs = options.timeoutMs || 60000;
-    const req = https.request(
-      {
-        hostname: url.hostname,
-        port: url.port || 443,
-        path: url.pathname + url.search,
-        method: options.method || 'GET',
-        headers: options.headers || {},
-        family: 4,
-        rejectUnauthorized: false,
-        timeout: timeoutMs,
-      },
-      (res) => {
-        let data = '';
-        res.on('data', (chunk) => (data += chunk));
-        res.on('end', () => {
-          resolve({
-            status: res.statusCode || 200,
-            headers: res.headers,
-            json: () => {
-              try {
-                return Promise.resolve(JSON.parse(data));
-              } catch (e) {
-                return Promise.resolve(data);
-              }
-            },
-          });
-        });
-      },
-    );
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error(`请求超时 (${timeoutMs}ms): ${urlStr}`));
-    });
-    req.on('error', reject);
-    if (options.body) req.write(options.body);
-    req.end();
-  });
-}
 
 export interface ChallengeData {
   effectiveSeconds: number;

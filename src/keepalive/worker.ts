@@ -37,8 +37,14 @@ export class KeepAliveWorker {
     this.options = options;
   }
 
+  private get logPrefix(): string {
+    const d = this.options.desktop;
+    const dName = d?.desktopName || (d as any)?.computerName || (d as any)?.name || d?.desktopCode || d?.desktopId || '';
+    return dName ? `${this.options.accountName} - ${dName}` : this.options.accountName;
+  }
+
   private log(level: 'info' | 'warn' | 'error' | 'success', msg: string) {
-    this.options.onLog?.(level, `[${this.options.accountName}] ${msg}`);
+    this.options.onLog?.(level, `[${this.logPrefix}] ${msg}`);
   }
 
   public start(): void {
@@ -145,6 +151,7 @@ export class KeepAliveWorker {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       },
       rejectUnauthorized: false,
+      handshakeTimeout: 15000,
     });
     this.currentWs = ws;
 

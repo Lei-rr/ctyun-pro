@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { Protocol } from '../core/protocol.js';
 import type { CtYunClient, Desktop, DesktopInfo } from '../core/client.js';
 import type { Logger } from '../core/logger.js';
-import { SignTask } from './sign.js';
+import { SignTask, isHangTaskName } from './sign.js';
 
 export interface HangTaskSession {
   accountName: string;
@@ -41,6 +41,15 @@ export class HangTask {
 
   public static clearSession(accountName: string): void {
     activeHangSessions.delete(accountName);
+  }
+
+  public static renameSession(oldName: string, newName: string): void {
+    const s = activeHangSessions.get(oldName);
+    if (s) {
+      s.accountName = newName;
+      activeHangSessions.delete(oldName);
+      activeHangSessions.set(newName, s);
+    }
   }
 
   public static getHangInfo(accountName: string) {
@@ -130,15 +139,22 @@ export class HangTask {
     }
 
     const dId = String(targetDesktop.desktopId);
+    const dName =
+      targetDesktop.desktopName ||
+      (targetDesktop as any).computerName ||
+      (targetDesktop as any).name ||
+      targetDesktop.desktopCode ||
+      dId;
+    const logPrefix = dName ? `${accountName} - ${dName}` : accountName;
 
     // 2. 核验是否需要开机
     const isRunning = targetDesktop.useStatusText === '运行中' || targetDesktop.useStatusText === '离线运行';
     if (!isRunning) {
-      logger.addLog('warn', `[${accountName}] 云电脑当前为 [${targetDesktop.useStatusText}]，正在下发开机指令...`);
+      logger.addLog('warn', `[${logPrefix}] 云电脑当前为 [${targetDesktop.useStatusText}]，正在下发开机指令...`);
       try {
         await client.operateDesktop(dId, 'on');
       } catch (e: any) {
-        logger.addLog('warn', `[${accountName}] 下发开机指令提示: ${e.message}`);
+        logger.addLog('warn', `[${logPrefix}] 下发开机指令提示: ${e.message}`);
       }
 
       // 等待开机就绪（最多等待 3 分钟）
@@ -151,7 +167,7 @@ export class HangTask {
           if (cur && (cur.useStatusText === '运行中' || cur.useStatusText === '离线运行')) {
             targetDesktop.useStatusText = cur.useStatusText;
             ready = true;
-            logger.addLog('success', `[${accountName}] 云电脑开机就绪`);
+            logger.addLog('success', `[${logPrefix}] 云电脑开机就绪`);
             break;
           }
         } catch {}
@@ -166,18 +182,18 @@ export class HangTask {
     let totalProgress = 3600;
     try {
       const summary = await SignTask.getPointsAndTasks(client);
-      const hangTask = summary.tasks.find((t: any) => t.name.includes('使用1小时') || t.name.includes('使用'));
+      const hangTask = summary.tasks.find((t: any) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress));
       if (hangTask) {
         currentProgress = hangTask.currentProgress || 0;
         totalProgress = hangTask.totalProgress || 3600;
         if (!options.onlyLoginTask && (hangTask.isCompleted || currentProgress >= totalProgress)) {
-          logger.addLog('success', `[${accountName}] 任务中心核验今日「使用1小时」已达成 (${currentProgress}/${totalProgress}秒，+100积分)，无需挂机`);
+          logger.addLog('success', `[${logPrefix}] 任务中心核验今日「使用1小时」已达成 (${currentProgress}/${totalProgress}秒，+100积分)，无需挂机`);
           options.onProgress?.(currentProgress, totalProgress);
           return { success: true, message: `今日挂机任务已达成 (${currentProgress}/${totalProgress}秒)`, isCompleted: true };
         }
       }
     } catch (e: any) {
-      logger.addLog('warn', `[${accountName}] 查询初始任务状态失败，将基于默认进度启动: ${e.message}`);
+      logger.addLog('warn', `[${logPrefix}] 查询初始任务状态失败，将基于默认进度启动: ${e.message}`);
     }
 
     // 4. 获取 Clink 接入信道与双向 SSL 证书
@@ -205,8 +221,8 @@ export class HangTask {
     logger.addLog(
       'info',
       options.onlyLoginTask
-        ? `[${accountName}] 纯协议连接云电脑完成登录任务 (${desktopInfo.clinkLvsOutHost})...`
-        : `[${accountName}] 纯协议启动挂机：当前累计 ${currentProgress}/${totalProgress}秒，连接网关中...`,
+        ? `[${logPrefix}] 纯协议连接云电脑完成登录任务 (${desktopInfo.clinkLvsOutHost})...`
+        : `[${logPrefix}] 纯协议启动挂机：当前累计 ${currentProgress}/${totalProgress}秒，连接网关中...`,
     );
 
     let ws: WebSocket | null = null;
@@ -260,10 +276,11 @@ export class HangTask {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           },
           rejectUnauthorized: false,
+          handshakeTimeout: 15000,
         });
 
         ws.on('open', () => {
-          logger.addLog('info', `[${accountName}] 纯协议信道已建立，发送 SSL 认证握手...`);
+          logger.addLog('info', `[${logPrefix}] 纯协议信道已建立，发送 SSL 认证握手...`);
 
           // 1. 发送连接握手 JSON
           const connectMessage = {
@@ -305,7 +322,7 @@ export class HangTask {
               const response = Protocol.executeRedqEncryption(buffer);
               ws.send(response);
             } catch (err: any) {
-              logger.addLog('warn', `[${accountName}] 处理 REDQ 异常: ${err.message}`);
+              logger.addLog('warn', `[${logPrefix}] 处理 REDQ 异常: ${err.message}`);
             }
             return;
           }
@@ -316,7 +333,7 @@ export class HangTask {
             for (const info of infos) {
               // 收到服务端 Type 103 用户认证挑战
               if (info.type === 103) {
-                logger.addLog('info', `[${accountName}] 收到云电脑 103 握手认证，正在回传用户凭证与通道认领包...`);
+                logger.addLog('info', `[${logPrefix}] 收到云电脑 103 握手认证，正在回传用户凭证与通道认领包...`);
 
                 // 1. 回传 Type 118 用户身份包
                 const userPayload = JSON.stringify({
@@ -343,7 +360,7 @@ export class HangTask {
                 const msg104 = Protocol.buildMessage(104);
                 ws.send(msg104);
 
-                logger.addLog('success', `[${accountName}] 桌面会话认领与通道挂接完成，在线状态已激活！`);
+                logger.addLog('success', `[${logPrefix}] 桌面会话认领与通道挂接完成，在线状态已激活！`);
                 session.connectedAt = Date.now();
 
                 // 若本次只做「登录AI云电脑」任务，握手完成后等待 3 秒确保服务端确认即可优雅退出
@@ -361,7 +378,7 @@ export class HangTask {
                       try {
                         const hbBuf = Protocol.buildMessage(7); // Type 7 心跳包
                         ws.send(hbBuf);
-                        logger.addLog('info', '发送客户端活跃心跳 (30s 心跳保活)');
+                        logger.addLog('info', `[${logPrefix}] 发送客户端活跃心跳 (30s 心跳保活)`);
                       } catch {}
                     }
                   }, 30000);
@@ -369,19 +386,26 @@ export class HangTask {
 
                 // 5. 纯本地时间平滑推演进度 (每 1 秒根据本地时间戳递增计算流逝秒数，严禁中途频繁轮询接口)
                 if (!progressUpdateTimer) {
+                  let isClosing = false;
                   progressUpdateTimer = setInterval(async () => {
-                    if (isTerminated || !ws || ws.readyState !== WebSocket.OPEN) return;
+                    if (isTerminated || isClosing || !ws || ws.readyState !== WebSocket.OPEN) return;
                     const elapsedSec = Math.floor((Date.now() - (session.connectedAt || session.startTime)) / 1000);
                     const cur = Math.min(totalProgress, currentProgress + elapsedSec);
                     session.currentProgress = cur;
                     options.onProgress?.(cur, totalProgress);
 
-                    // 为彻底防范官方服务端离线结算时的向下取整/时钟截断导致的 1 秒误差 (如官方结算计为 3599 秒)，
-                    // 挂机安全达标阈值设定为 3602 秒 (微量护航 2 秒安全裕量)；
-                    // 并且在断开瞬间立即原子清空 hangStatus 并广播，UI 毫秒级复位，既杜绝卡片假死滞留，又确保护航达标 3600 秒
-                    const targetThreshold = totalProgress + 2;
-                    if (currentProgress + elapsedSec >= targetThreshold) {
-                      logger.addLog('info', `[${accountName}] 挂机目标时长已达标 (推演 ${cur}/${totalProgress}秒)，主动断开长连触发官方离线结算...`);
+                    // 达到 3600 秒（目标时长）后触发优雅结束流程
+                    if (currentProgress + elapsedSec >= totalProgress) {
+                      isClosing = true;
+                      if (progressUpdateTimer) {
+                        clearInterval(progressUpdateTimer);
+                        progressUpdateTimer = null;
+                      }
+
+                      // 达到 3600 秒时间后，在主动断开长连前缓冲 2 秒，确保官方离线结算时物理时长绝对达标（防秒级截断），而业务与判定基准始终是 3600s
+                      logger.addLog('info', `[${logPrefix}] 挂机时长已达到目标 (${totalProgress}/${totalProgress}秒)，缓冲 2 秒后主动断开长连触发官方离线结算...`);
+                      await new Promise((r) => setTimeout(r, 2000));
+
                       // 立即从全局会话中移除并清理，确保外部读取立即为已完成
                       activeHangSessions.delete(accountName);
                       await cleanup();
@@ -390,35 +414,35 @@ export class HangTask {
                       try {
                         await new Promise((r) => setTimeout(r, 3000));
                         const summary = await SignTask.getPointsAndTasks(client);
-                        const t = summary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用'));
+                        const t = summary.tasks.find((item: any) => item.type === 'hang' || isHangTaskName(item.name, item.totalProgress));
                         const cloudProgress = t?.currentProgress || 0;
                         const isDone = Boolean(t && (t.isCompleted || (t as any).status === 2 || cloudProgress >= totalProgress));
 
                         if (isDone) {
-                          logger.addLog('success', `[${accountName}] 官方接口复核通过：今日使用 AI 云电脑 1 小时任务已达成 (+100积分)！`);
-                          resolve({ success: true, message: `今日挂机任务已达成 (${cur}/${totalProgress}秒)`, isCompleted: true });
+                          logger.addLog('success', `[${logPrefix}] 官方接口复核通过：今日使用 AI 云电脑 1 小时任务已达成 (+100积分)！`);
+                          resolve({ success: true, message: `今日挂机任务已达成 (${totalProgress}/${totalProgress}秒)`, isCompleted: true });
                         } else {
                           // 如果官方由于离线同步延迟刚好差 1~2 秒，且推演已经满额，再宽容等待 3 秒重试一次官方复核，防误判
                           await new Promise((r) => setTimeout(r, 3000));
                           try {
                             const secondSummary = await SignTask.getPointsAndTasks(client);
-                            const t2 = secondSummary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用'));
+                            const t2 = secondSummary.tasks.find((item: any) => item.type === 'hang' || isHangTaskName(item.name, item.totalProgress));
                             const cloudProgress2 = t2?.currentProgress || 0;
                             const isDone2 = Boolean(t2 && (t2.isCompleted || (t2 as any).status === 2 || cloudProgress2 >= totalProgress));
                             if (isDone2) {
-                              logger.addLog('success', `[${accountName}] 官方接口二次复核通过：今日使用 AI 云电脑 1 小时任务已达成 (+100积分)！`);
-                              resolve({ success: true, message: `今日挂机任务已达成 (${cur}/${totalProgress}秒)`, isCompleted: true });
+                              logger.addLog('success', `[${logPrefix}] 官方接口二次复核通过：今日使用 AI 云电脑 1 小时任务已达成 (+100积分)！`);
+                              resolve({ success: true, message: `今日挂机任务已达成 (${totalProgress}/${totalProgress}秒)`, isCompleted: true });
                               return;
                             }
                           } catch {}
 
                           const gap = Math.max(1, totalProgress - cloudProgress);
-                          logger.addLog('warn', `[${accountName}] 官方接口复核发现时长未计满 (云端记录: ${cloudProgress}/${totalProgress}秒)，仍差 ${gap} 秒，需自动补挂`);
+                          logger.addLog('warn', `[${logPrefix}] 官方接口复核发现时长未计满 (云端记录: ${cloudProgress}/${totalProgress}秒)，仍差 ${gap} 秒，需自动补挂`);
                           resolve({ success: false, message: `云端时长不足 (当前 ${cloudProgress}/${totalProgress}秒)，触发补挂`, isCompleted: false });
                         }
                       } catch (err: any) {
-                        logger.addLog('info', `[${accountName}] 会话已正常结算，复核请求异常: ${err.message}`);
-                        resolve({ success: true, message: `挂机会话已结算 (${cur}/${totalProgress}秒)` });
+                        logger.addLog('info', `[${logPrefix}] 会话已正常结算，复核请求异常: ${err.message}`);
+                        resolve({ success: true, message: `挂机会话已结算 (${totalProgress}/${totalProgress}秒)` });
                       }
                     }
                   }, 1000);
@@ -427,7 +451,7 @@ export class HangTask {
 
               // C. 互踢避让与抢占保护：收到 Type 119/120/137 服务端离线通知或多端抢占通知
               if (info.type === 119 || info.type === 120 || info.type === 137) {
-                logger.addLog('info', `[${accountName}] 收到服务端会话通知 (Type ${info.type})，用户客户端已接入，纯协议通道主动让位...`);
+                logger.addLog('info', `[${logPrefix}] 收到服务端会话通知 (Type ${info.type})，用户客户端已接入，纯协议通道主动让位...`);
                 resolve({ success: true, message: '检测到官方客户端接入，纯协议通道主动避让' });
                 return;
               }
@@ -439,28 +463,28 @@ export class HangTask {
           const reasonStr = reason?.toString() || '';
           if (isTerminated) return;
           if (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) {
-            logger.addLog('warn', `[${accountName}] 网关通知桌面被真实客户端接入，纯协议任务主动让位`);
+            logger.addLog('warn', `[${logPrefix}] 网关通知桌面被真实客户端接入，纯协议任务主动让位`);
             resolve({ success: true, message: '客户端主动接入，任务让位' });
             return;
           }
 
-          logger.addLog('warn', `[${accountName}] 挂机连接异常关闭 (${code}, ${reasonStr || '网络连接关闭'})，正在核验已结算时长...`);
+          logger.addLog('warn', `[${logPrefix}] 挂机连接异常关闭 (${code}, ${reasonStr || '网络连接关闭'})，正在核验已结算时长...`);
           await cleanup();
 
           // 等待 3 秒让天翼云完成离线会话结算
           await new Promise((r) => setTimeout(r, 3000));
           try {
             const summary = await SignTask.getPointsAndTasks(client);
-            const t = summary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用'));
+            const t = summary.tasks.find((item: any) => item.type === 'hang' || isHangTaskName(item.name, item.totalProgress));
             const cloudProgress = t?.currentProgress || 0;
             const isDone = Boolean(t && (t.isCompleted || (t as any).status === 2 || cloudProgress >= totalProgress));
 
             if (isDone) {
-              logger.addLog('success', `[${accountName}] 官方接口复核确认：使用 AI 云电脑 1 小时任务已达成 (+100积分)！`);
+              logger.addLog('success', `[${logPrefix}] 官方接口复核确认：使用 AI 云电脑 1 小时任务已达成 (+100积分)！`);
               resolve({ success: true, message: `挂机任务已达成 (${cloudProgress}/${totalProgress}秒)`, isCompleted: true });
             } else {
               const gap = Math.max(1, totalProgress - cloudProgress);
-              logger.addLog('info', `[${accountName}] 断线结算核验：当前累计 ${cloudProgress}/${totalProgress}秒，尚差 ${gap} 秒，准备自动续挂`);
+              logger.addLog('info', `[${logPrefix}] 断线结算核验：当前累计 ${cloudProgress}/${totalProgress}秒，尚差 ${gap} 秒，准备自动续挂`);
               resolve({ success: false, message: `断线需续挂 (当前 ${cloudProgress}/${totalProgress}秒)`, isCompleted: false });
             }
           } catch (err: any) {
@@ -481,7 +505,11 @@ export class HangTask {
       sessionResult = { success: false, message: `挂机执行异常: ${e.message}` };
     } finally {
       await cleanup();
-      activeHangSessions.delete(accountName);
+      const currentName = session?.accountName || accountName;
+      activeHangSessions.delete(currentName);
+      if (currentName !== accountName) {
+        activeHangSessions.delete(accountName);
+      }
     }
 
     return sessionResult;

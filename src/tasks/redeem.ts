@@ -189,16 +189,19 @@ export class RedeemTask {
     // 2. 硬件绑定类商品校验（如升配包 pointstplupgrade、数据盘 pointsdiskupgrade）
     const isHardwareBound = resolvedType === 'pointstplupgrade' || resolvedType === 'pointsdiskupgrade';
     const attrs: any[] = [];
+    const numDesktopId = Number(desktopId);
+    const isValidDesktopId = Boolean(desktopId && desktopId !== 'undefined' && desktopId !== 'null' && Number.isFinite(numDesktopId) && numDesktopId > 0);
+
     if (isHardwareBound) {
-      if (!desktopId || desktopId === 'undefined' || desktopId === 'null' || Number(desktopId) <= 0) {
+      if (!isValidDesktopId) {
         throw new Error(
           `[参数错误拦截] 商品类型 [${resolvedType}] 为硬件绑定资源，必须绑定有效云电脑桌面 ID，防止官方返回“目标资源不存在”`,
         );
       }
-      attrs.push({ attrKey: 'bindDesktopId', attrVal: Number(desktopId) });
-    } else if (desktopId && Number(desktopId) > 0) {
+      attrs.push({ attrKey: 'bindDesktopId', attrVal: numDesktopId });
+    } else if (isValidDesktopId) {
       // 非强绑定硬件但传了有效桌面ID，附带上
-      attrs.push({ attrKey: 'bindDesktopId', attrVal: Number(desktopId) });
+      attrs.push({ attrKey: 'bindDesktopId', attrVal: numDesktopId });
     }
 
     const url = `${RedeemTask.DESK_URL}/selforder/api/selforder/paas/placeOrder`;

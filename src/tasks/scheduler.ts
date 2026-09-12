@@ -3,6 +3,7 @@ import type { Logger } from '../core/logger.js';
 import { TaskRunner } from './task-runner.js';
 import { RedeemTask } from './redeem.js';
 import { HangTask } from './hang.js';
+import { SignTask, isHangTaskName } from './sign.js';
 import { sendWebhookNotification } from '../core/utils.js';
 import type { ProfileManager } from '../core/profile-manager.js';
 
@@ -18,6 +19,7 @@ export class TaskScheduler {
   private lastDigestDate = '';
   private lastMidnightResetDate = '';
   private lastHangWatchdogTime = new Map<string, number>();
+  private taskRetryStats = new Map<string, { date: string; attempts: number; nextRetryTime: number }>();
 
   constructor(profileManager: ProfileManager, logger: Logger) {
     this.accountManager = profileManager;
@@ -63,10 +65,10 @@ export class TaskScheduler {
       .format(now)
       .replace(/\//g, '-');
 
-    const cstDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
-    const cstDay = cstDate.getDate();
-    const cstMonth = cstDate.getMonth() + 1;
-    const cstYear = cstDate.getFullYear();
+    const [cstYearStr, cstMonthStr, cstDayStr] = today.split('-');
+    const cstYear = parseInt(cstYearStr, 10);
+    const cstMonth = parseInt(cstMonthStr, 10);
+    const cstDay = parseInt(cstDayStr, 10);
     const lastDayOfMonth = new Date(cstYear, cstMonth, 0).getDate();
 
     // 0. 跨天主动重置今日积分 (0 点清零，纯本地状态机重置，绝不发起多余网络拉取)
@@ -88,8 +90,12 @@ export class TaskScheduler {
         // 用户未开启或关闭了每日任务总开关，绝不自动执行
       } else {
         const targetTime = tConf.scheduleTime || '03:30';
-        // 准点命中判定：到达或超过设定时间且今日未执行时触发 (防止服务重启错过固定当分钟)
-        if (tConf.lastRunDate !== today && currentHHmm >= targetTime) {
+        const retryStat = this.taskRetryStats.get(name);
+        const nextTime = tConf.retryDate === today ? (tConf.nextRetryTime || retryStat?.nextRetryTime || 0) : (retryStat?.nextRetryTime || 0);
+        const isInCooldown = (tConf.retryDate === today || retryStat?.date === today) && Date.now() < nextTime;
+
+        // 准点命中判定：到达或超过设定时间且今日未执行且非退避冷却中时触发 (防止服务重启错过固定当分钟)
+        if (!isInCooldown && tConf.lastRunDate !== today && currentHHmm >= targetTime) {
           // 先行锁定今日执行标记，防止抖动异步等待期间重复触发
           tConf.lastRunDate = today;
           acc.taskConfig = tConf;
@@ -104,7 +110,11 @@ export class TaskScheduler {
               const res = await TaskRunner.executeDailyTasks(client, dId, tConf, this.logger);
               acc.lastSignDate = today;
               tConf.lastRunDate = today;
+              delete tConf.retryCount;
+              delete tConf.retryDate;
+              delete tConf.nextRetryTime;
               acc.taskConfig = tConf;
+              this.taskRetryStats.delete(name);
               this.accountManager.saveToDisk();
               this.logger.addLog('success', `[${name}] 每日任务已执行: ${res.message}`);
 
@@ -129,13 +139,63 @@ export class TaskScheduler {
 
               this.accountManager.notifyStatusChange();
             } catch (e: any) {
-              this.logger.addLog('warn', `[${name}] 自动任务执行跳过: ${e.message}`);
-              if (this.accountManager.webhookUrl) {
-                sendWebhookNotification(
-                  this.accountManager.webhookUrl,
-                  `天翼云电脑 - [${name}] 任务执行跳过`,
-                  `原因: ${e.message}`,
-                ).catch(() => {});
+              const errMsg = e?.message || String(e);
+              const isAuthError = /token|expire|登录过期|未登录|auth|401|403|凭证/i.test(errMsg);
+
+              if (isAuthError) {
+                // 凭据过期/失效：今日直接标记跳过，禁止高频无效重试，避免轰炸与封号
+                tConf.lastRunDate = today;
+                delete tConf.retryCount;
+                delete tConf.retryDate;
+                delete tConf.nextRetryTime;
+                acc.taskConfig = tConf;
+                this.accountManager.saveToDisk();
+                this.taskRetryStats.delete(name);
+                this.logger.addLog('warn', `[${name}] 自动任务执行失败（登录凭证已过期/失效，已停止今日重试，请重新登录账号）: ${errMsg}`);
+                if (this.accountManager.webhookUrl) {
+                  sendWebhookNotification(
+                    this.accountManager.webhookUrl,
+                    `天翼云电脑 - [${name}] 登录凭证失效`,
+                    `自动任务执行失败：登录凭证已过期或失效，已停止今日自动调度，请重新登录账号。\n错误详情: ${errMsg}`,
+                  ).catch(() => {});
+                }
+              } else {
+                // 偶发网络异常：引入退避重试（每天最多重试 3 次，每次重试至少退避 15 分钟，状态持久化防重启清零）
+                const persistedAttempts = tConf.retryDate === today ? (tConf.retryCount || 0) : 0;
+                const memAttempts = this.taskRetryStats.get(name)?.date === today ? (this.taskRetryStats.get(name)?.attempts || 0) : 0;
+                const currentAttempts = Math.max(persistedAttempts, memAttempts) + 1;
+                const MAX_ATTEMPTS = 3;
+
+                if (currentAttempts >= MAX_ATTEMPTS) {
+                  tConf.lastRunDate = today;
+                  tConf.retryDate = today;
+                  tConf.retryCount = currentAttempts;
+                  delete tConf.nextRetryTime;
+                  acc.taskConfig = tConf;
+                  this.accountManager.saveToDisk();
+                  this.taskRetryStats.delete(name);
+                  this.logger.addLog('warn', `[${name}] 自动任务执行失败已达今日上限 (${MAX_ATTEMPTS}次)，停止今日自动任务: ${errMsg}`);
+                  if (this.accountManager.webhookUrl) {
+                    sendWebhookNotification(
+                      this.accountManager.webhookUrl,
+                      `天翼云电脑 - [${name}] 自动任务重试达上限`,
+                      `今日连续重试 ${MAX_ATTEMPTS} 次均失败，停止今日自动调度。\n最后错误: ${errMsg}`,
+                    ).catch(() => {});
+                  }
+                } else {
+                  const nextRetryTime = Date.now() + 15 * 60 * 1000;
+                  tConf.retryDate = today;
+                  tConf.retryCount = currentAttempts;
+                  tConf.nextRetryTime = nextRetryTime;
+                  tConf.lastRunDate = '';
+                  acc.taskConfig = tConf;
+                  this.accountManager.saveToDisk();
+                  this.taskRetryStats.set(name, { date: today, attempts: currentAttempts, nextRetryTime });
+                  this.logger.addLog(
+                    'warn',
+                    `[${name}] 自动任务执行异常（第 ${currentAttempts}/${MAX_ATTEMPTS} 次，将在 15 分钟后退避重试）: ${errMsg}`,
+                  );
+                }
               }
             }
           }, jitterMs);
@@ -154,7 +214,7 @@ export class TaskScheduler {
           if (Date.now() - lastWatchdog >= WATCHDOG_COOLDOWN_MS) {
             const cached = this.accountManager.getCachedTodayPoints(name);
             const hangTask = cached?.summary?.tasks?.find(
-              (t: any) => t.name.includes('使用1小时') || t.name.includes('使用'),
+              (t: any) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress),
             );
             if (hangTask && !hangTask.isCompleted && (hangTask.currentProgress || 0) < (hangTask.totalProgress || 3600)) {
               const cur = hangTask.currentProgress || 0;
@@ -320,7 +380,7 @@ export class TaskScheduler {
             const sum = await this.accountManager.getPointsAndTasks(name);
             const total = (sum.generalPoints || 0) + (sum.phonePoints || 0);
             totalGeneral += total;
-            const hangTask = sum.tasks.find((t) => t.name.includes('使用1小时') || t.name.includes('使用'));
+            const hangTask = sum.tasks.find((t) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress));
             const hangStatusText = hangTask?.isCompleted ? '已达标(100分)' : `${hangTask?.currentProgress || 0}秒`;
             pointInfo = `总积分: ${total} | 挂机: ${hangStatusText}`;
           } catch {

@@ -6,7 +6,7 @@ import { KeepAliveManager, type ManagedDesktopState } from '../keepalive/keepali
 import { Logger, type LogItem } from './logger.js';
 import { TaskScheduler } from '../tasks/scheduler.js';
 import { TaskRunner } from '../tasks/task-runner.js';
-import { SignTask, type PointsSummary } from '../tasks/sign.js';
+import { SignTask, type PointsSummary, isHangTaskName } from '../tasks/sign.js';
 import { RedeemTask, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../tasks/redeem.js';
 import { AiChatTask } from '../tasks/ai-chat.js';
 import { HangTask } from '../tasks/hang.js';
@@ -180,11 +180,31 @@ export class ProfileManager {
     return acc;
   }
 
+  /**
+   * 账号对外脱敏只读视图 (完全深拷贝隔离内部引用，杜绝污染与凭证泄露)
+   */
+  public sanitizeAccount(accountOrState: any): any {
+    if (!accountOrState) return accountOrState;
+    let clone: any;
+    try {
+      clone = structuredClone(accountOrState);
+    } catch {
+      clone = JSON.parse(JSON.stringify(accountOrState));
+    }
+    if (clone.loginInfo) {
+      delete clone.loginInfo.secretKey;
+      delete clone.loginInfo.clientKey;
+      delete clone.loginInfo.caCert;
+      delete clone.loginInfo.clientCert;
+    }
+    return clone;
+  }
+
   public getAccountState(keyOrId: string): ManagedAccount | undefined {
     if (!keyOrId) return undefined;
     // 1. 优先按不可变 id (UUID) 匹配
     for (const s of this.accountStates.values()) {
-      if (s.id === keyOrId) return s;
+      if (s.id === keyOrId) return this.sanitizeAccount(s);
     }
     // 2. 兼容按 Map Key 查找
     let state = this.accountStates.get(keyOrId);
@@ -197,7 +217,7 @@ export class ProfileManager {
         }
       }
     }
-    return state;
+    return state ? this.sanitizeAccount(state) : undefined;
   }
 
   public getClient(keyOrId: string): CtYunClient {
@@ -249,7 +269,7 @@ export class ProfileManager {
         state.todayPoints = (pts && pts.date === todayStr) ? (pts.todayPoints ?? 0) : 0;
       }
     }
-    return Array.from(this.accountStates.values());
+    return Array.from(this.accountStates.values()).map((state) => this.sanitizeAccount(state));
   }
 
   /**
@@ -316,6 +336,8 @@ export class ProfileManager {
     }
 
     // 立即秒级更新状态并广播通知前端，避免用户等待外部网络 I/O
+    acc.autoStart = true;
+    this.saveToDisk();
     state.status = 'online';
     this.notifyStatusChange();
 
@@ -331,6 +353,11 @@ export class ProfileManager {
   }
 
   public stopAccount(accountName: string): void {
+    const acc = this.accounts.get(accountName);
+    if (acc) {
+      acc.autoStart = false;
+      this.saveToDisk();
+    }
     this.keepAliveManager.stopWorkers(accountName);
     const state = this.accountStates.get(accountName);
     if (state) {
@@ -368,7 +395,7 @@ export class ProfileManager {
       if (operation === 'shutdown') {
         this.setManualShutdown(canonicalDesktopCode, true);
       }
-      this.keepAliveManager.stopWorkers(accountName);
+      this.keepAliveManager.stopWorkerForDesktop(accountName, canonicalDesktopCode);
       desktop.status = 'stopped';
       desktop.lastHeartbeat = undefined;
       desktop.useStatusText = operation === 'shutdown' ? '已关机' : '重启中';
@@ -382,8 +409,10 @@ export class ProfileManager {
 
     try {
       const targetObjType = desktop.objType ?? 0;
+      const dName = desktop.desktopName || (desktop as any).computerName || (desktop as any).name || canonicalDesktopCode;
+      const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
       const message = await client.operateDesktop(requestApiDesktopId, operation, targetObjType);
-      this.logger.addLog('info', `[${accountName}] ${message}`);
+      this.logger.addLog('info', `[${dPrefix}] ${message}`);
       // 后台轮询跟踪云电脑电源状态，直至真正开机或关机完成
       this.trackDesktopStatusAfterPower(accountName, canonicalDesktopCode, operation);
       return message;
@@ -626,13 +655,15 @@ export class ProfileManager {
         const target = state?.desktops.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
 
         if (current && target) {
+          const dName = target.desktopName || (target as any).computerName || (target as any).name || desktopId;
+          const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
           target.useStatusText = current.useStatusText;
 
           if (operation === 'on' || operation === 'reset') {
             if (current.useStatusText === '运行中') {
               clearInterval(timer);
               target.status = 'connecting';
-              this.logger.addLog('success', `[${accountName}] 云电脑已成功开机，正在接入保活...`);
+              this.logger.addLog('success', `[${dPrefix}] 云电脑已成功开机，正在接入保活...`);
               this.notifyStatusChange();
               // 云电脑开机成功后，若账号处于保活状态，自动启动该桌面的 WebSocket 保活
               this.reloadDesktops(accountName).catch(() => {});
@@ -642,7 +673,7 @@ export class ProfileManager {
             if (current.useStatusText === '已关机' || current.useStatusText === '关机') {
               clearInterval(timer);
               target.status = 'stopped';
-              this.logger.addLog('info', `[${accountName}] 云电脑已安全关机，已锁定保活防止误唤醒`);
+              this.logger.addLog('info', `[${dPrefix}] 云电脑已安全关机，已锁定保活防止误唤醒`);
               this.notifyStatusChange();
               return;
             }
@@ -673,6 +704,7 @@ export class ProfileManager {
     const client = this.clients.get(oldName);
 
     this.keepAliveManager.stopWorkers(oldName);
+    HangTask.renameSession(oldName, trimmed);
     this.accounts.delete(oldName);
     this.accountStates.delete(oldName);
     if (client) this.clients.delete(oldName);
@@ -890,7 +922,7 @@ export class ProfileManager {
     const state = this.accountStates.get(accountName);
     const dId = state?.desktops?.[0]?.desktopId;
     const res = await TaskRunner.executeDailyTasks(client, dId, acc.taskConfig, this.logger);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getCstDateString();
     acc.lastSignDate = today;
     if (!acc.taskConfig) {
       acc.taskConfig = { enabled: true, autoSign: true, scheduleTime: getRandomScheduleTime() };
@@ -948,7 +980,7 @@ export class ProfileManager {
         cachedEntry = { todayPoints: sum.generalPoints + sum.phonePoints, date: todayStr, summary: sum, updatedAt: Date.now() };
       } catch {}
     }
-    const hangTask = cachedEntry?.summary?.tasks?.find((t: any) => t.name.includes('使用1小时') || t.name.includes('使用'));
+    const hangTask = cachedEntry?.summary?.tasks?.find((t: any) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress));
     HangTask.initPendingSession(accountName, hangTask?.currentProgress || 0, hangTask?.totalProgress || 3600);
 
     // 将桌面状态置为 hanging 并更新挂机状态，保证主页保活在线数不失联
@@ -1101,7 +1133,7 @@ export class ProfileManager {
       throw new Error('账号未登录，无法签到');
     }
     const res = await SignTask.signIn(client);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getCstDateString();
     acc.lastSignDate = today;
     const state = this.accountStates.get(accountName);
     if (state) state.lastSignDate = today;
@@ -1190,7 +1222,7 @@ export class ProfileManager {
       prodType || rConf.prodType,
     );
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = getCstDateString();
     rConf.lastRedeemDate = today;
     acc.redeemConfig = rConf;
     this.saveToDisk();

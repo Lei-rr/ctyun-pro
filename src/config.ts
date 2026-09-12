@@ -39,6 +39,9 @@ export interface TaskConfig {
   autoReportActivity?: boolean; // 自动上报事件推进「登录AI云电脑」
   scheduleTime?: string; // 每日做任务时间 (如 08:30)
   lastRunDate?: string; // 上次执行任务日期 YYYY-MM-DD
+  retryDate?: string; // 重试日期
+  retryCount?: number; // 当日已重试次数
+  nextRetryTime?: number; // 下次允许重试的时间戳 (退避)
 }
 
 export interface AccountConfig {

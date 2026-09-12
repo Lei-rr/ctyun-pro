@@ -45,8 +45,29 @@ export async function createServer() {
     done(null, body);
   });
 
+  const allowedOriginEnv = process.env.CORS_ORIGIN;
   await fastify.register(cors, {
-    origin: true,
+    origin: (origin, cb) => {
+      // 1. 同源请求（无 Origin 请求头，如浏览器直接访问、服务端内部调用）直接放行
+      if (!origin) return cb(null, true);
+
+      // 2. 若通过环境变量显式配置了 CORS_ORIGIN 白名单，严格执行白名单拦截
+      if (allowedOriginEnv) {
+        if (allowedOriginEnv === '*') return cb(null, true);
+        const list = allowedOriginEnv.split(',').map((s) => s.trim());
+        return cb(null, list.includes(origin));
+      }
+
+      // 3. 本地开发与标准私有局域网网段默认放行
+      const isLocalOrLan = /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(origin);
+      if (isLocalOrLan) {
+        return cb(null, true);
+      }
+
+      // 4. 未显式配置且非本地时默认放行（开箱即用），但可通过 CORS_ORIGIN 随时收紧
+      return cb(null, true);
+    },
+    credentials: true,
   });
 
   const manager = new AccountManager();
@@ -332,7 +353,7 @@ export async function createServer() {
           success: true,
           codeStatus: 'authorize',
           accountName: finalAccountName,
-          loginInfo,
+          loginInfo: manager.sanitizeAccount({ loginInfo }).loginInfo,
           msg: '登录成功',
         };
       }
@@ -351,7 +372,7 @@ export async function createServer() {
     if (!acc && !state) {
       return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
     }
-    return { success: true, data: state || acc };
+    return { success: true, data: state || manager.sanitizeAccount(acc) };
   });
 
   // 删除 Profile
@@ -576,6 +597,58 @@ export async function createServer() {
     if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
     try {
       const msg = await manager.manualSignIn(acc.name);
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.post('/api/profiles/:id/start', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+    try {
+      await manager.startAccount(acc.name);
+      return { success: true, msg: `账号 [${acc.name}] 保活已启动` };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.post('/api/profiles/:id/stop', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+    try {
+      manager.stopAccount(acc.name);
+      return { success: true, msg: `账号 [${acc.name}] 保活已停止` };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.post('/api/profiles/:id/tasks/login', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+    try {
+      const msg = await manager.manualActivateDesktop(acc.name);
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.post('/api/profiles/:id/tasks/chat', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+    try {
+      const msg = await manager.manualAiChat(acc.name);
       return { success: true, msg };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });
