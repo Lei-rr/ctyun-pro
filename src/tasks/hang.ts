@@ -43,6 +43,15 @@ export class HangTask {
     activeHangSessions.delete(accountName);
   }
 
+  public static renameSession(oldName: string, newName: string): void {
+    const s = activeHangSessions.get(oldName);
+    if (s) {
+      s.accountName = newName;
+      activeHangSessions.delete(oldName);
+      activeHangSessions.set(newName, s);
+    }
+  }
+
   public static getHangInfo(accountName: string) {
     const s = activeHangSessions.get(accountName);
     if (!s) return null;
@@ -166,7 +175,7 @@ export class HangTask {
     let totalProgress = 3600;
     try {
       const summary = await SignTask.getPointsAndTasks(client);
-      const hangTask = summary.tasks.find((t: any) => t.name.includes('使用1小时') || t.name.includes('使用'));
+      const hangTask = summary.tasks.find((t: any) => t.name.includes('使用1小时') || t.name.includes('使用') || t.name.includes('云电脑') || t.name.includes('体验') || t.name.includes('时长'));
       if (hangTask) {
         currentProgress = hangTask.currentProgress || 0;
         totalProgress = hangTask.totalProgress || 3600;
@@ -260,6 +269,7 @@ export class HangTask {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           },
           rejectUnauthorized: false,
+          handshakeTimeout: 15000,
         });
 
         ws.on('open', () => {
@@ -390,7 +400,7 @@ export class HangTask {
                       try {
                         await new Promise((r) => setTimeout(r, 3000));
                         const summary = await SignTask.getPointsAndTasks(client);
-                        const t = summary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用'));
+                        const t = summary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用') || item.name.includes('云电脑') || item.name.includes('体验') || item.name.includes('时长'));
                         const cloudProgress = t?.currentProgress || 0;
                         const isDone = Boolean(t && (t.isCompleted || (t as any).status === 2 || cloudProgress >= totalProgress));
 
@@ -402,7 +412,7 @@ export class HangTask {
                           await new Promise((r) => setTimeout(r, 3000));
                           try {
                             const secondSummary = await SignTask.getPointsAndTasks(client);
-                            const t2 = secondSummary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用'));
+                            const t2 = secondSummary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用') || item.name.includes('云电脑') || item.name.includes('体验') || item.name.includes('时长'));
                             const cloudProgress2 = t2?.currentProgress || 0;
                             const isDone2 = Boolean(t2 && (t2.isCompleted || (t2 as any).status === 2 || cloudProgress2 >= totalProgress));
                             if (isDone2) {
@@ -451,7 +461,7 @@ export class HangTask {
           await new Promise((r) => setTimeout(r, 3000));
           try {
             const summary = await SignTask.getPointsAndTasks(client);
-            const t = summary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用'));
+            const t = summary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用') || item.name.includes('云电脑') || item.name.includes('体验') || item.name.includes('时长'));
             const cloudProgress = t?.currentProgress || 0;
             const isDone = Boolean(t && (t.isCompleted || (t as any).status === 2 || cloudProgress >= totalProgress));
 

@@ -582,6 +582,45 @@ export async function createServer() {
     }
   });
 
+  fastify.post('/api/profiles/:id/stop', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+    try {
+      manager.stopAccount(acc.name);
+      return { success: true, msg: `账号 [${acc.name}] 保活已停止` };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.post('/api/profiles/:id/tasks/login', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+    try {
+      const msg = await manager.manualActivateDesktop(acc.name);
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.post('/api/profiles/:id/tasks/chat', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+    try {
+      const msg = await manager.manualAiChat(acc.name);
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
   fastify.post('/api/profiles/:id/tasks/hang/start', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };

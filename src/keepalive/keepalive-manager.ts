@@ -100,13 +100,32 @@ export class KeepAliveManager {
    * 停止指定账号下的所有保活工作者
    */
   public stopWorkers(accountName: string): void {
-    const existing = this.workers.get(accountName) || [];
-    for (const w of existing) {
-      try {
+    const list = this.workers.get(accountName);
+    if (list) {
+      for (const w of list) {
         w.stop();
-      } catch {}
+      }
+      this.workers.delete(accountName);
     }
-    this.workers.delete(accountName);
+  }
+
+  public stopWorkerForDesktop(accountName: string, desktopCodeOrId: string): void {
+    const list = this.workers.get(accountName);
+    if (!list) return;
+    const remaining: KeepAliveWorker[] = [];
+    for (const w of list) {
+      const d = (w as any).options?.desktop;
+      if (d && (d.desktopCode === desktopCodeOrId || String(d.desktopId) === String(desktopCodeOrId))) {
+        w.stop();
+      } else {
+        remaining.push(w);
+      }
+    }
+    if (remaining.length > 0) {
+      this.workers.set(accountName, remaining);
+    } else {
+      this.workers.delete(accountName);
+    }
   }
 
   /**

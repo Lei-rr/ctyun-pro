@@ -613,6 +613,11 @@ export const useAppStore = defineStore('app', () => {
             method: 'DELETE',
             headers: getHeaders(),
           });
+        } else if (action === 'stop') {
+          res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/stop`, {
+            method: 'POST',
+            headers: getHeaders(),
+          });
         } else {
           res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/sync`, {
             method: 'POST',
@@ -904,7 +909,7 @@ export const useAppStore = defineStore('app', () => {
 
   async function manualLoginDesktopTask(accountName: string) {
     try {
-      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/sync`, {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/login`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ accountName }),
@@ -923,7 +928,7 @@ export const useAppStore = defineStore('app', () => {
 
   async function manualAiChatTask(accountName: string) {
     try {
-      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/run`, {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/chat`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ accountName }),

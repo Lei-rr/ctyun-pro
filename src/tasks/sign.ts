@@ -160,7 +160,7 @@ export class SignTask {
             const reward = Number(t.pointsList?.[0]?.value || 100);
             // 仅对挂机类任务 (tot >= 60 或名称含「使用」) 给予 5 秒冗余容错
             // 普通计数类任务 (如「与AI对话1次」tot=1) 必须严格满足 cur >= tot 或官方 status === 2
-            const isHangTask = tot >= 60 || (t.taskDefName || '').includes('使用');
+            const isHangTask = tot >= 60 || (t.taskDefName || '').includes('使用') || (t.taskDefName || '').includes('云电脑') || (t.taskDefName || '').includes('体验') || (t.taskDefName || '').includes('时长');
             const isCompleted = isHangTask
               ? (tot > 0 && cur >= Math.max(0, tot - 5)) || t.status === 2 || t.status === '2'
               : (tot > 0 && cur >= tot) || t.status === 2 || t.status === '2';

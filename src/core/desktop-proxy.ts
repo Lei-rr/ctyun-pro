@@ -194,6 +194,8 @@ export function registerDesktopProxyRoutes(
 
       let html = await getCtyunIndexHtml();
 
+      const safeJson = (val: any) => JSON.stringify(val).replace(/</g, '\\u003c');
+
       // 现代化注入脚本：深色质感骨架屏、凭据自动化注水、API 代理拦截、前台 Web 避让心跳保持
       const injectScript = `
 <style>
@@ -242,12 +244,12 @@ export function registerDesktopProxyRoutes(
 </div>
 <script>
 (function() {
-  const desktopCode = ${JSON.stringify(desktop.desktopCode)};
-  const accountName = ${JSON.stringify(accountName)};
-  const token = ${JSON.stringify((client.loginInfo as any)?.token || '')};
-  const authData = ${JSON.stringify(authDataObj)};
-  const deviceCode = ${JSON.stringify(client.getDeviceCode())};
-  const expiredAt = ${JSON.stringify(String(Date.now() + 72 * 3600 * 1000))};
+  const desktopCode = ${safeJson(desktop.desktopCode)};
+  const accountName = ${safeJson(accountName)};
+  const token = ${safeJson((client.loginInfo as any)?.token || '')};
+  const authData = ${safeJson(authDataObj)};
+  const deviceCode = ${safeJson(client.getDeviceCode())};
+  const expiredAt = ${safeJson(String(Date.now() + 72 * 3600 * 1000))};
 
   // 动态锁定并维持自定义标题：原有标题 + " - CTYUN-PRO"
   const origOfficialTitle = '天翼量子AI云电脑';
@@ -521,6 +523,7 @@ export function registerDesktopProxyRoutes(
 
   // 2. 接收前台 Web 用户活跃心跳 (刷新避让时长 30s)
   fastify.post('/api/desktops/:id/web-active', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!verifyAuth(request, reply)) return;
     const { id } = request.params as { id: string };
     manager.touchWebUserActive('', id, 30);
     reply.send({ success: true });
@@ -528,6 +531,7 @@ export function registerDesktopProxyRoutes(
 
   // 3. 接收前台 Web 用户关闭通知 (立即清除避让标记，使后台长连接无缝复活)
   fastify.post('/api/desktops/:id/web-close', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!verifyAuth(request, reply)) return;
     const { id } = request.params as { id: string };
     manager.releaseWebUserActive('', id);
     reply.send({ success: true });
@@ -575,6 +579,7 @@ export function registerDesktopProxyRoutes(
 
   // 6. 天翼云 API 反向代理通道 (流式管道，防盗链透传与全跨域开放)
   const proxyHandler = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!verifyAuth(request, reply)) return;
     const req = request.raw;
     const res = reply.raw;
     reply.hijack();
@@ -605,6 +610,15 @@ export function registerDesktopProxyRoutes(
     } catch {
       res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ error: 'Invalid target URL' }));
+      return;
+    }
+
+    // 安全防御：严格限制目标域名为天翼云官网域名 (*.ctyun.cn)，彻底杜绝 SSRF 任意内网/外部探测
+    const hostname = parsedTarget.hostname.toLowerCase();
+    const isAllowedHost = hostname === 'ctyun.cn' || hostname.endsWith('.ctyun.cn');
+    if (!isAllowedHost) {
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'Forbidden: only ctyun.cn domains are permitted' }));
       return;
     }
 
@@ -642,18 +656,6 @@ export function registerDesktopProxyRoutes(
         'Access-Control-Allow-Headers': '*',
       });
       res.end(JSON.stringify({ code: 0, msg: 'ok', data: { canJoinGroup: false } }));
-      return;
-    }
-
-    if (parsedTarget.pathname.includes('/api/desktop/client/state')) {
-      res.writeHead(200, {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Credentials': 'true',
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': '*',
-      });
-      res.end(JSON.stringify({ code: 0, msg: 'ok', data: [{ state: 1, desktopState: 1 }] }));
       return;
     }
 

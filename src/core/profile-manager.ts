@@ -249,7 +249,18 @@ export class ProfileManager {
         state.todayPoints = (pts && pts.date === todayStr) ? (pts.todayPoints ?? 0) : 0;
       }
     }
-    return Array.from(this.accountStates.values());
+    return Array.from(this.accountStates.values()).map((state) => {
+      if (!state.loginInfo) return state;
+      const sanitizedLoginInfo: any = { ...state.loginInfo };
+      delete sanitizedLoginInfo.secretKey;
+      delete sanitizedLoginInfo.clientKey;
+      delete sanitizedLoginInfo.caCert;
+      delete sanitizedLoginInfo.clientCert;
+      return {
+        ...state,
+        loginInfo: sanitizedLoginInfo,
+      };
+    });
   }
 
   /**
@@ -368,7 +379,7 @@ export class ProfileManager {
       if (operation === 'shutdown') {
         this.setManualShutdown(canonicalDesktopCode, true);
       }
-      this.keepAliveManager.stopWorkers(accountName);
+      this.keepAliveManager.stopWorkerForDesktop(accountName, canonicalDesktopCode);
       desktop.status = 'stopped';
       desktop.lastHeartbeat = undefined;
       desktop.useStatusText = operation === 'shutdown' ? '已关机' : '重启中';
@@ -673,6 +684,7 @@ export class ProfileManager {
     const client = this.clients.get(oldName);
 
     this.keepAliveManager.stopWorkers(oldName);
+    HangTask.renameSession(oldName, trimmed);
     this.accounts.delete(oldName);
     this.accountStates.delete(oldName);
     if (client) this.clients.delete(oldName);

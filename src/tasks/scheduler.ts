@@ -63,10 +63,10 @@ export class TaskScheduler {
       .format(now)
       .replace(/\//g, '-');
 
-    const cstDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
-    const cstDay = cstDate.getDate();
-    const cstMonth = cstDate.getMonth() + 1;
-    const cstYear = cstDate.getFullYear();
+    const [cstYearStr, cstMonthStr, cstDayStr] = today.split('-');
+    const cstYear = parseInt(cstYearStr, 10);
+    const cstMonth = parseInt(cstMonthStr, 10);
+    const cstDay = parseInt(cstDayStr, 10);
     const lastDayOfMonth = new Date(cstYear, cstMonth, 0).getDate();
 
     // 0. 跨天主动重置今日积分 (0 点清零，纯本地状态机重置，绝不发起多余网络拉取)
@@ -129,7 +129,11 @@ export class TaskScheduler {
 
               this.accountManager.notifyStatusChange();
             } catch (e: any) {
-              this.logger.addLog('warn', `[${name}] 自动任务执行跳过: ${e.message}`);
+              // 发生偶发异常（如瞬时断网），回退当日锁定标记，允许下一轮巡检退避重试，避免整日积分丢失
+              tConf.lastRunDate = '';
+              acc.taskConfig = tConf;
+              this.accountManager.saveToDisk();
+              this.logger.addLog('warn', `[${name}] 自动任务执行异常（已重置重试标记）: ${e.message}`);
               if (this.accountManager.webhookUrl) {
                 sendWebhookNotification(
                   this.accountManager.webhookUrl,
@@ -154,7 +158,7 @@ export class TaskScheduler {
           if (Date.now() - lastWatchdog >= WATCHDOG_COOLDOWN_MS) {
             const cached = this.accountManager.getCachedTodayPoints(name);
             const hangTask = cached?.summary?.tasks?.find(
-              (t: any) => t.name.includes('使用1小时') || t.name.includes('使用'),
+              (t: any) => t.name.includes('使用1小时') || t.name.includes('使用') || t.name.includes('云电脑') || t.name.includes('体验') || t.name.includes('时长'),
             );
             if (hangTask && !hangTask.isCompleted && (hangTask.currentProgress || 0) < (hangTask.totalProgress || 3600)) {
               const cur = hangTask.currentProgress || 0;
@@ -320,7 +324,7 @@ export class TaskScheduler {
             const sum = await this.accountManager.getPointsAndTasks(name);
             const total = (sum.generalPoints || 0) + (sum.phonePoints || 0);
             totalGeneral += total;
-            const hangTask = sum.tasks.find((t) => t.name.includes('使用1小时') || t.name.includes('使用'));
+            const hangTask = sum.tasks.find((t) => t.name.includes('使用1小时') || t.name.includes('使用') || t.name.includes('云电脑') || t.name.includes('体验') || t.name.includes('时长'));
             const hangStatusText = hangTask?.isCompleted ? '已达标(100分)' : `${hangTask?.currentProgress || 0}秒`;
             pointInfo = `总积分: ${total} | 挂机: ${hangStatusText}`;
           } catch {
