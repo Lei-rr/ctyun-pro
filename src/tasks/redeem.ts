@@ -127,6 +127,22 @@ export class RedeemTask {
   }
 
   /**
+   * 自动反查商品规格信息（优先官方在线商城，降级本地预设库）
+   */
+  public static async resolveReward(client?: CtYunClient, prodId?: number): Promise<RewardItem | undefined> {
+    if (!prodId) return undefined;
+    const numId = Number(prodId);
+    if (client) {
+      try {
+        const list = await RedeemTask.getAvailableRewards(client);
+        const match = list.find((i) => Number(i.prodId) === numId);
+        if (match) return match;
+      } catch {}
+    }
+    return DEFAULT_LOCAL_REWARDS.find((i) => Number(i.prodId) === numId);
+  }
+
+  /**
    * 提交兑换订单
    */
   public static async placeOrder(
@@ -136,18 +152,34 @@ export class RedeemTask {
     costPoints?: number,
     prodType?: string,
   ): Promise<{ success: boolean; message: string }> {
-    if (!prodId || !costPoints || !prodType) throw new Error('未提供官方商品信息，无法兑换');
+    if (!prodId) throw new Error('未提供目标商品 ID，无法发起兑换');
+
+    let resolvedPoints = costPoints ? Number(costPoints) : 0;
+    let resolvedType = prodType ? String(prodType).trim() : '';
+
+    if (!resolvedPoints || !resolvedType) {
+      const item = await RedeemTask.resolveReward(client, Number(prodId));
+      if (item) {
+        resolvedPoints = resolvedPoints || item.costPoints;
+        resolvedType = resolvedType || item.prodType;
+      }
+    }
+
+    if (!resolvedPoints || !resolvedType) {
+      throw new Error(`未获取到商品 [${prodId}] 的规格参数(costPoints/prodType)，无法兑换`);
+    }
+
     const url = `${RedeemTask.DESK_URL}/selforder/api/selforder/paas/placeOrder`;
     const payload = {
       busiChannel: '010',
       orderType: 1,
       pointType: 1,
-      points: Number(costPoints),
+      points: Number(resolvedPoints),
       sku: [
         {
           execSort: 1,
           prodId: Number(prodId),
-          prodType,
+          prodType: resolvedType,
           attrs: [{ attrKey: 'bindDesktopId', attrVal: Number(desktopId) }],
         },
       ],
@@ -164,7 +196,7 @@ export class RedeemTask {
 
     const json = (await res.json()) as { code: number; msg?: string };
     if (json.code === 0) {
-      return { success: true, message: `兑换成功！消耗 ${costPoints} 积分` };
+      return { success: true, message: `兑换成功！消耗 ${resolvedPoints} 积分` };
     }
     throw new Error(json.msg || `兑换失败 (Code: ${json.code})`);
   }

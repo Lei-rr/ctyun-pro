@@ -86,9 +86,13 @@ export class TaskScheduler {
         // 用户未开启或关闭了每日任务总开关，绝不自动执行
       } else {
         const targetTime = tConf.scheduleTime || '03:30';
-        // 准点命中判定：仅在到达设定时间的当分钟 (currentHHmm === targetTime) 且今日未执行时触发
-        // 若服务重启或时间已过 (currentHHmm > targetTime)，绝不补跑，避免重启误触
-        if (tConf.lastRunDate !== today && currentHHmm === targetTime) {
+        // 准点命中判定：到达或超过设定时间且今日未执行时触发 (防止服务重启错过固定当分钟)
+        if (tConf.lastRunDate !== today && currentHHmm >= targetTime) {
+          // 先行锁定今日执行标记，防止抖动异步等待期间重复触发
+          tConf.lastRunDate = today;
+          acc.taskConfig = tConf;
+          this.accountManager.saveToDisk();
+
           // 仿生随机抖动：引入 3~25 秒阶梯式动态延迟，彻底打散多账号并发特征，防范官方批量风控
           const jitterMs = Math.floor(Math.random() * 22000) + 3000;
           setTimeout(async () => {
