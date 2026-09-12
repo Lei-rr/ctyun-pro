@@ -977,7 +977,12 @@ export class ProfileManager {
             } catch {}
           }
 
-          hangResult = await HangTask.executeSmartHang(accountName, client, this.logger, () => {
+          hangResult = await HangTask.executeSmartHang(accountName, client, this.logger, (cur, tot) => {
+            const curState = this.accountStates.get(accountName);
+            // 只要达到目标秒数，毫秒级就地清理 hangStatus 并广播，绝不在界面留存 3600/3600 滞留卡片
+            if (cur >= tot && curState?.hangStatus) {
+              curState.hangStatus = undefined;
+            }
             this.notifyStatusChange();
           });
 
@@ -1156,19 +1161,25 @@ export class ProfileManager {
 
     const rConf: any = acc.redeemConfig || {};
     let targetDesktopId = desktopId || rConf.targetDesktopId;
+    let state = this.accountStates.get(accountName);
+    if ((!state?.desktops || state.desktops.length === 0) && (!targetDesktopId || targetDesktopId === 'undefined')) {
+      // 若内存中暂无桌面，尝试从官方拉取一次最新的桌面列表
+      try {
+        await this.reloadDesktops(accountName);
+        state = this.accountStates.get(accountName);
+      } catch {}
+    }
+
     if (!targetDesktopId) {
-      targetDesktopId = this.accountStates.get(accountName)?.desktops?.[0]?.desktopId;
+      targetDesktopId = state?.desktops?.[0]?.desktopId;
     } else {
       // 兼容支持传入 desktopCode 反查底层数字 desktopId
-      const matched = this.accountStates.get(accountName)?.desktops?.find(
+      const matched = state?.desktops?.find(
         (d) => d.desktopCode === targetDesktopId || String(d.desktopId) === String(targetDesktopId),
       );
       if (matched) {
         targetDesktopId = matched.desktopId;
       }
-    }
-    if (!targetDesktopId) {
-      throw new Error('名下未找到云电脑实例，无法兑换');
     }
 
     const res = await RedeemTask.placeOrder(
@@ -1188,11 +1199,13 @@ export class ProfileManager {
   }
 
   public async getAvailableRewards(accountName?: string, forceRefresh = false): Promise<RewardItem[]> {
-    // 默认直接返回本地已加载/缓存的商品目录（毫秒级、顺序稳定一致）
-    // 只有在用户主动点击“刷新”按钮（forceRefresh = true）时，才请求官方接口同步最新商品
-    if (forceRefresh && accountName) {
+    // 若未指定账号，尝试挑一个已登录的可用账号用于请求天翼云接口
+    const targetAccount = accountName || Array.from(this.accounts.keys()).find((k) => !!this.getClient(k).loginInfo);
+
+    // 只要有可用账号，优先尝试从官方接口拉取/刷新一次（带有本地降级保护）
+    if (targetAccount && (forceRefresh || !this.rewardsCache || this.rewardsCache.length === 0)) {
       try {
-        const client = this.getClient(accountName);
+        const client = this.getClient(targetAccount);
         const items = await RedeemTask.getAvailableRewards(client);
         if (items && items.length > 0) {
           this.rewardsCache = items;
@@ -1200,7 +1213,9 @@ export class ProfileManager {
           return items;
         }
       } catch (e: any) {
-        this.logger.addLog('warn', `[${accountName}] 强制拉取官方商品失败: ${e.message}，保持现有本地商品`);
+        if (forceRefresh) {
+          this.logger.addLog('warn', `[${targetAccount}] 拉取官方商品列表失败: ${e.message}，使用缓存商品`);
+        }
       }
     }
     // 若没有缓存则返回本地预设

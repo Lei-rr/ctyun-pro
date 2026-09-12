@@ -1,5 +1,6 @@
 import type { CtYunClient } from '../core/client.js';
 import { safeFetch } from '../core/utils.js';
+import { SignTask } from './sign.js';
 
 export interface RewardItem {
   prodId: number;
@@ -147,7 +148,7 @@ export class RedeemTask {
    */
   public static async placeOrder(
     client: CtYunClient,
-    desktopId: string | number,
+    desktopId?: string | number,
     prodId?: number,
     costPoints?: number,
     prodType?: string,
@@ -169,6 +170,37 @@ export class RedeemTask {
       throw new Error(`未获取到商品 [${prodId}] 的规格参数(costPoints/prodType)，无法兑换`);
     }
 
+    // 1. 硬性积分前置校验：查询账号真实可用积分，若不足坚决不调用天翼云下单接口
+    try {
+      const pointSummary = await SignTask.getPointsAndTasks(client);
+      const currentPoints = Number(pointSummary.generalPoints || 0);
+      if (currentPoints < resolvedPoints) {
+        throw new Error(
+          `[积分不足拦截] 当前可用积分 ${currentPoints} 不足，兑换商品需要 ${resolvedPoints} 积分，已放弃下单`,
+        );
+      }
+    } catch (err: any) {
+      if (err.message?.includes('[积分不足拦截]')) {
+        throw err;
+      }
+      // 若是网络异常或查询解析波动，但若明确获知积分不足则绝不下单
+    }
+
+    // 2. 硬件绑定类商品校验（如升配包 pointstplupgrade、数据盘 pointsdiskupgrade）
+    const isHardwareBound = resolvedType === 'pointstplupgrade' || resolvedType === 'pointsdiskupgrade';
+    const attrs: any[] = [];
+    if (isHardwareBound) {
+      if (!desktopId || desktopId === 'undefined' || desktopId === 'null' || Number(desktopId) <= 0) {
+        throw new Error(
+          `[参数错误拦截] 商品类型 [${resolvedType}] 为硬件绑定资源，必须绑定有效云电脑桌面 ID，防止官方返回“目标资源不存在”`,
+        );
+      }
+      attrs.push({ attrKey: 'bindDesktopId', attrVal: Number(desktopId) });
+    } else if (desktopId && Number(desktopId) > 0) {
+      // 非强绑定硬件但传了有效桌面ID，附带上
+      attrs.push({ attrKey: 'bindDesktopId', attrVal: Number(desktopId) });
+    }
+
     const url = `${RedeemTask.DESK_URL}/selforder/api/selforder/paas/placeOrder`;
     const payload = {
       busiChannel: '010',
@@ -180,7 +212,7 @@ export class RedeemTask {
           execSort: 1,
           prodId: Number(prodId),
           prodType: resolvedType,
-          attrs: [{ attrKey: 'bindDesktopId', attrVal: Number(desktopId) }],
+          attrs,
         },
       ],
     };

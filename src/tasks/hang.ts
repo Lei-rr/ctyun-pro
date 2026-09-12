@@ -368,10 +368,6 @@ export class HangTask {
                 }
 
                 // 5. 纯本地时间平滑推演进度 (每 1 秒根据本地时间戳递增计算流逝秒数，严禁中途频繁轮询接口)
-                // 冗余缓冲时间：额外增加 15 秒挂机时长，抵消网络延迟与官方网关统计误差
-                const BUFFER_SECONDS = 15;
-                const targetSeconds = totalProgress + BUFFER_SECONDS;
-
                 if (!progressUpdateTimer) {
                   progressUpdateTimer = setInterval(async () => {
                     if (isTerminated || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -380,8 +376,10 @@ export class HangTask {
                     session.currentProgress = cur;
                     options.onProgress?.(cur, totalProgress);
 
-                    if (currentProgress + elapsedSec >= targetSeconds) {
-                      logger.addLog('info', `[${accountName}] 挂机目标时长已达标 (推演 ${cur}/${totalProgress}秒，含 ${BUFFER_SECONDS}s 冗余缓冲)，主动断开长连触发官方结算...`);
+                    if (currentProgress + elapsedSec >= totalProgress) {
+                      logger.addLog('info', `[${accountName}] 挂机目标时长已达标 (推演 ${cur}/${totalProgress}秒)，主动断开长连触发官方离线结算...`);
+                      // 立即从全局会话中移除并清理，确保外部读取立即为已完成
+                      activeHangSessions.delete(accountName);
                       await cleanup();
 
                       // 离线断开后，等待 3 秒调用官方接口核验积分与时长
