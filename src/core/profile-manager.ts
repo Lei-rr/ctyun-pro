@@ -734,7 +734,7 @@ export class ProfileManager {
         state.status = 'login_needed';
         if (this.webhookUrl && !this.expiredNotifiedAccounts.has(accountName)) {
           this.expiredNotifiedAccounts.add(accountName);
-          const title = `天翼云电脑 - [${accountName}] 登录态失效告警 🚨`;
+          const title = `天翼云电脑 - [${accountName}] 登录态失效告警`;
           const content = `账号: ${accountName}\n错误: ${err.message}\n状态: 登录凭证已失效或被踢出，已暂停自动任务。\n请尽快登录 Web 控制台重新扫码登录！`;
           sendWebhookNotification(this.webhookUrl, title, content).catch(() => {});
         }
@@ -1045,9 +1045,9 @@ export class ProfileManager {
         if (this.webhookUrl && hangResult) {
           const title = hangResult.success
             ? (hangResult.isCompleted
-                ? `天翼云电脑 - [${accountName}] 智能挂机已达标 🎉`
+                ? `天翼云电脑 - [${accountName}] 智能挂机已达标`
                 : `天翼云电脑 - [${accountName}] 智能挂机完成`)
-            : `天翼云电脑 - [${accountName}] 智能挂机异常 ⚠️`;
+            : `天翼云电脑 - [${accountName}] 智能挂机异常`;
           const content = `账号: ${accountName}\n挂机结果: ${hangResult.message}\n最新总积分: ${finalPoints || '已刷新'}\n完成时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
           sendWebhookNotification(this.webhookUrl, title, content).catch(() => {});
         }

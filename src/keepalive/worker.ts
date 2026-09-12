@@ -243,7 +243,7 @@ export class KeepAliveWorker {
         return;
       }
 
-      // 收到 Type 103 用户状态探测 -> 仅响应 Type 118 用户身份（后台静默保活，不抢占会话）
+      // 收到 Type 103 用户状态探测 -> 仅响应 Type 118 用户身份（后台静默保活）
       try {
         const infos = Protocol.parseSendInfo(buffer);
         for (const info of infos) {

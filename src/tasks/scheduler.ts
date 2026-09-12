@@ -221,7 +221,19 @@ export class TaskScheduler {
           await new Promise((r) => setTimeout(r, redeemJitterMs));
 
           this.logger.addLog('info', `[${name}] ${reason} (仿生延迟 ${(redeemJitterMs/1000).toFixed(1)}s)，准备自动下单兑换...`);
-          const targetDesktopId = rConf.targetDesktopId || this.accountManager.getAccountState(name)?.desktops?.[0]?.desktopId;
+          let targetDesktopId = rConf.targetDesktopId;
+          const state = this.accountManager.getAccountState(name);
+          if (!targetDesktopId) {
+            targetDesktopId = state?.desktops?.[0]?.desktopId;
+          } else {
+            // 兼容配置中存储的是 desktopCode，反查底层数字 desktopId
+            const matched = state?.desktops?.find(
+              (d) => d.desktopCode === targetDesktopId || String(d.desktopId) === String(targetDesktopId),
+            );
+            if (matched) {
+              targetDesktopId = matched.desktopId;
+            }
+          }
           if (!targetDesktopId) {
             this.logger.addLog('warn', `[${name}] 自动兑换跳过: 名下未找到绑定的云电脑`);
             continue;
@@ -316,8 +328,8 @@ export class TaskScheduler {
           }
 
           const signMark = acc.lastSignDate === today ? '已打卡' : '待执行';
-          const statusIcon = isOnline ? '🟢' : '🔴';
-          reportLines.push(`${statusIcon} [${name}]: ${signMark} | ${pointInfo}`);
+          const statusText = isOnline ? '[在线]' : '[离线]';
+          reportLines.push(`${statusText} [${name}]: ${signMark} | ${pointInfo}`);
         }
 
         const title = `CTYUN-PRO - 每日运行早报 (${today})`;
