@@ -30,7 +30,16 @@ export class TaskRunner {
     }
 
     try {
-      const dId = desktopId;
+      let dId = desktopId;
+      if (!dId) {
+        try {
+          const list = await client.getDesktopList();
+          const target = list.find((d) => d.useStatusText === '运行中' || d.useStatusText === '离线运行') || list[0];
+          if (target) {
+            dId = String(target.desktopId);
+          }
+        } catch {}
+      }
       if (!dId) {
         return { success: false, message: '未找到可用云电脑，无法激活桌面会话' };
       }

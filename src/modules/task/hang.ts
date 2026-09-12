@@ -109,6 +109,7 @@ export class HangTask {
     options: {
       onlyLoginTask?: boolean;
       desktopId?: string;
+      desktopCode?: string;
       onProgress?: (cur: number, total: number) => void;
     } = {},
   ): Promise<{ success: boolean; message: string; isCompleted?: boolean }> {
@@ -125,8 +126,11 @@ export class HangTask {
     let targetDesktop: Desktop | undefined;
     try {
       const desktops = await client.getDesktopList();
-      if (options.desktopId) {
-        targetDesktop = desktops.find((d) => String(d.desktopId) === String(options.desktopId));
+      const targetIdentifier = options.desktopCode || options.desktopId;
+      if (targetIdentifier) {
+        targetDesktop = desktops.find(
+          (d) => String(d.desktopCode) === String(targetIdentifier) || String(d.desktopId) === String(targetIdentifier)
+        );
       }
       if (!targetDesktop) {
         targetDesktop = desktops.find((d) => d.useStatusText === '运行中' || d.useStatusText === '离线运行') || desktops[0];

@@ -36,11 +36,9 @@ watch(
 onMounted(() => {
   scrollToBottom();
   // 若 WS 尚未连上，开启 SSE 兜底推流
+  // 优先直接使用同源 Cookie 鉴权建立 SSE 连接，避免在 URL 中暴露 token
   if (!store.isWsConnected) {
-    const url = store.adminToken
-      ? `/api/logs/stream?token=${encodeURIComponent(store.adminToken)}`
-      : '/api/logs/stream';
-    es = new EventSource(url);
+    es = new EventSource('/api/logs/stream');
     es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
