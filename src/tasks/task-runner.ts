@@ -134,6 +134,14 @@ export class TaskRunner {
       return { success: true, message: '每日任务总开关已关闭，跳过执行' };
     }
 
+    // 0. 前置拉取官方任务中心最新状态（精准幂等，防重复打断保活与多余接口请求）
+    let taskSummary: PointsSummary | null = null;
+    try {
+      taskSummary = await SignTask.getPointsAndTasks(client);
+    } catch (e: any) {
+      logger?.addLog('warn', `前置核验任务状态提示: ${e.message}，将执行常规流程`);
+    }
+
     const results: string[] = [];
 
     // 1. 每日签到打卡 (+100积分)
@@ -165,7 +173,12 @@ export class TaskRunner {
     }
 
     // 2. 触发官方「与AI对话1次」任务 (+100积分)
-    if (!taskConfig || taskConfig.aiChat !== false) {
+    const chatTask = taskSummary?.tasks.find((t) => t.type === 'chat');
+    const isChatCompleted = !!(chatTask && (chatTask.isCompleted || (chatTask.totalProgress > 0 && chatTask.currentProgress >= chatTask.totalProgress)));
+
+    if (isChatCompleted) {
+      results.push('官方AI对话今日已达成 (+100积分)，无需重复执行');
+    } else if (!taskConfig || taskConfig.aiChat !== false) {
       let chatSuccess = false;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
@@ -193,7 +206,12 @@ export class TaskRunner {
     }
 
     // 3. 激活官方桌面会话，推进「登录AI云电脑」任务 (+100积分)
-    if (!taskConfig || taskConfig.loginDesktop !== false) {
+    const loginTask = taskSummary?.tasks.find((t) => t.type === 'login');
+    const isLoginCompleted = !!(loginTask && (loginTask.isCompleted || (loginTask.totalProgress > 0 && loginTask.currentProgress >= loginTask.totalProgress)));
+
+    if (isLoginCompleted) {
+      results.push('纯协议桌面登录今日已达成 (+100积分)，无需重复执行');
+    } else if (!taskConfig || taskConfig.loginDesktop !== false) {
       let actSuccess = false;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
