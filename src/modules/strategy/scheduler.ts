@@ -290,6 +290,11 @@ export class TaskScheduler {
             );
             if (matched) {
               targetDesktopId = matched.desktopId;
+            } else {
+              const fallbackFound = this.profileManager.findDesktopByCode(targetDesktopId);
+              if (fallbackFound) {
+                targetDesktopId = fallbackFound.desktop.desktopId;
+              }
             }
           }
           if (!targetDesktopId) {

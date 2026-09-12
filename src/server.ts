@@ -954,7 +954,7 @@ export async function createServer() {
   fastify.server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url || '', `http://${request.headers.host || 'localhost'}`);
     if (url.pathname === '/ws') {
-      const token = url.searchParams.get('token');
+      const token = url.searchParams.get('token') || parseCookieToken(request.headers.cookie);
       if (manager.adminPassword && (!token || !isValidToken(token))) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();

@@ -1249,6 +1249,11 @@ export class ProfileManager {
       );
       if (matched) {
         targetDesktopId = matched.desktopId;
+      } else {
+        const fallback = this.findDesktopByCode(targetDesktopId);
+        if (fallback) {
+          targetDesktopId = fallback.desktop.desktopId;
+        }
       }
     }
 
