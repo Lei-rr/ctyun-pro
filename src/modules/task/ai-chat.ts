@@ -1,5 +1,5 @@
-import type { CtYunClient } from '../core/client.js';
-import { safeFetch, requestIpv4 } from '../core/utils.js';
+import type { CtYunClient } from '../../core/client.js';
+import { safeFetch, requestIpv4 } from '../../core/utils.js';
 
 /**
  * 天翼云智助手 (eaichat) 独立任务处理器

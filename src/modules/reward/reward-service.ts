@@ -1,11 +1,11 @@
 import type { CtYunClient } from '../../core/client.js';
 import { safeFetch } from '../../core/utils.js';
-import { SignTask } from '../../tasks/sign.js';
+import { SignTask } from '../task/sign.js';
 import {
   DEFAULT_LOCAL_REWARDS,
   sortRewards,
   type RewardItem,
-} from '../../tasks/redeem.js';
+} from './redeem.js';
 
 export { DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem };
 

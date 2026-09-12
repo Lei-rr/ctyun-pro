@@ -1,5 +1,5 @@
-import type { CtYunClient } from '../core/client.js';
-import { safeFetch } from '../core/utils.js';
+import type { CtYunClient } from '../../core/client.js';
+import { safeFetch } from '../../core/utils.js';
 
 export type TaskType = 'hang' | 'login' | 'chat' | 'other';
 

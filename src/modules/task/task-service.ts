@@ -1,8 +1,8 @@
 import type { CtYunClient } from '../../core/client.js';
 import type { Logger } from '../../core/logger.js';
-import { SignTask, type PointsSummary } from '../../tasks/sign.js';
-import { AiChatTask } from '../../tasks/ai-chat.js';
-import { HangTask } from '../../tasks/hang.js';
+import { SignTask, type PointsSummary } from './sign.js';
+import { AiChatTask } from './ai-chat.js';
+import { HangTask } from './hang.js';
 
 export interface TaskExecutionSummary {
   accountName: string;

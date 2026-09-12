@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
-import { Protocol } from '../core/protocol.js';
-import type { Desktop, DesktopInfo } from '../core/client.js';
+import { Protocol } from '../../core/protocol.js';
+import type { Desktop, DesktopInfo } from '../../core/client.js';
 
 export interface KeepAliveWorkerOptions {
   accountName: string;

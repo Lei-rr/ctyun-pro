@@ -1,11 +1,11 @@
-import type { AccountConfig } from '../config.js';
-import type { Logger } from '../core/logger.js';
-import { TaskRunner } from './task-runner.js';
-import { RedeemTask } from './redeem.js';
-import { HangTask } from './hang.js';
-import { SignTask, isHangTaskName } from './sign.js';
-import { sendWebhookNotification } from '../core/utils.js';
-import type { ProfileManager } from '../core/profile-manager.js';
+import type { AccountConfig } from '../../config.js';
+import type { Logger } from '../../core/logger.js';
+import { TaskRunner } from '../task/task-runner.js';
+import { RedeemTask } from '../reward/redeem.js';
+import { HangTask } from '../task/hang.js';
+import { SignTask, isHangTaskName } from '../task/sign.js';
+import { sendWebhookNotification } from '../../core/utils.js';
+import type { ProfileManager } from '../../core/profile-manager.js';
 
 /**
  * 工业级精准时间点调度器

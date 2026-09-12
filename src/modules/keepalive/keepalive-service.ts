@@ -1,8 +1,8 @@
 import type { CtYunClient, Desktop, DesktopInfo } from '../../core/client.js';
-import { KeepAliveWorker } from '../../keepalive/worker.js';
+import { KeepAliveWorker } from './worker.js';
 import type { Logger } from '../../core/logger.js';
 import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
-import type { ManagedDesktopState } from '../../keepalive/keepalive-manager.js';
+import type { ManagedDesktopState } from './keepalive-manager.js';
 
 /**
  * 现代化静默保活服务模块 (Keepalive Service)

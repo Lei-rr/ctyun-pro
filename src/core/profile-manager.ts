@@ -2,14 +2,11 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { Config, getRandomScheduleTime, DEFAULT_REDEEM_CONFIG, type AccountConfig, type TaskConfig, type RedeemConfig } from '../config.js';
 import { CtYunClient, type Desktop, type DesktopInfo, type LoginInfo } from './client.js';
-import { KeepAliveManager, type ManagedDesktopState } from '../keepalive/keepalive-manager.js';
+import { KeepAliveManager, type ManagedDesktopState } from '../modules/keepalive/index.js';
 import { Logger, type LogItem } from './logger.js';
-import { TaskScheduler } from '../tasks/scheduler.js';
-import { TaskRunner } from '../tasks/task-runner.js';
-import { SignTask, type PointsSummary, isHangTaskName } from '../tasks/sign.js';
-import { RedeemTask, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../tasks/redeem.js';
-import { AiChatTask } from '../tasks/ai-chat.js';
-import { HangTask } from '../tasks/hang.js';
+import { TaskScheduler } from '../modules/strategy/index.js';
+import { TaskRunner, SignTask, isHangTaskName, HangTask, AiChatTask, type PointsSummary } from '../modules/task/index.js';
+import { RedeemTask, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../modules/reward/index.js';
 import { DesktopSessionArbiter } from '../modules/arbiter/desktop-session-arbiter.js';
 import { safeWriteFileSync, sendWebhookNotification, getCstDateString } from './utils.js';
 

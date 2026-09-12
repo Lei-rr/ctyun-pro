@@ -1,10 +1,10 @@
-import { CtYunClient } from '../core/client.js';
+import { CtYunClient } from '../../core/client.js';
 import { AiChatTask } from './ai-chat.js';
 import { SignTask, type PointsSummary } from './sign.js';
 import { HangTask } from './hang.js';
-import { safeFetch } from '../core/utils.js';
-import type { TaskConfig } from '../config.js';
-import type { Logger } from '../core/logger.js';
+import { safeFetch } from '../../core/utils.js';
+import type { TaskConfig } from '../../config.js';
+import type { Logger } from '../../core/logger.js';
 
 /**
  * 每日任务统一调度执行器

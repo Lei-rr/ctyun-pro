@@ -1,6 +1,6 @@
-import type { CtYunClient, Desktop, DesktopInfo } from '../core/client.js';
+import type { CtYunClient, Desktop, DesktopInfo } from '../../core/client.js';
 import { KeepAliveWorker } from './worker.js';
-import type { Logger } from '../core/logger.js';
+import type { Logger } from '../../core/logger.js';
 
 export interface ManagedDesktopState {
   desktopId: string;

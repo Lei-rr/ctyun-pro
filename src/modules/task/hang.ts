@@ -1,9 +1,9 @@
 import WebSocket from 'ws';
-import { Protocol } from '../core/protocol.js';
-import type { CtYunClient, Desktop, DesktopInfo } from '../core/client.js';
-import type { Logger } from '../core/logger.js';
+import { Protocol } from '../../core/protocol.js';
+import type { CtYunClient, Desktop, DesktopInfo } from '../../core/client.js';
+import type { Logger } from '../../core/logger.js';
 import { SignTask, isHangTaskName } from './sign.js';
-import { DesktopSessionArbiter } from '../modules/arbiter/desktop-session-arbiter.js';
+import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
 
 export interface HangTaskSession {
   accountName: string;
