@@ -659,11 +659,12 @@ export function registerDesktopProxyRoutes(
       return;
     }
 
-    // 伪装 Origin 与 Referer，消除跨域与防盗链拦截
+    // 伪装 Origin 与 Referer，消除跨域与防盗链拦截；剥离内部管理凭据与浏览器 Cookie，杜绝凭据外泄
+    const sensitiveHeaders = new Set(['host', 'origin', 'referer', 'content-length', 'cookie', 'authorization', 'x-admin-token']);
     const proxyHeaders: Record<string, any> = {};
     for (const [k, v] of Object.entries(req.headers)) {
       const lk = k.toLowerCase();
-      if (lk === 'host' || lk === 'origin' || lk === 'referer' || lk === 'content-length') continue;
+      if (sensitiveHeaders.has(lk)) continue;
       proxyHeaders[k] = v;
     }
     proxyHeaders['host'] = parsedTarget.host;

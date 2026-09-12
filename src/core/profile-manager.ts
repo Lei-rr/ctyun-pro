@@ -6,7 +6,7 @@ import { KeepAliveManager, type ManagedDesktopState } from '../keepalive/keepali
 import { Logger, type LogItem } from './logger.js';
 import { TaskScheduler } from '../tasks/scheduler.js';
 import { TaskRunner } from '../tasks/task-runner.js';
-import { SignTask, type PointsSummary } from '../tasks/sign.js';
+import { SignTask, type PointsSummary, isHangTaskName } from '../tasks/sign.js';
 import { RedeemTask, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../tasks/redeem.js';
 import { AiChatTask } from '../tasks/ai-chat.js';
 import { HangTask } from '../tasks/hang.js';
@@ -918,7 +918,7 @@ export class ProfileManager {
     const state = this.accountStates.get(accountName);
     const dId = state?.desktops?.[0]?.desktopId;
     const res = await TaskRunner.executeDailyTasks(client, dId, acc.taskConfig, this.logger);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getCstDateString();
     acc.lastSignDate = today;
     if (!acc.taskConfig) {
       acc.taskConfig = { enabled: true, autoSign: true, scheduleTime: getRandomScheduleTime() };
@@ -976,7 +976,7 @@ export class ProfileManager {
         cachedEntry = { todayPoints: sum.generalPoints + sum.phonePoints, date: todayStr, summary: sum, updatedAt: Date.now() };
       } catch {}
     }
-    const hangTask = cachedEntry?.summary?.tasks?.find((t: any) => t.name.includes('使用1小时') || t.name.includes('使用'));
+    const hangTask = cachedEntry?.summary?.tasks?.find((t: any) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress));
     HangTask.initPendingSession(accountName, hangTask?.currentProgress || 0, hangTask?.totalProgress || 3600);
 
     // 将桌面状态置为 hanging 并更新挂机状态，保证主页保活在线数不失联
@@ -1129,7 +1129,7 @@ export class ProfileManager {
       throw new Error('账号未登录，无法签到');
     }
     const res = await SignTask.signIn(client);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getCstDateString();
     acc.lastSignDate = today;
     const state = this.accountStates.get(accountName);
     if (state) state.lastSignDate = today;
@@ -1218,7 +1218,7 @@ export class ProfileManager {
       prodType || rConf.prodType,
     );
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = getCstDateString();
     rConf.lastRedeemDate = today;
     acc.redeemConfig = rConf;
     this.saveToDisk();

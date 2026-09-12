@@ -5,11 +5,21 @@ export type TaskType = 'hang' | 'login' | 'chat' | 'other';
 
 export function getTaskType(name: string, totalProgress = 0): TaskType {
   const n = name || '';
+  // 1. 登录类任务 (优先判定，严格与挂机时长任务隔离)
   if (n.includes('登录')) return 'login';
-  if (n.includes('对话') || n.includes('AI') && !n.includes('云电脑')) return 'chat';
-  if (totalProgress >= 60 || n.includes('使用1小时') || ((n.includes('使用') || n.includes('体验') || n.includes('时长') || n.includes('挂机')) && !n.includes('登录'))) {
+
+  // 2. AI 对话交互类任务
+  if ((n.includes('对话') || n.includes('AI')) && !n.includes('云电脑')) return 'chat';
+
+  // 3. 挂机类任务 (优先名称核心动词，排除登录)
+  const isHangAction = n.includes('使用') || n.includes('体验') || n.includes('时长') || n.includes('挂机');
+  if (isHangAction) return 'hang';
+
+  // 4. 时长兜底：仅当属于云电脑或在线相关领域且 totalProgress >= 60 时才作为挂机兜底，防误伤其他长周期非挂机任务
+  if (totalProgress >= 60 && (n.includes('云电脑') || n.includes('在线'))) {
     return 'hang';
   }
+
   return 'other';
 }
 

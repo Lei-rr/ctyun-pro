@@ -371,7 +371,7 @@ export class HangTask {
                       try {
                         const hbBuf = Protocol.buildMessage(7); // Type 7 心跳包
                         ws.send(hbBuf);
-                        logger.addLog('info', '发送客户端活跃心跳 (30s 心跳保活)');
+                        logger.addLog('info', `[${accountName}] 发送客户端活跃心跳 (30s 心跳保活)`);
                       } catch {}
                     }
                   }, 30000);

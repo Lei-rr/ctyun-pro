@@ -91,7 +91,8 @@ export class TaskScheduler {
       } else {
         const targetTime = tConf.scheduleTime || '03:30';
         const retryStat = this.taskRetryStats.get(name);
-        const isInCooldown = retryStat && retryStat.date === today && Date.now() < retryStat.nextRetryTime;
+        const nextTime = tConf.retryDate === today ? (tConf.nextRetryTime || retryStat?.nextRetryTime || 0) : (retryStat?.nextRetryTime || 0);
+        const isInCooldown = (tConf.retryDate === today || retryStat?.date === today) && Date.now() < nextTime;
 
         // 准点命中判定：到达或超过设定时间且今日未执行且非退避冷却中时触发 (防止服务重启错过固定当分钟)
         if (!isInCooldown && tConf.lastRunDate !== today && currentHHmm >= targetTime) {
@@ -109,6 +110,9 @@ export class TaskScheduler {
               const res = await TaskRunner.executeDailyTasks(client, dId, tConf, this.logger);
               acc.lastSignDate = today;
               tConf.lastRunDate = today;
+              delete tConf.retryCount;
+              delete tConf.retryDate;
+              delete tConf.nextRetryTime;
               acc.taskConfig = tConf;
               this.taskRetryStats.delete(name);
               this.accountManager.saveToDisk();
@@ -141,6 +145,9 @@ export class TaskScheduler {
               if (isAuthError) {
                 // 凭据过期/失效：今日直接标记跳过，禁止高频无效重试，避免轰炸与封号
                 tConf.lastRunDate = today;
+                delete tConf.retryCount;
+                delete tConf.retryDate;
+                delete tConf.nextRetryTime;
                 acc.taskConfig = tConf;
                 this.accountManager.saveToDisk();
                 this.taskRetryStats.delete(name);
@@ -153,17 +160,17 @@ export class TaskScheduler {
                   ).catch(() => {});
                 }
               } else {
-                // 偶发网络异常：引入退避重试（每天最多重试 3 次，每次重试至少退避 15 分钟）
-                const stats = this.taskRetryStats.get(name) || { date: today, attempts: 0, nextRetryTime: 0 };
-                if (stats.date !== today) {
-                  stats.attempts = 0;
-                  stats.date = today;
-                }
-                stats.attempts += 1;
+                // 偶发网络异常：引入退避重试（每天最多重试 3 次，每次重试至少退避 15 分钟，状态持久化防重启清零）
+                const persistedAttempts = tConf.retryDate === today ? (tConf.retryCount || 0) : 0;
+                const memAttempts = this.taskRetryStats.get(name)?.date === today ? (this.taskRetryStats.get(name)?.attempts || 0) : 0;
+                const currentAttempts = Math.max(persistedAttempts, memAttempts) + 1;
                 const MAX_ATTEMPTS = 3;
 
-                if (stats.attempts >= MAX_ATTEMPTS) {
+                if (currentAttempts >= MAX_ATTEMPTS) {
                   tConf.lastRunDate = today;
+                  tConf.retryDate = today;
+                  tConf.retryCount = currentAttempts;
+                  delete tConf.nextRetryTime;
                   acc.taskConfig = tConf;
                   this.accountManager.saveToDisk();
                   this.taskRetryStats.delete(name);
@@ -176,14 +183,17 @@ export class TaskScheduler {
                     ).catch(() => {});
                   }
                 } else {
-                  stats.nextRetryTime = Date.now() + 15 * 60 * 1000;
-                  this.taskRetryStats.set(name, stats);
+                  const nextRetryTime = Date.now() + 15 * 60 * 1000;
+                  tConf.retryDate = today;
+                  tConf.retryCount = currentAttempts;
+                  tConf.nextRetryTime = nextRetryTime;
                   tConf.lastRunDate = '';
                   acc.taskConfig = tConf;
                   this.accountManager.saveToDisk();
+                  this.taskRetryStats.set(name, { date: today, attempts: currentAttempts, nextRetryTime });
                   this.logger.addLog(
                     'warn',
-                    `[${name}] 自动任务执行异常（第 ${stats.attempts}/${MAX_ATTEMPTS} 次，将在 15 分钟后退避重试）: ${errMsg}`,
+                    `[${name}] 自动任务执行异常（第 ${currentAttempts}/${MAX_ATTEMPTS} 次，将在 15 分钟后退避重试）: ${errMsg}`,
                   );
                 }
               }

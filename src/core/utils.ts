@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import https from 'node:https';
 
 /**
  * 带有超时保护的安全 fetch (默认 60s 超时，防止官方接口异常导致整个事件循环挂起)
@@ -10,8 +11,9 @@ export async function safeFetch(url: string | URL | Request, options: RequestIni
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   // 若外部已提供 signal，进行联动
+  const onAbort = () => controller.abort();
   if (fetchOpts.signal) {
-    fetchOpts.signal.addEventListener('abort', () => controller.abort());
+    fetchOpts.signal.addEventListener('abort', onAbort);
   }
 
   try {
@@ -22,7 +24,64 @@ export async function safeFetch(url: string | URL | Request, options: RequestIni
     return res;
   } finally {
     clearTimeout(timeoutId);
+    if (fetchOpts.signal) {
+      fetchOpts.signal.removeEventListener('abort', onAbort);
+    }
   }
+}
+
+/**
+ * 强制 IPv4 栈的底层 HTTPS 请求器 (解决部分容器与宿主机 IPv6 路由无响应挂起问题)
+ */
+export function requestIpv4(
+  urlStr: string,
+  options: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    timeoutMs?: number;
+  } = {},
+): Promise<{ status: number; headers: Record<string, any>; json: () => Promise<any> }> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlStr);
+    const timeoutMs = options.timeoutMs || 60000;
+    const req = https.request(
+      {
+        hostname: url.hostname,
+        port: url.port || 443,
+        path: url.pathname + url.search,
+        method: options.method || 'GET',
+        headers: options.headers || {},
+        family: 4,
+        rejectUnauthorized: false,
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode || 200,
+            headers: res.headers,
+            json: () => {
+              try {
+                return Promise.resolve(JSON.parse(data));
+              } catch (e) {
+                return Promise.resolve(data);
+              }
+            },
+          });
+        });
+      },
+    );
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error(`请求超时 (${timeoutMs}ms): ${urlStr}`));
+    });
+    req.on('error', reject);
+    if (options.body) req.write(options.body);
+    req.end();
+  });
 }
 
 /**
