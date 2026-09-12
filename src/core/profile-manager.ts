@@ -270,6 +270,13 @@ export class ProfileManager {
   }
 
   /**
+   * 获取指定账号的今日任务积分缓存 (若存在)
+   */
+  public getCachedTodayPoints(accountName: string) {
+    return this.todayPointsCache.get(accountName);
+  }
+
+  /**
    * 获取全局一等公民实例列表 (合并所属 Profile 信息与实时保活状态)
    */
   public getAllInstancesSummary(): any[] {
