@@ -258,8 +258,10 @@ export const useAppStore = defineStore('app', () => {
                   item.id === incoming.id ||
                   (item.message === incoming.message && item.level === incoming.level)
                 ) {
-                  item.count = incoming.count || (item.count || 1) + 1;
-                  item.time = incoming.time;
+                  const [matched] = logs.value.splice(i, 1);
+                  matched.count = incoming.count || (matched.count || 1) + 1;
+                  matched.time = incoming.time;
+                  logs.value.push(matched);
                   found = true;
                   break;
                 }

@@ -30,10 +30,13 @@ export class Logger {
           break;
         }
         if (item.level === level && item.message === message) {
-          item.count = (item.count || 1) + 1;
-          item.time = Logger.formatCstTime();
+          // 匹配成功：从原位置取出，增加计数并更新时间，推入末尾（置底），避免刷屏同时保持最新活跃心跳处于最底端
+          const [matched] = this.logs.splice(i, 1);
+          matched.count = (matched.count || 1) + 1;
+          matched.time = Logger.formatCstTime();
+          this.logs.push(matched);
           for (const listener of this.listeners) {
-            listener({ ...item });
+            listener({ ...matched });
           }
           return;
         }
