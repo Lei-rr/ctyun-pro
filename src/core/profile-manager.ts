@@ -10,6 +10,7 @@ import { SignTask, type PointsSummary, isHangTaskName } from '../tasks/sign.js';
 import { RedeemTask, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../tasks/redeem.js';
 import { AiChatTask } from '../tasks/ai-chat.js';
 import { HangTask } from '../tasks/hang.js';
+import { DesktopSessionArbiter } from '../modules/arbiter/desktop-session-arbiter.js';
 import { safeWriteFileSync, sendWebhookNotification, getCstDateString } from './utils.js';
 
 export interface ManagedAccount {
@@ -54,6 +55,8 @@ export class ProfileManager {
   private todayPointsCache: Map<string, { todayPoints: number; date: string; summary?: PointsSummary; updatedAt: number }> = new Map();
   private expiredNotifiedAccounts: Set<string> = new Set();
   private manualShutdownDesktops: Set<string> = new Set();
+  // 账号云电脑同步互斥锁 (按账号 Promise 排重，防止并发多重触发)
+  private reloadDesktopsPromises: Map<string, Promise<void>> = new Map();
 
   constructor() {
     this.keepAliveManager = new KeepAliveManager(this.logger, () => this.notifyStatusChange());
@@ -101,6 +104,9 @@ export class ProfileManager {
     const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopCode);
     if (!matchedAccount) return;
     this.keepAliveManager.touchWebUserActive(matchedAccount, desktopCode, durationSec);
+    // 仲裁器注册 Web 直连高优先级租约，驱逐所有后台长连接
+    const arbiter = DesktopSessionArbiter.getInstance();
+    arbiter.acquireLease(desktopCode, 'web_direct', matchedAccount, async () => {}).catch(() => {});
     // 协同让位：若该账号正在执行后台纯协议挂机，立即主动中止挂机释放推流信道，彻底防止双端互踢冲突
     HangTask.stopHang(matchedAccount).catch(() => {});
   }
@@ -109,6 +115,8 @@ export class ProfileManager {
     const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopCode);
     if (!matchedAccount) return;
     this.keepAliveManager.releaseWebUserActive(matchedAccount, desktopCode);
+    const arbiter = DesktopSessionArbiter.getInstance();
+    arbiter.releaseLease(desktopCode, 'web_direct', matchedAccount).catch(() => {});
   }
 
   public isManualShutdown(desktopCode: string): boolean {
@@ -739,6 +747,24 @@ export class ProfileManager {
   }
 
   public async reloadDesktops(accountName: string): Promise<void> {
+    const existing = this.reloadDesktopsPromises.get(accountName);
+    if (existing) {
+      return existing;
+    }
+
+    const task = (async () => {
+      try {
+        await this._doReloadDesktops(accountName);
+      } finally {
+        this.reloadDesktopsPromises.delete(accountName);
+      }
+    })();
+
+    this.reloadDesktopsPromises.set(accountName, task);
+    return task;
+  }
+
+  private async _doReloadDesktops(accountName: string): Promise<void> {
     const acc = this.accounts.get(accountName);
     const state = this.accountStates.get(accountName);
     const client = this.getClient(accountName);
@@ -889,10 +915,9 @@ export class ProfileManager {
     this.notifyStatusChange();
 
     if (config.loginInfo) {
-      // 异步在后台并行拉取最新云电脑与同步积分，避免阻塞前台 HTTP 登录或更新接口
+      // 异步在后台并行同步积分，云电脑列表与保活由调用方或生命周期按需拉取，防止重复触发
       void (async () => {
         try {
-          await this.reloadDesktops(name);
           await this.getPointsAndTasks(name);
         } catch (e: any) {
           this.logger.addLog('warn', `[${name}] 后台同步提示: ${e.message}`);

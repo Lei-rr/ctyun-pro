@@ -175,19 +175,25 @@ export class KeepAliveWorker {
       }
       this.cleanupSocket();
 
-      // 断线重连前重新换取官方最新动态连接凭证
+      const retryDelay = (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) ? 300000 : 5000;
+      this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      if (!this.isRunning || this.isPaused) return;
+
+      // 重连前重新获取最新动态连接凭证
       if (this.options.onRefreshInfo) {
         try {
           const freshInfo = await this.options.onRefreshInfo(String(this.options.desktop.desktopId));
-          this.options.desktopInfo = freshInfo;
-        } catch {}
+          if (freshInfo && freshInfo.clinkLvsOutHost) {
+            this.options.desktopInfo = freshInfo;
+          }
+        } catch (err: any) {
+          this.log('warn', `刷新云电脑连接凭证失败: ${err.message}`);
+        }
       }
 
-      const retryDelay = (code === 4001 || reasonStr.includes('preempt')) ? 300000 : 5000;
-      this.reconnectTimer = setTimeout(() => {
-        this.reconnectTimer = null;
-        this.connect();
-      }, retryDelay);
+      this.connect();
+    }, retryDelay);
     };
 
     ws.on('open', async () => {

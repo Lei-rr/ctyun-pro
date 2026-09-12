@@ -3,6 +3,7 @@ import { Protocol } from '../core/protocol.js';
 import type { CtYunClient, Desktop, DesktopInfo } from '../core/client.js';
 import type { Logger } from '../core/logger.js';
 import { SignTask, isHangTaskName } from './sign.js';
+import { DesktopSessionArbiter } from '../modules/arbiter/desktop-session-arbiter.js';
 
 export interface HangTaskSession {
   accountName: string;
@@ -214,17 +215,9 @@ export class HangTask {
       return { success: false, message: '获取云电脑网关参数异常' };
     }
 
-    // 5. 纯协议握手长连接
-    const hostParts = desktopInfo.clinkLvsOutHost.split(':');
-    const wsUrl = `wss://${desktopInfo.clinkLvsOutHost}/clinkProxy/${dId}/MAIN`;
-
-    logger.addLog(
-      'info',
-      options.onlyLoginTask
-        ? `[${logPrefix}] 纯协议连接云电脑完成登录任务 (${desktopInfo.clinkLvsOutHost})...`
-        : `[${logPrefix}] 纯协议启动挂机：当前累计 ${currentProgress}/${totalProgress}秒，连接网关中...`,
-    );
-
+    // 5. 纯协议握手长连接：向仲裁器申请 TASK 独占租约，杜绝 1005 竞态互踢
+    const arbiter = DesktopSessionArbiter.getInstance();
+    arbiter.setLogger(logger);
     let ws: WebSocket | null = null;
     let heartbeatTimer: NodeJS.Timeout | null = null;
     let progressUpdateTimer: NodeJS.Timeout | null = null;
@@ -252,7 +245,32 @@ export class HangTask {
         } catch {}
         ws = null;
       }
+      await arbiter.releaseLease(dId, options.onlyLoginTask ? 'hang' : 'hang', accountName);
     };
+
+    const acquired = await arbiter.acquireLease(
+      dId,
+      'hang',
+      accountName,
+      async () => {
+        logger.addLog('info', `[${logPrefix}] 收到高优先级独占让位信号，挂机会话主动释放`);
+        await cleanup();
+      },
+    );
+
+    if (!acquired) {
+      return { success: false, message: '无法获取桌面连接独占锁，当前桌面正在被使用或正在直连' };
+    }
+
+    const hostParts = desktopInfo.clinkLvsOutHost.split(':');
+    const wsUrl = `wss://${desktopInfo.clinkLvsOutHost}/clinkProxy/${dId}/MAIN`;
+
+    logger.addLog(
+      'info',
+      options.onlyLoginTask
+        ? `[${logPrefix}] 纯协议连接云电脑完成登录任务 (${desktopInfo.clinkLvsOutHost})...`
+        : `[${logPrefix}] 纯协议启动挂机：当前累计 ${currentProgress}/${totalProgress}秒，连接网关中...`,
+    );
 
     const session: HangTaskSession = {
       accountName,

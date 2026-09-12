@@ -1,143 +1,67 @@
-import type { CtYunClient, Desktop, DesktopInfo } from '../core/client.js';
-import { KeepAliveWorker } from './worker.js';
-import type { Logger } from '../core/logger.js';
-
-export interface ManagedDesktopState {
-  desktopId: string;
-  desktopName: string;
-  desktopCode: string;
-  useStatusText: string;
-  imageName?: string;
-  flavorName?: string;
-  objType?: number;
-  objId?: string;
-  poolId?: string;
-  isPool?: boolean;
-  status: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
-  lastHeartbeat?: string;
-}
+import type { CtYunClient, Desktop, DesktopInfo } from '../../core/client.js';
+import { KeepAliveWorker } from '../../keepalive/worker.js';
+import type { Logger } from '../../core/logger.js';
+import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
+import type { ManagedDesktopState } from '../../keepalive/keepalive-manager.js';
 
 /**
- * 多账号、多云电脑保活守护协调管理器
- * 负责 7x24 小时维持所有云电脑的持久长连接，与上层任务逻辑彻底解耦
+ * 现代化静默保活服务模块 (Keepalive Service)
+ *
+ * 规范与约束：
+ * 1. 严格受控于 DesktopSessionArbiter (桌面长连接仲裁器)；
+ * 2. 严禁私自违规建立重复 WebSocket，申请到租约后方可接入保活；
+ * 3. 严格 30 秒活跃心跳节奏，心跳日志纯文本格式，支持防刷屏聚合；
+ * 4. 遇到挂机任务或前台直连接入，秒级避让，主动挂起或释放。
  */
-export class KeepAliveManager {
+export class KeepaliveService {
   private workers: Map<string, KeepAliveWorker[]> = new Map();
   private logger: Logger;
   private onStateChange?: () => void;
-  // 前台用户 Web 操作避让记录：desktopId -> activeUntilTimestamp
-  private webUserActiveMap: Map<string, number> = new Map();
-  private webYieldTimer: NodeJS.Timeout | null = null;
-  // 账号 Worker 同步互斥排重锁 (按账号 Promise 单飞，严禁并发重入建立双长连接)
+  private arbiter: DesktopSessionArbiter;
+  // 同账号防并发 Worker 同步锁
   private syncWorkersPromises: Map<string, Promise<void>> = new Map();
 
   constructor(logger: Logger, onStateChange?: () => void) {
     this.logger = logger;
     this.onStateChange = onStateChange;
-    this.startWebYieldWatchdog();
+    this.arbiter = DesktopSessionArbiter.getInstance();
+    this.arbiter.setLogger(logger);
   }
 
   /**
-   * 登记前台 Web 用户活跃（避让 60 秒）
-   */
-  public touchWebUserActive(accountName: string, desktopCode: string, durationSec: number = 60): void {
-    const until = Date.now() + durationSec * 1000;
-    const isFirstActive = !this.isWebUserActive(desktopCode);
-    this.webUserActiveMap.set(desktopCode, until);
-
-    if (isFirstActive) {
-      let dPrefix = accountName;
-      const workers = this.workers.get(accountName) || [];
-      const w = workers.find(item => (item as any).options?.desktop?.desktopCode === desktopCode || (item as any).options?.desktop?.desktopId === desktopCode);
-      if (w) {
-        const d = (w as any).options?.desktop;
-        const dName = d?.desktopName || d?.computerName || d?.name || desktopCode;
-        if (dName) dPrefix = `${accountName} - ${dName}`;
-      }
-      this.logger.addLog('info', `[${dPrefix}] 检测到前台 Web 直连视窗接入，保活长连主动避让挂起 (${durationSec}s)`);
-      this.pauseWorkers(accountName);
-    }
-  }
-
-  /**
-   * 释放前台 Web 用户活跃（页面关闭时立即恢复）
-   */
-  public releaseWebUserActive(accountName: string, desktopCode: string): void {
-    if (this.webUserActiveMap.has(desktopCode)) {
-      this.webUserActiveMap.delete(desktopCode);
-      let dPrefix = accountName;
-      const workers = this.workers.get(accountName) || [];
-      const w = workers.find(item => (item as any).options?.desktop?.desktopCode === desktopCode || (item as any).options?.desktop?.desktopId === desktopCode);
-      if (w) {
-        const d = (w as any).options?.desktop;
-        const dName = d?.desktopName || d?.computerName || d?.name || desktopCode;
-        if (dName) dPrefix = `${accountName} - ${dName}`;
-      }
-      this.logger.addLog('info', `[${dPrefix}] 前台 Web 直连视窗已退出，正在恢复后台保活长连...`);
-      this.resumeWorkers(accountName);
-    }
-  }
-
-  /**
-   * 检查指定云电脑当前是否有前台用户在操作
-   */
-  public isWebUserActive(desktopCode: string): boolean {
-    const until = this.webUserActiveMap.get(desktopCode);
-    if (!until) return false;
-    if (Date.now() > until) {
-      this.webUserActiveMap.delete(desktopCode);
-      return false;
-    }
-    return true;
-  }
-
-  /**
-   * 定时检查避让超时的实例并平滑恢复
-   */
-  private startWebYieldWatchdog(): void {
-    if (this.webYieldTimer) return;
-    this.webYieldTimer = setInterval(() => {
-      const now = Date.now();
-      for (const [desktopCode, until] of this.webUserActiveMap.entries()) {
-        if (now > until) {
-          this.webUserActiveMap.delete(desktopCode);
-          // 寻找对应账号并恢复
-          for (const [acc, workers] of this.workers.entries()) {
-            const matched = workers.find(w => (w as any).options?.desktop?.desktopCode === desktopCode || (w as any).options?.desktopCode === desktopCode);
-            if (matched) {
-              const d = (matched as any).options?.desktop;
-              const dName = d?.desktopName || d?.computerName || d?.name || desktopCode;
-              const dPrefix = dName ? `${acc} - ${dName}` : acc;
-              this.logger.addLog('info', `[${dPrefix}] 前台 Web 直连避让已超时，正在自动恢复后台保活通道...`);
-              this.resumeWorkers(acc);
-            }
-          }
-        }
-      }
-    }, 5000);
-  }
-
-  /**
-   * 停止指定账号下的所有保活工作者
+   * 停止指定账号下的所有保活 Worker
    */
   public stopWorkers(accountName: string): void {
     const list = this.workers.get(accountName);
     if (list) {
       for (const w of list) {
-        w.stop();
+        try {
+          const dId = (w as any).options?.desktop?.desktopId;
+          if (dId) {
+            this.arbiter.releaseLease(String(dId), 'keepalive', accountName).catch(() => {});
+          }
+          w.stop();
+        } catch {}
       }
       this.workers.delete(accountName);
     }
   }
 
+  /**
+   * 停止单台云电脑的保活 Worker
+   */
   public stopWorkerForDesktop(accountName: string, desktopCodeOrId: string): void {
     const list = this.workers.get(accountName);
     if (!list) return;
+
     const remaining: KeepAliveWorker[] = [];
     for (const w of list) {
       const d = (w as any).options?.desktop;
       if (d && (d.desktopCode === desktopCodeOrId || String(d.desktopId) === String(desktopCodeOrId))) {
-        w.stop();
+        try {
+          this.arbiter.releaseLease(String(d.desktopId), 'keepalive', accountName).catch(() => {});
+          w.stop();
+        } catch {}
       } else {
         remaining.push(w);
       }
@@ -150,7 +74,7 @@ export class KeepAliveManager {
   }
 
   /**
-   * 软暂停指定账号下的保活工作者 (让位给挂机任务或前台直连)
+   * 软暂停指定账号下的保活 Worker
    */
   public pauseWorkers(accountName: string): boolean {
     const existing = this.workers.get(accountName);
@@ -164,7 +88,7 @@ export class KeepAliveManager {
   }
 
   /**
-   * 恢复指定账号下的保活工作者
+   * 恢复指定账号下的保活 Worker
    */
   public resumeWorkers(accountName: string): boolean {
     const existing = this.workers.get(accountName);
@@ -181,13 +105,13 @@ export class KeepAliveManager {
    * 停止全部保活工作者
    */
   public stopAll(): void {
-    if (this.webYieldTimer) {
-      clearInterval(this.webYieldTimer);
-      this.webYieldTimer = null;
-    }
     for (const [acc, workers] of this.workers.entries()) {
       for (const w of workers) {
         try {
+          const dId = (w as any).options?.desktop?.desktopId;
+          if (dId) {
+            this.arbiter.releaseLease(String(dId), 'keepalive', acc).catch(() => {});
+          }
           w.stop();
         } catch {}
       }
@@ -196,7 +120,7 @@ export class KeepAliveManager {
   }
 
   /**
-   * 核心同步调度：按最新云电脑列表智能创建、销毁、维持保活连接
+   * 核心保活调度：按最新云电脑列表智能创建、销毁与维持受控保活连接
    */
   public async syncWorkersForAccount(
     accountName: string,
@@ -233,15 +157,13 @@ export class KeepAliveManager {
   ): Promise<void> {
     if (!client.loginInfo) return;
 
-    // 检查是否已经存在运行中的工作者，避免重复销毁重建
+    // 检查是否所有 Worker 都在健康运行
     const existingWorkers = this.workers.get(accountName) || [];
-    if (existingWorkers.length > 0 && existingWorkers.every(w => (w as any).isRunning)) {
+    if (existingWorkers.length > 0 && existingWorkers.every((w) => (w as any).isRunning)) {
       return;
     }
 
-    // 清理旧工作者
     this.stopWorkers(accountName);
-
     const newWorkers: KeepAliveWorker[] = [];
 
     for (let i = 0; i < desktops.length; i++) {
@@ -251,38 +173,34 @@ export class KeepAliveManager {
       const dCode = d.desktopCode || d.desktopId;
       const dName = d.desktopName || (d as any).computerName || (d as any).name || dCode;
       const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
+      const dIdStr = String(d.desktopId);
 
-      // 若用户主动手动关机，则严格跳过自动开机与保活建立
+      // 手动关机锁定拦截
       if (isManualShutdown && isManualShutdown(dCode)) {
         if (state) {
           state.status = 'stopped';
           state.useStatusText = '已关机';
         }
-        this.logger.addLog('info', `[${dPrefix}] 处于手动关机锁定状态，跳过自动唤醒`);
+        this.logger.addLog('info', `[${dPrefix}] 处于手动关机锁定状态，跳过自动唤醒与保活`);
         continue;
       }
 
-      // 若云电脑未处于运行中（已关机/离线等），先自动下发官方开机指令并轮询等待开机就绪
+      // 开机检测与开机指令
       const isRunning = d.useStatusText === '运行中' || d.useStatusText === '离线运行';
       if (!isRunning) {
-        this.logger.addLog(
-          'warn',
-          `[${dPrefix}] 当前状态: [${d.useStatusText}]，正在下发自动开机指令...`,
-        );
+        this.logger.addLog('warn', `[${dPrefix}] 当前状态: [${d.useStatusText}]，正在下发自动开机指令...`);
         try {
           await client.operateDesktop(d.desktopId, 'on');
         } catch (e: any) {
           this.logger.addLog('warn', `[${dPrefix}] 自动开机提示: ${e.message}`);
         }
 
-        // 异步等待云电脑开机完成（轮询检测官方状态，最多等待 5 分钟）
-        this.logger.addLog('info', `[${dPrefix}] 等待云电脑开机就绪中 (最长 5 分钟)...`);
         let ready = false;
         for (let waitSec = 0; waitSec < 60; waitSec++) {
           await new Promise((r) => setTimeout(r, 5000));
           try {
             const latestList = await client.getDesktopList();
-            const cur = latestList.find((item) => item.desktopId === d.desktopId);
+            const cur = latestList.find((item) => String(item.desktopId) === dIdStr);
             if (cur && (cur.useStatusText === '运行中' || cur.useStatusText === '离线运行')) {
               d.useStatusText = cur.useStatusText;
               ready = true;
@@ -296,8 +214,8 @@ export class KeepAliveManager {
         }
       }
 
+      // 获取信道连接参数
       let info: DesktopInfo | null = null;
-      // 若刚触发开机或关机冷备，官方桌面可能需要数秒启动初始化，进行优雅重试
       const maxRetries = 5;
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
@@ -319,10 +237,26 @@ export class KeepAliveManager {
       try {
         d.desktopInfo = info;
 
-        // 如果当前前台正在通过 Web 直连操控该电脑，创建后直接处于 pause 状态
-        const isWebActive = this.isWebUserActive(d.desktopCode || d.desktopId);
+        // 向桌面仲裁器申请 keepalive 租约
+        let workerInstance: KeepAliveWorker | null = null;
+        const acquired = await this.arbiter.acquireLease(
+          dIdStr,
+          'keepalive',
+          accountName,
+          async () => {
+            // 当被高优先级（挂机或前台直连）抢占时的优雅释放回调
+            if (workerInstance) {
+              workerInstance.pause();
+            }
+          },
+        );
 
-        const worker = new KeepAliveWorker({
+        if (!acquired) {
+          this.logger.addLog('info', `[${dPrefix}] 桌面正在执行高优先级业务，保活通道暂缓建立`);
+          continue;
+        }
+
+        workerInstance = new KeepAliveWorker({
           accountName,
           desktop: d,
           desktopInfo: info,
@@ -353,17 +287,10 @@ export class KeepAliveManager {
           },
         });
 
-        worker.start();
-        newWorkers.push(worker);
-
-        if (isWebActive) {
-          worker.pause();
-        }
+        workerInstance.start();
+        newWorkers.push(workerInstance);
       } catch (err: any) {
-        this.logger.addLog(
-          'error',
-          `[${dPrefix}] 连接建立失败: ${err.message}`,
-        );
+        this.logger.addLog('error', `[${dPrefix}] 保活连接建立失败: ${err.message}`);
       }
     }
 
