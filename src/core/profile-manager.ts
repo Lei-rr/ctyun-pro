@@ -63,6 +63,17 @@ export class ProfileManager {
     this.taskStrategyService = new TaskStrategyService(this.logger);
     this.loadFromDisk();
     this.taskScheduler.start();
+
+    // 租约释放协同：当前台直连或挂机释放桌面租约时，自动唤醒保活通道无缝恢复
+    const arbiter = DesktopSessionArbiter.getInstance();
+    arbiter.on('lease:released', ({ purpose, ownerId }) => {
+      if (purpose === 'web_direct' || purpose === 'hang') {
+        const acc = this.accounts.get(ownerId);
+        if (acc && acc.autoStart !== false) {
+          this.keepaliveService.resumeWorkers(ownerId);
+        }
+      }
+    });
   }
 
   public getKeepaliveService(): KeepaliveService {
@@ -121,14 +132,15 @@ export class ProfileManager {
     const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopId(desktopCode);
     if (!matchedAccount) return;
     
-    // 仲裁器注册 Web 直连高优先级租约，驱逐所有后台长连接
+    // 仲裁器注册 Web 直连高优先级租约（带 TTL 自动防死锁），驱逐所有后台长连接
     const arbiter = DesktopSessionArbiter.getInstance();
+    const ttlMs = Math.max(30, Number(durationSec) || 60) * 1000;
     const dId = matched?.desktop?.desktopId ? String(matched.desktop.desktopId) : '';
     if (dId) {
-      arbiter.acquireLease(dId, 'web_direct', matchedAccount, async () => {}).catch(() => {});
+      arbiter.acquireLease(dId, 'web_direct', matchedAccount, async () => {}, ttlMs).catch(() => {});
     }
     if (desktopCode && desktopCode !== dId) {
-      arbiter.acquireLease(desktopCode, 'web_direct', matchedAccount, async () => {}).catch(() => {});
+      arbiter.acquireLease(desktopCode, 'web_direct', matchedAccount, async () => {}, ttlMs).catch(() => {});
     }
 
     // 协同让位：若该账号正在执行后台纯协议挂机，立即主动中止挂机释放推流信道，彻底防止双端互踢冲突
@@ -146,6 +158,12 @@ export class ProfileManager {
     }
     if (desktopCode && desktopCode !== dId) {
       arbiter.releaseLease(desktopCode, 'web_direct', matchedAccount).catch(() => {});
+    }
+
+    // 关键恢复：前台直连关闭后，自动恢复该账号下的保活 Worker 运行
+    const acc = this.accounts.get(matchedAccount);
+    if (acc && acc.autoStart !== false) {
+      this.keepaliveService.resumeWorkers(matchedAccount);
     }
   }
 

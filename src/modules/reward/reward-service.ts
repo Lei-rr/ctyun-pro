@@ -1,6 +1,6 @@
 import type { CtYunClient } from '../../core/client.js';
 import { safeFetch } from '../../core/utils.js';
-import { TaskStrategyService } from '../task/index.js';
+import { SignTask } from '../task/sign.js';
 
 export interface RewardItem {
   prodId: number;
@@ -178,8 +178,7 @@ export class RewardRedeemService {
 
     // 1. 积分硬性前置强校验：查询账号真实可用积分
     try {
-      const taskStrategyService = new TaskStrategyService();
-      const pointSummary = await taskStrategyService.getPointsAndTasks(client);
+      const pointSummary = await SignTask.getPointsAndTasks(client);
       const currentPoints = Number(pointSummary.generalPoints || 0);
       if (currentPoints < resolvedPoints) {
         throw new Error(

@@ -7,6 +7,7 @@ export interface LeaseHolder {
   purpose: LeasePurpose;
   ownerId: string;
   acquiredAt: number;
+  expiresAt?: number;
   releaseCallback?: () => Promise<void> | void;
 }
 
@@ -45,11 +46,30 @@ export class DesktopSessionArbiter extends EventEmitter {
   }
 
   /**
+   * 检查持约者是否已过期并自动清理
+   */
+  private checkAndEvictExpired(key: string): LeaseHolder | undefined {
+    const holder = this.activeLeases.get(key);
+    if (!holder) return undefined;
+    if (holder.expiresAt && Date.now() > holder.expiresAt) {
+      this.activeLeases.delete(key);
+      this.emit('lease:released', { desktopId: key, purpose: holder.purpose, ownerId: holder.ownerId });
+      this.logger?.addLog(
+        'info',
+        `[桌面仲裁器] 桌面 ${key} 租约已超时自然过期并释放 (${holder.purpose}:${holder.ownerId})`,
+      );
+      return undefined;
+    }
+    return holder;
+  }
+
+  /**
    * 申请桌面长连接独占租约
    * @param desktopId 目标云电脑 ID
    * @param purpose 申请用途
    * @param ownerId 申请者标识 (如账号名或任务ID)
    * @param onRelease 当前持约者被更高优先级抢占时的释放回调
+   * @param ttlMs 租约有效存活毫秒数（可选，如前台直连超时防护）
    * @returns 是否成功获取租约
    */
   public async acquireLease(
@@ -57,6 +77,7 @@ export class DesktopSessionArbiter extends EventEmitter {
     purpose: LeasePurpose,
     ownerId: string,
     onRelease?: () => Promise<void> | void,
+    ttlMs?: number,
   ): Promise<boolean> {
     const key = String(desktopId);
 
@@ -72,11 +93,13 @@ export class DesktopSessionArbiter extends EventEmitter {
     try {
       await prevLock;
 
-      const currentHolder = this.activeLeases.get(key);
+      // 检查现有持约者是否已过期
+      const currentHolder = this.checkAndEvictExpired(key);
       if (currentHolder) {
-        // 同一主体重复声明相同租约，直接续租
+        // 同一主体重复声明相同租约，直接续租并刷新过期时间
         if (currentHolder.purpose === purpose && currentHolder.ownerId === ownerId) {
           currentHolder.releaseCallback = onRelease || currentHolder.releaseCallback;
+          currentHolder.expiresAt = ttlMs ? Date.now() + ttlMs : undefined;
           return true;
         }
 
@@ -122,6 +145,7 @@ export class DesktopSessionArbiter extends EventEmitter {
         purpose,
         ownerId,
         acquiredAt: Date.now(),
+        expiresAt: ttlMs ? Date.now() + ttlMs : undefined,
         releaseCallback: onRelease,
       };
       this.activeLeases.set(key, newHolder);
@@ -152,7 +176,7 @@ export class DesktopSessionArbiter extends EventEmitter {
    * 查询当前桌面持约者状态
    */
   public getLease(desktopId: string): LeaseHolder | undefined {
-    return this.activeLeases.get(String(desktopId));
+    return this.checkAndEvictExpired(String(desktopId));
   }
 
   /**
@@ -160,12 +184,15 @@ export class DesktopSessionArbiter extends EventEmitter {
    */
   public getActiveLeases(): Record<string, { purpose: LeasePurpose; ownerId: string; acquiredAt: number }> {
     const result: Record<string, { purpose: LeasePurpose; ownerId: string; acquiredAt: number }> = {};
-    for (const [key, val] of this.activeLeases.entries()) {
-      result[key] = {
-        purpose: val.purpose,
-        ownerId: val.ownerId,
-        acquiredAt: val.acquiredAt,
-      };
+    for (const key of Array.from(this.activeLeases.keys())) {
+      const val = this.checkAndEvictExpired(key);
+      if (val) {
+        result[key] = {
+          purpose: val.purpose,
+          ownerId: val.ownerId,
+          acquiredAt: val.acquiredAt,
+        };
+      }
     }
     return result;
   }
@@ -174,7 +201,7 @@ export class DesktopSessionArbiter extends EventEmitter {
    * 判定指定桌面当前是否正处于挂机或前台直连
    */
   public isBusy(desktopId: string): boolean {
-    const holder = this.activeLeases.get(String(desktopId));
+    const holder = this.checkAndEvictExpired(String(desktopId));
     return holder ? holder.purpose === 'hang' || holder.purpose === 'web_direct' : false;
   }
 

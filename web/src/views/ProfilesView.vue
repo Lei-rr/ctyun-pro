@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
-import { useRouter } from 'vue-router';
 import { toast } from '@/shared/lib/toast';
 import { useAppStore, type Account } from '@/stores/app';
 import {
@@ -15,18 +14,15 @@ import {
   Activity,
   CheckCircle2,
   Coins,
-  Sparkles,
-  Clock,
-  MessageSquare,
   Power,
   RotateCw,
-  Zap,
   ExternalLink,
 } from 'lucide-vue-next';
 import { Button } from '@/shared/ui/button';
 import { Badge } from '@/shared/ui/badge';
-import { Input } from '@/shared/ui/input';
-import { AppDialog } from '@/shared/ui/dialog';
+import AccountRenameDialog from '@/components/dialogs/AccountRenameDialog.vue';
+import PointsTaskDialog from '@/components/dialogs/PointsTaskDialog.vue';
+import PowerOperateDialog, { type PowerTarget } from '@/components/dialogs/PowerOperateDialog.vue';
 import {
   Table,
   TableHeader,
@@ -44,24 +40,20 @@ import {
   EmptyContent,
 } from '@/shared/ui/empty';
 
-const router = useRouter();
 const store = useAppStore();
 
 // 账号备注重命名
 const showRenameModal = ref(false);
 const renameOldName = ref('');
-const renameInputVal = ref('');
-const renameLoading = ref(false);
+
+function openRename(name: string) {
+  renameOldName.value = name;
+  showRenameModal.value = true;
+}
 
 // 电源控制确认弹窗
 const showPowerModal = ref(false);
-const powerTarget = ref<{
-  accountName: string;
-  desktopCode: string;
-  action: 'on' | 'shutdown' | 'reset';
-  desktopName?: string;
-} | null>(null);
-const powerLoading = ref(false);
+const powerTarget = ref<PowerTarget | null>(null);
 
 function openPowerConfirm(accountName: string, desktopCode: string, action: 'on' | 'shutdown' | 'reset', desktopName?: string) {
   powerTarget.value = {
@@ -71,21 +63,6 @@ function openPowerConfirm(accountName: string, desktopCode: string, action: 'on'
     desktopName,
   };
   showPowerModal.value = true;
-}
-
-async function confirmPowerOperate() {
-  if (!powerTarget.value) return;
-  powerLoading.value = true;
-  try {
-    await store.operateDesktopPower(
-      powerTarget.value.accountName,
-      powerTarget.value.desktopCode,
-      powerTarget.value.action
-    );
-    showPowerModal.value = false;
-  } finally {
-    powerLoading.value = false;
-  }
 }
 
 const directUrlLoading = ref<string | null>(null);
@@ -118,23 +95,6 @@ async function openDirectDesktop(desktopCode: string) {
   }
 }
 
-function openRename(name: string) {
-  renameOldName.value = name;
-  renameInputVal.value = name;
-  showRenameModal.value = true;
-}
-
-async function submitRename() {
-  if (!renameInputVal.value.trim()) return;
-  renameLoading.value = true;
-  try {
-    await store.renameAccount(renameOldName.value, renameInputVal.value.trim());
-    showRenameModal.value = false;
-  } finally {
-    renameLoading.value = false;
-  }
-}
-
 function getRedeemScheduleText(account: Account): string {
   const r = account.redeemConfig;
   if (!r || !r.enabled) return '';
@@ -148,89 +108,10 @@ function getRedeemScheduleText(account: Account): string {
 // 积分与每日任务弹窗
 const showPointsModal = ref(false);
 const pointsAccountName = ref('');
-const pointsLoading = ref(false);
-const taskRunning = ref(false);
-const hangRunning = ref(false);
-const loginRunning = ref(false);
-const chatRunning = ref(false);
-const pointsData = ref<{
-  generalPoints: number;
-  phonePoints: number;
-  willExpirePoints: number;
-  expireDate?: string;
-  tasks: Array<{
-    name: string;
-    desc: string;
-    rewardPoints: number;
-    currentProgress: number;
-    totalProgress: number;
-    isCompleted: boolean;
-  }>;
-} | null>(null);
 
-async function openPointsModal(account: Account) {
+function openPointsModal(account: Account) {
   pointsAccountName.value = account.name || account.user;
   showPointsModal.value = true;
-  pointsLoading.value = true;
-  try {
-    pointsData.value = await store.fetchPointsAndTasks(account.user || account.name);
-  } catch {
-    pointsData.value = null;
-  } finally {
-    pointsLoading.value = false;
-  }
-}
-
-async function runTaskInModal() {
-  if (!pointsAccountName.value) return;
-  taskRunning.value = true;
-  try {
-    await store.manualRunTasks(pointsAccountName.value);
-    pointsData.value = await store.fetchPointsAndTasks(pointsAccountName.value);
-  } finally {
-    taskRunning.value = false;
-  }
-}
-
-async function runHangInModal() {
-  if (!pointsAccountName.value || hangRunning.value) return;
-  hangRunning.value = true;
-  try {
-    await store.manualActivateDesktop(pointsAccountName.value);
-    showPointsModal.value = false; // 启动挂机后立即关闭弹窗回到桌面列表
-  } finally {
-    hangRunning.value = false;
-  }
-}
-
-async function stopHangInModal() {
-  if (!pointsAccountName.value) return;
-  await store.manualStopHang(pointsAccountName.value);
-  if (pointsAccountName.value) {
-    pointsData.value = await store.fetchPointsAndTasks(pointsAccountName.value);
-  }
-}
-
-async function runLoginTaskInModal() {
-  if (!pointsAccountName.value || loginRunning.value) return;
-  loginRunning.value = true;
-  try {
-    await store.manualLoginDesktopTask(pointsAccountName.value);
-    pointsData.value = await store.fetchPointsAndTasks(pointsAccountName.value);
-  } finally {
-    loginRunning.value = false;
-  }
-}
-
-async function runAiChatTaskInModal() {
-  if (!pointsAccountName.value || chatRunning.value) return;
-  chatRunning.value = true;
-  try {
-    await store.manualAiChatTask(pointsAccountName.value);
-    pointsData.value = await store.fetchPointsAndTasks(pointsAccountName.value);
-  } finally {
-    chatRunning.value = false;
-  }
 }
 
 function parseDesktopSpec(desktop: any): string {
@@ -760,258 +641,22 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 弹窗 1: 账号重命名弹窗 (AppDialog) -->
-    <AppDialog
+    <!-- 弹窗 1: 账号重命名弹窗 -->
+    <AccountRenameDialog
       v-model:open="showRenameModal"
-      title="修改账号备注"
-      description="给天翼云账号设置一个更易辨识的备注名称"
-      content-class="sm:max-w-sm"
-    >
-      <form @submit.prevent="submitRename" class="space-y-3.5">
-        <div class="space-y-1.5">
-          <label class="text-xs font-medium text-foreground">账号新备注</label>
-          <Input
-            type="text"
-            v-model="renameInputVal"
-            placeholder="例如：主账号 / 二号机"
-            required
-            autofocus
-            class="h-9"
-          />
-        </div>
+      :account-name="renameOldName"
+    />
 
-        <div class="pt-2 flex gap-2 w-full">
-          <Button
-            type="button"
-            variant="outline"
-            @click="showRenameModal = false"
-            class="flex-1 h-9 cursor-pointer"
-          >
-            取消
-          </Button>
-          <Button
-            type="submit"
-            :disabled="renameLoading || !renameInputVal.trim()"
-            class="flex-1 h-9 shadow-xs cursor-pointer"
-          >
-            {{ renameLoading ? '正在保存...' : '确认修改' }}
-          </Button>
-        </div>
-      </form>
-    </AppDialog>
-
-    <!-- 弹窗 2: 积分与三大每日任务进度详情 (AppDialog) -->
-    <AppDialog
+    <!-- 弹窗 2: 积分与今日任务进度详情 -->
+    <PointsTaskDialog
       v-model:open="showPointsModal"
-      title="积分与今日任务"
-      :description="`账号 [${pointsAccountName}] 当前可用积分与每日三大任务进度`"
-      content-class="sm:max-w-md"
-    >
-      <div v-if="pointsLoading" class="py-10 text-center text-xs text-muted-foreground">
-        正在拉取天翼云最新积分与三大任务进度...
-      </div>
+      :account-name="pointsAccountName"
+    />
 
-      <div v-else-if="pointsData" class="space-y-4">
-        <!-- 积分概况卡片 -->
-        <div class="grid grid-cols-2 gap-2.5 p-3.5 rounded-xl bg-muted/40 border border-border/40">
-          <div>
-            <div class="text-xs font-medium text-muted-foreground">通用积分余额</div>
-            <div class="text-2xl font-bold tracking-tight text-amber-500 mt-0.5 tabular-nums">
-              {{ pointsData.generalPoints }}
-            </div>
-            <div v-if="pointsData.willExpirePoints > 0" class="text-[11px] text-muted-foreground mt-0.5">
-              {{ pointsData.willExpirePoints }} 分将于 {{ pointsData.expireDate?.split(' ')[0] }} 到期
-            </div>
-          </div>
-          <div>
-            <div class="text-xs font-medium text-muted-foreground">云手机专属积分</div>
-            <div class="text-2xl font-bold tracking-tight text-foreground mt-0.5 tabular-nums">
-              {{ pointsData.phonePoints }}
-            </div>
-          </div>
-        </div>
-
-        <!-- 今日三大任务明细 -->
-        <div class="space-y-2">
-          <div class="text-xs font-medium text-foreground flex items-center justify-between">
-            <span>今日任务明细 (每日最高 300 积分)</span>
-          </div>
-
-          <div
-            v-for="task in pointsData.tasks"
-            :key="task.name"
-            class="p-3 rounded-xl border border-border/40 bg-card space-y-1.5 shadow-2xs"
-          >
-            <div class="flex items-center justify-between text-xs">
-              <div class="flex items-center gap-1.5 font-medium text-foreground">
-                <CheckCircle2 v-if="task.isCompleted" class="size-3.5 text-emerald-500 shrink-0" />
-                <Clock v-else class="size-3.5 text-muted-foreground shrink-0" />
-                <span>{{ task.name }}</span>
-              </div>
-              <Badge
-                variant="secondary"
-                class="h-5 px-1.5 text-[10px]"
-                :class="task.isCompleted ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-muted text-muted-foreground'"
-              >
-                {{ task.isCompleted ? '已完成' : '进行中' }} (+{{ task.rewardPoints }}分)
-              </Badge>
-            </div>
-
-            <!-- 进度显示与单项手动执行控制 -->
-            <div class="text-[11px] text-muted-foreground flex items-center justify-between font-mono pt-1">
-              <span>{{ (task.type === 'hang' || task.name.includes('使用') || task.name.includes('时长') || task.name.includes('体验')) ? `已累计挂机: ${Math.floor(task.currentProgress / 60)} / ${Math.floor(task.totalProgress / 60)} 分钟 (${task.currentProgress}/${task.totalProgress}秒)` : `完成度: ${task.currentProgress} / ${task.totalProgress}` }}</span>
-              <div class="flex items-center gap-2">
-                <!-- 1. 挂机类任务：智能补足时长 / 中止挂机 -->
-                <template v-if="task.type === 'hang' || task.name.includes('使用') || task.name.includes('时长') || task.name.includes('体验')">
-                  <Button
-                    v-if="store.accounts.find((a) => a.name === pointsAccountName)?.hangStatus?.running"
-                    variant="outline"
-                    size="sm"
-                    class="h-6 px-2 text-[10px] gap-1 cursor-pointer border-destructive/40 text-destructive hover:bg-destructive/10"
-                    @click="stopHangInModal"
-                    title="立即中止挂机任务并恢复保活"
-                  >
-                    <Square class="size-2.5 fill-current" />
-                    中止挂机
-                  </Button>
-                  <Button
-                    v-else-if="!task.isCompleted && task.currentProgress < (task.totalProgress - 5)"
-                    variant="outline"
-                    size="sm"
-                    class="h-6 px-2 text-[10px] gap-1 cursor-pointer border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
-                    :disabled="hangRunning"
-                    @click="runHangInModal"
-                    title="立即启动智能挂机，自动补齐剩余时长"
-                  >
-                    <Play class="size-2.5 fill-current" />
-                    {{ hangRunning ? '智能补时中...' : '立即补足时长' }}
-                  </Button>
-                  <span v-else class="text-emerald-500 font-sans">
-                    已达标
-                  </span>
-                </template>
-
-                <!-- 2. 登录AI云电脑任务：手动执行 -->
-                <template v-else-if="task.name.includes('登录')">
-                  <Button
-                    v-if="!task.isCompleted"
-                    variant="outline"
-                    size="sm"
-                    class="h-6 px-2 text-[10px] gap-1 cursor-pointer border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
-                    :disabled="loginRunning"
-                    @click="runLoginTaskInModal"
-                    title="手动执行登录AI云电脑任务"
-                  >
-                    <Play class="size-2.5 fill-current" />
-                    {{ loginRunning ? '执行中...' : '手动执行' }}
-                  </Button>
-                  <span v-else class="text-emerald-500 font-sans">
-                    已完成
-                  </span>
-                </template>
-
-                <!-- 3. 与AI对话任务：手动执行 -->
-                <template v-else-if="task.name.includes('对话') || task.name.includes('AI')">
-                  <Button
-                    v-if="!task.isCompleted"
-                    variant="outline"
-                    size="sm"
-                    class="h-6 px-2 text-[10px] gap-1 cursor-pointer border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
-                    :disabled="chatRunning"
-                    @click="runAiChatTaskInModal"
-                    title="手动执行与AI对话任务"
-                  >
-                    <Play class="size-2.5 fill-current" />
-                    {{ chatRunning ? '执行中...' : '手动执行' }}
-                  </Button>
-                  <span v-else class="text-emerald-500 font-sans">
-                    已完成
-                  </span>
-                </template>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div v-else class="py-8 text-center text-xs text-muted-foreground">
-        未能获取到该账号的积分数据，请确认账号状态是否正常
-      </div>
-
-      <template #footer>
-        <div class="flex items-center justify-end w-full">
-          <Button class="w-24 h-9 shadow-xs cursor-pointer" @click="showPointsModal = false">
-            关闭
-          </Button>
-        </div>
-      </template>
-    </AppDialog>
-    <!-- 弹窗 3: 电源操作二次确认弹窗 (AppDialog) -->
-    <AppDialog
+    <!-- 弹窗 3: 电源操作二次确认弹窗 -->
+    <PowerOperateDialog
       v-model:open="showPowerModal"
-      :title="powerTarget?.action === 'on' ? '确认开机' : powerTarget?.action === 'reset' ? '确认重启' : '确认关机'"
-      :description="`您正在对云电脑进行电源管理操作，请确认：`"
-      content-class="sm:max-w-sm"
-    >
-      <div v-if="powerTarget" class="py-2 space-y-3">
-        <div class="p-3 rounded-lg bg-muted/50 border border-border/50 text-xs space-y-1.5">
-          <div class="flex justify-between">
-            <span class="text-muted-foreground">所属账号:</span>
-            <span class="font-medium text-foreground">{{ powerTarget.accountName }}</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-muted-foreground">实例标识:</span>
-            <span class="font-mono text-foreground">{{ powerTarget.desktopName || powerTarget.desktopCode }}</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-muted-foreground">执行动作:</span>
-            <span
-              class="font-semibold"
-              :class="{
-                'text-emerald-600 dark:text-emerald-400': powerTarget.action === 'on',
-                'text-amber-600 dark:text-amber-400': powerTarget.action === 'reset',
-                'text-destructive': powerTarget.action === 'shutdown',
-              }"
-            >
-              {{ powerTarget.action === 'on' ? '开机' : powerTarget.action === 'reset' ? '重启云电脑' : '强制关机' }}
-            </span>
-          </div>
-        </div>
-
-        <p class="text-xs text-muted-foreground">
-          <template v-if="powerTarget.action === 'on'">
-            开机指令下发后，系统将自动轮询实例状态并在开机就绪后自动接入保活。
-          </template>
-          <template v-else-if="powerTarget.action === 'reset'">
-            重启可能导致正在运行的保活或任务断开，系统将在重启就绪后自动重新连接。
-          </template>
-          <template v-else>
-            关机后保活通道将自动断开，云电脑将停止产生计费或运行。
-          </template>
-        </p>
-      </div>
-
-      <template #footer>
-        <div class="flex gap-2 w-full">
-          <Button
-            type="button"
-            variant="outline"
-            @click="showPowerModal = false"
-            class="flex-1 h-9 cursor-pointer"
-          >
-            取消
-          </Button>
-          <Button
-            type="button"
-            :variant="powerTarget?.action === 'shutdown' ? 'destructive' : 'default'"
-            :disabled="powerLoading"
-            class="flex-1 h-9 shadow-xs cursor-pointer"
-            @click="confirmPowerOperate"
-          >
-            {{ powerLoading ? '正在下发...' : '确认执行' }}
-          </Button>
-        </div>
-      </template>
-    </AppDialog>
+      :target="powerTarget"
+    />
   </div>
 </template>
