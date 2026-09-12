@@ -2,14 +2,13 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { Config, getRandomScheduleTime, DEFAULT_REDEEM_CONFIG, type AccountConfig, type TaskConfig, type RedeemConfig } from '../config.js';
 import { CtYunClient, type Desktop, type DesktopInfo, type LoginInfo } from './client.js';
-import { KeepAliveManager, type ManagedDesktopState } from '../modules/keepalive/index.js';
+import { KeepaliveService, type ManagedDesktopState } from '../modules/keepalive/index.js';
 import { Logger, type LogItem } from './logger.js';
-import { TaskScheduler, StrategyService } from '../modules/strategy/index.js';
-import { TaskRunner, SignTask, isHangTaskName, HangTask, AiChatTask, TaskStrategyService, type PointsSummary } from '../modules/task/index.js';
-import { RedeemTask, RewardRedeemService, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../modules/reward/index.js';
+import { TaskScheduler } from '../modules/strategy/index.js';
+import { isHangTaskName, TaskStrategyService, type PointsSummary } from '../modules/task/index.js';
+import { RewardRedeemService, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../modules/reward/index.js';
 import { DesktopSessionArbiter } from '../modules/arbiter/desktop-session-arbiter.js';
 import { AccountService } from '../modules/account/index.js';
-import { KeepaliveService } from '../modules/keepalive/index.js';
 import { safeWriteFileSync, sendWebhookNotification, getCstDateString } from './utils.js';
 
 export interface ManagedAccount {
@@ -36,17 +35,16 @@ export interface ManagedAccount {
 
 /**
  * 账号与系统顶层业务管理者
- * 协调：账号认证存储、保活管理器 (KeepAliveManager)、定时调度器 (TaskScheduler)
+ * 协调：账号认证存储、保活服务 (KeepaliveService)、定时调度器 (TaskScheduler)、任务编排服务 (TaskStrategyService)
  */
 export class ProfileManager {
   private accounts: Map<string, AccountConfig> = new Map();
   private clients: Map<string, CtYunClient> = new Map();
   private accountStates: Map<string, ManagedAccount> = new Map();
   private logger: Logger = new Logger();
-  private keepAliveManager: KeepAliveManager;
+  private keepaliveService: KeepaliveService;
   private taskScheduler: TaskScheduler;
   private taskStrategyService: TaskStrategyService;
-  private keepaliveService: KeepaliveService;
   private statusListeners: Set<() => void> = new Set();
 
   public keepAliveSeconds = 60;
@@ -60,16 +58,19 @@ export class ProfileManager {
   private reloadDesktopsPromises: Map<string, Promise<void>> = new Map();
 
   constructor() {
-    this.keepAliveManager = new KeepAliveManager(this.logger, () => this.notifyStatusChange());
+    this.keepaliveService = new KeepaliveService(this.logger, () => this.notifyStatusChange());
     this.taskScheduler = new TaskScheduler(this, this.logger);
     this.taskStrategyService = new TaskStrategyService(this.logger);
-    this.keepaliveService = new KeepaliveService(this.logger);
     this.loadFromDisk();
     this.taskScheduler.start();
   }
 
-  public getKeepAliveManager(): KeepAliveManager {
-    return this.keepAliveManager;
+  public getKeepaliveService(): KeepaliveService {
+    return this.keepaliveService;
+  }
+
+  public getTaskStrategyService(): TaskStrategyService {
+    return this.taskStrategyService;
   }
 
   public getAccountNameByDesktopId(desktopCode: string): string | undefined {
@@ -106,7 +107,6 @@ export class ProfileManager {
   public touchWebUserActive(accountName: string, desktopCode: string, durationSec: number = 60): void {
     const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopCode);
     if (!matchedAccount) return;
-    this.keepAliveManager.touchWebUserActive(matchedAccount, desktopCode, durationSec);
     // 仲裁器注册 Web 直连高优先级租约，驱逐所有后台长连接
     const arbiter = DesktopSessionArbiter.getInstance();
     arbiter.acquireLease(desktopCode, 'web_direct', matchedAccount, async () => {
@@ -119,7 +119,6 @@ export class ProfileManager {
   public releaseWebUserActive(accountName: string, desktopCode: string): void {
     const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopCode);
     if (!matchedAccount) return;
-    this.keepAliveManager.releaseWebUserActive(matchedAccount, desktopCode);
     const arbiter = DesktopSessionArbiter.getInstance();
     arbiter.releaseLease(desktopCode, 'web_direct', matchedAccount).catch(() => {});
   }
@@ -262,7 +261,7 @@ export class ProfileManager {
         state.lastSignDate = acc.lastSignDate;
         state.taskConfig = acc.taskConfig;
         state.redeemConfig = acc.redeemConfig;
-        state.hangStatus = HangTask.getHangInfo(name) || undefined;
+        state.hangStatus = this.taskStrategyService.getHangInfo(name) || undefined;
         const pts = this.todayPointsCache.get(name);
         const todayStr = getCstDateString();
         // 严格自然日校验：仅在缓存日期与东八区当天一致时有效，跨天直接归零
@@ -358,7 +357,7 @@ export class ProfileManager {
       acc.autoStart = false;
       this.saveToDisk();
     }
-    this.keepAliveManager.stopWorkers(accountName);
+    this.keepaliveService.stopWorkers(accountName);
     const state = this.accountStates.get(accountName);
     if (state) {
       state.status = 'idle';
@@ -372,8 +371,8 @@ export class ProfileManager {
 
   public async stopAll(): Promise<void> {
     this.taskScheduler.stop();
-    this.keepAliveManager.stopAll();
-    await HangTask.destroy();
+    this.keepaliveService.stopAll();
+    await this.taskStrategyService.destroyAllHang();
     DesktopSessionArbiter.getInstance().clearAll();
     this.saveToDisk();
   }
@@ -396,7 +395,7 @@ export class ProfileManager {
       if (operation === 'shutdown') {
         this.setManualShutdown(canonicalDesktopCode, true);
       }
-      this.keepAliveManager.stopWorkerForDesktop(accountName, canonicalDesktopCode);
+      this.keepaliveService.stopWorkerForDesktop(accountName, canonicalDesktopCode);
       desktop.status = 'stopped';
       desktop.lastHeartbeat = undefined;
       desktop.useStatusText = operation === 'shutdown' ? '已关机' : '重启中';
@@ -714,8 +713,8 @@ export class ProfileManager {
     const state = this.accountStates.get(oldName);
     const client = this.clients.get(oldName);
 
-    this.keepAliveManager.stopWorkers(oldName);
-    HangTask.renameSession(oldName, trimmed);
+    this.keepaliveService.stopWorkers(oldName);
+    this.taskStrategyService.renameHangSession(oldName, trimmed);
     this.accounts.delete(oldName);
     this.accountStates.delete(oldName);
     if (client) this.clients.delete(oldName);
@@ -843,14 +842,14 @@ export class ProfileManager {
     // 检查是否开启了保活长连接 (由 autoStart 控制，与挂机做任务完全解耦)
     const isKeepAliveEnabled = acc.autoStart !== false;
     if (!isKeepAliveEnabled) {
-      this.keepAliveManager.stopWorkers(accountName);
+      this.keepaliveService.stopWorkers(accountName);
       for (const d of state.desktops) {
         d.status = 'stopped';
       }
       return;
     }
 
-    await this.keepAliveManager.syncWorkersForAccount(
+    await this.keepaliveService.syncWorkersForAccount(
       accountName,
       client,
       list,
@@ -932,7 +931,7 @@ export class ProfileManager {
   }
 
   public removeAccount(name: string): void {
-    this.keepAliveManager.stopWorkers(name);
+    this.keepaliveService.stopWorkers(name);
     this.accounts.delete(name);
     this.clients.delete(name);
     this.accountStates.delete(name);
@@ -949,7 +948,7 @@ export class ProfileManager {
     }
     const state = this.accountStates.get(accountName);
     const dId = state?.desktops?.[0]?.desktopId;
-    const res = await TaskRunner.executeDailyTasks(client, dId, acc.taskConfig, this.logger);
+    const res = await this.taskStrategyService.executeDailyTasks(client, dId, acc.taskConfig, this.logger);
     const today = getCstDateString();
     acc.lastSignDate = today;
     if (!acc.taskConfig) {
@@ -986,17 +985,17 @@ export class ProfileManager {
       throw new Error('账号未登录，无法挂机');
     }
 
-    if (HangTask.isRunning(accountName)) {
+    if (this.taskStrategyService.isHangRunning(accountName)) {
       return '后台挂机任务已在运行中，无需重复触发';
     }
 
     // 确保清理残留的旧挂机状态与会话缓存
-    HangTask.clearSession(accountName);
+    this.taskStrategyService.clearHangSession(accountName);
 
     // 挂机启动前：优先软暂停底层保活连接，无缝让位防踢线
-    const paused = this.keepAliveManager.pauseWorkers(accountName);
+    const paused = this.keepaliveService.pauseWorkers(accountName);
     if (!paused) {
-      this.keepAliveManager.stopWorkers(accountName);
+      this.keepaliveService.stopWorkers(accountName);
     }
 
     // 立即登记并预设挂机 Session，优先使用缓存，若无缓存或已过期则先异步静默请求任务中心
@@ -1009,7 +1008,7 @@ export class ProfileManager {
       } catch {}
     }
     const hangTask = cachedEntry?.summary?.tasks?.find((t: any) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress));
-    HangTask.initPendingSession(accountName, hangTask?.currentProgress || 0, hangTask?.totalProgress || 3600);
+    this.taskStrategyService.initPendingHangSession(accountName, hangTask?.currentProgress || 0, hangTask?.totalProgress || 3600);
 
     // 将桌面状态置为 hanging 并更新挂机状态，保证主页保活在线数不失联
     const state = this.accountStates.get(accountName);
@@ -1017,7 +1016,7 @@ export class ProfileManager {
       for (const d of state.desktops) {
         (d as any).status = 'hanging';
       }
-      state.hangStatus = HangTask.getHangInfo(accountName) || undefined;
+      state.hangStatus = this.taskStrategyService.getHangInfo(accountName) || undefined;
       this.notifyStatusChange();
     }
 
@@ -1077,12 +1076,12 @@ export class ProfileManager {
         const isKeepAliveEnabled = acc.autoStart !== false;
         if (isKeepAliveEnabled) {
           // 优先通过 resumeWorkers 恢复连接，若无对应 Worker 则走同步初始化
-          const resumed = this.keepAliveManager.resumeWorkers(accountName);
+          const resumed = this.keepaliveService.resumeWorkers(accountName);
           if (!resumed) {
             try {
               const list = await client.getDesktopList();
               const desktopStates = state?.desktops || [];
-              await this.keepAliveManager.syncWorkersForAccount(accountName, client, list, desktopStates);
+              await this.keepaliveService.syncWorkersForAccount(accountName, client, list, desktopStates);
             } catch {}
           }
         } else {
@@ -1142,11 +1141,11 @@ export class ProfileManager {
     try {
       const isKeepAliveEnabled = acc.autoStart !== false;
       if (isKeepAliveEnabled) {
-        const resumed = this.keepAliveManager.resumeWorkers(accountName);
+        const resumed = this.keepaliveService.resumeWorkers(accountName);
         if (!resumed) {
           const list = await client.getDesktopList();
           const desktopStates = state?.desktops || [];
-          await this.keepAliveManager.syncWorkersForAccount(accountName, client, list, desktopStates);
+          await this.keepaliveService.syncWorkersForAccount(accountName, client, list, desktopStates);
         }
       }
     } catch {}
@@ -1178,7 +1177,7 @@ export class ProfileManager {
     }
     const state = this.accountStates.get(accountName);
     const dId = state?.desktops?.[0]?.desktopId;
-    const res = await TaskRunner.activateDesktopSession(client, dId);
+    const res = await this.taskStrategyService.activateDesktopSession(client, dId, this.logger);
     this.logger.addLog('success', `[${accountName}] 登录云电脑: ${res.message}`);
     // 同步唤醒保活长连接以维持活跃，加速官方任务核验与积分结算
     this.reloadDesktops(accountName).catch(() => {});
@@ -1283,7 +1282,7 @@ export class ProfileManager {
 
   public async getPointsAndTasks(accountName: string): Promise<PointsSummary> {
     const client = this.getClient(accountName);
-    const summary = await SignTask.getPointsAndTasks(client);
+    const summary = await this.taskStrategyService.getPointsAndTasks(client);
     let todayEarned = 0;
     for (const t of summary.tasks) {
       if (t.isCompleted) {

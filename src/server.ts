@@ -12,9 +12,10 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { WebSocketServer, WebSocket } from 'ws';
 import QRCode from 'qrcode';
-import { Config, getRandomScheduleTime } from './config.js';
-import { AccountManager } from './core/index.js';
+import { Config, DEFAULT_REDEEM_CONFIG } from './config.js';
+import { ProfileManager } from './core/index.js';
 import { DesktopSessionArbiter } from './modules/arbiter/index.js';
+import { StrategyService } from './modules/strategy/index.js';
 import { CtYunClient, type ChallengeData } from './core/client.js';
 import { safeWriteFileSync, sendWebhookNotification } from './core/utils.js';
 import { EMBEDDED_WEB_FILES } from './embedded-web.js';
@@ -71,7 +72,7 @@ export async function createServer() {
     credentials: true,
   });
 
-  const manager = new AccountManager();
+  const manager = new ProfileManager();
   
   // 持久化 session 文件，避免容器重启后丢失已有登录状态
   const sessionFilePath = path.join(Config.dataDir, '.sessions.json');
@@ -307,8 +308,8 @@ export async function createServer() {
       password: body.password || '',
       autoSign: body.autoSign !== false,
       autoStart: body.autoStart !== false,
-      taskConfig: body.taskConfig || { enabled: true, scheduleTime: getRandomScheduleTime(), autoHang: true, autoAiChat: true },
-      redeemConfig: body.redeemConfig || { enabled: true, targetReward: '1G数据盘-4天', fallbackDays: 4 },
+      taskConfig: body.taskConfig || { enabled: true, scheduleTime: StrategyService.generateRandomSchedule(), autoHang: true, autoAiChat: true },
+      redeemConfig: body.redeemConfig || { ...DEFAULT_REDEEM_CONFIG, enabled: true },
     });
     manager.addLog('info', `[${name}] 档案已创建`);
     return { success: true, msg: 'Profile 创建成功', data: manager.getAccountState(name) };

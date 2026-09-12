@@ -2,7 +2,20 @@ import type { CtYunClient, Desktop, DesktopInfo } from '../../core/client.js';
 import { KeepAliveWorker } from './worker.js';
 import type { Logger } from '../../core/logger.js';
 import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
-import type { ManagedDesktopState } from './keepalive-manager.js';
+export interface ManagedDesktopState {
+  desktopId: string;
+  desktopName: string;
+  desktopCode: string;
+  useStatusText: string;
+  imageName?: string;
+  flavorName?: string;
+  objType?: number;
+  objId?: string;
+  poolId?: string;
+  isPool?: boolean;
+  status: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
+  lastHeartbeat?: string;
+}
 
 /**
  * 现代化静默保活服务模块 (Keepalive Service)

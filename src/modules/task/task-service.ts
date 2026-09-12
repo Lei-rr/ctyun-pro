@@ -1,8 +1,10 @@
 import type { CtYunClient } from '../../core/client.js';
 import type { Logger } from '../../core/logger.js';
+import type { TaskConfig } from '../../config.js';
 import { SignTask, type PointsSummary } from './sign.js';
 import { AiChatTask } from './ai-chat.js';
 import { HangTask } from './hang.js';
+import { TaskRunner } from './task-runner.js';
 
 export interface TaskExecutionSummary {
   accountName: string;
@@ -52,8 +54,69 @@ export class TaskStrategyService {
   }
 
   /**
-   * 停止指定账号正在运行的挂机任务
+   * 获取指定账号挂机运行信息
    */
+  public getHangInfo(accountName: string) {
+    return HangTask.getHangInfo(accountName);
+  }
+
+  /**
+   * 检查指定账号挂机是否正在运行
+   */
+  public isHangRunning(accountName: string): boolean {
+    return HangTask.isRunning(accountName);
+  }
+
+  /**
+   * 初始化挂机 Pending 会话
+   */
+  public initPendingHangSession(accountName: string, currentProgress: number, totalProgress: number): void {
+    HangTask.initPendingSession(accountName, currentProgress, totalProgress);
+  }
+
+  /**
+   * 清理指定账号挂机会话
+   */
+  public clearHangSession(accountName: string): void {
+    HangTask.clearSession(accountName);
+  }
+
+  /**
+   * 重命名挂机会话账号键
+   */
+  public renameHangSession(oldName: string, newName: string): void {
+    HangTask.renameSession(oldName, newName);
+  }
+
+  /**
+   * 销毁并停止所有挂机实例
+   */
+  public async destroyAllHang(): Promise<void> {
+    await HangTask.destroy();
+  }
+
+  /**
+   * 编排并执行指定账号的每日任务集合 (签到、AI对话、活跃唤醒等)
+   */
+  public async executeDailyTasks(
+    client: CtYunClient,
+    desktopId?: string,
+    taskConfig?: TaskConfig,
+    logger?: Logger,
+  ) {
+    return TaskRunner.executeDailyTasks(client, desktopId, taskConfig, logger);
+  }
+
+  /**
+   * 纯协议触发官方「登录AI云电脑」任务与活跃事件上报
+   */
+  public async activateDesktopSession(
+    client: CtYunClient,
+    desktopId?: string,
+    logger?: Logger,
+  ) {
+    return TaskRunner.activateDesktopSession(client, desktopId, logger);
+  }
   public async stopHang(accountName: string): Promise<void> {
     await HangTask.stopHang(accountName);
   }
