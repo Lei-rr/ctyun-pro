@@ -195,14 +195,33 @@ export class RewardRedeemService {
     // 2. 硬件绑定类商品校验（如升配包 pointstplupgrade、数据盘 pointsdiskupgrade）
     const isHardwareBound = resolvedType === 'pointstplupgrade' || resolvedType === 'pointsdiskupgrade';
     const attrs: any[] = [];
-    const numDesktopId = Number(desktopId);
-    const isValidDesktopId = Boolean(
-      desktopId &&
-        desktopId !== 'undefined' &&
-        desktopId !== 'null' &&
+    let finalDesktopId = desktopId;
+    let numDesktopId = Number(finalDesktopId);
+    let isValidDesktopId = Boolean(
+      finalDesktopId &&
+        finalDesktopId !== 'undefined' &&
+        finalDesktopId !== 'null' &&
         Number.isFinite(numDesktopId) &&
         numDesktopId > 0,
     );
+
+    if (!isValidDesktopId) {
+      // 容错反查兜底：若传入的是 desktopCode 或未指定桌面，自动拉取账号桌面列表进行匹配或取首台兜底
+      try {
+        const list = await client.getDesktopList();
+        const found = finalDesktopId
+          ? list.find(
+              (d: any) =>
+                d.desktopCode === finalDesktopId || String(d.desktopId) === String(finalDesktopId),
+            )
+          : list[0];
+        if (found?.desktopId && Number.isFinite(Number(found.desktopId))) {
+          finalDesktopId = found.desktopId;
+          numDesktopId = Number(finalDesktopId);
+          isValidDesktopId = true;
+        }
+      } catch {}
+    }
 
     if (isHardwareBound) {
       if (!isValidDesktopId) {

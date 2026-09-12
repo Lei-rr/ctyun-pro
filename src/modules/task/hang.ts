@@ -62,8 +62,13 @@ export class HangTask {
       const elapsed = Math.max(0, Math.floor((Date.now() - s.connectedAt) / 1000));
       cur = Math.min(s.totalProgress || 3600, cur + elapsed);
     }
+    const total = s.totalProgress || 3600;
+    // 只要推演达到或超过 3600s，立即对外部调用隐藏，杜绝前端卡片滞留假死
+    if (cur >= total || s.status !== 'running') {
+      return null;
+    }
     const message = s.connectedAt
-      ? `纯协议挂机中 (${cur}/${s.totalProgress || 3600}秒)`
+      ? `纯协议挂机中 (${cur}/${total}秒)`
       : s.message || '协议准备中';
 
     return {
@@ -387,7 +392,8 @@ export class HangTask {
 
                 // 若本次只做「登录AI云电脑」任务，握手完成后等待 3 秒确保服务端确认即可优雅退出
                 if (options.onlyLoginTask) {
-                  setTimeout(() => {
+                  setTimeout(async () => {
+                    await cleanup();
                     resolve({ success: true, message: '已完成纯协议桌面登录激活 (+100积分)' });
                   }, 3000);
                   return;
@@ -424,12 +430,14 @@ export class HangTask {
                         progressUpdateTimer = null;
                       }
 
+                      // 立即从全局会话中移除并回调清空 hangStatus，毫秒级广播复位，杜绝前端卡片滞留假死
+                      activeHangSessions.delete(accountName);
+                      options.onProgress?.(totalProgress, totalProgress);
+
                       // 达到 3600 秒时间后，在主动断开长连前缓冲 2 秒，确保官方离线结算时物理时长绝对达标（防秒级截断），而业务与判定基准始终是 3600s
                       logger.addLog('info', `[${logPrefix}] 挂机时长已达到目标 (${totalProgress}/${totalProgress}秒)，缓冲 2 秒后主动断开长连触发官方离线结算...`);
                       await new Promise((r) => setTimeout(r, 2000));
 
-                      // 立即从全局会话中移除并清理，确保外部读取立即为已完成
-                      activeHangSessions.delete(accountName);
                       await cleanup();
 
                       // 离线断开后，等待 3 秒调用官方接口核验积分与时长
@@ -494,6 +502,12 @@ export class HangTask {
           if (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) {
             logger.addLog('warn', `[${logPrefix}] 网关通知桌面被真实客户端接入，纯协议任务主动让位`);
             resolve({ success: true, message: '客户端主动接入，任务让位' });
+            return;
+          }
+
+          if (options.onlyLoginTask) {
+            await cleanup();
+            resolve({ success: true, message: '纯协议桌面登录连接已断开' });
             return;
           }
 

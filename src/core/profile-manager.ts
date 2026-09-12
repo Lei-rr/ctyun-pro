@@ -76,7 +76,11 @@ export class ProfileManager {
   public getAccountNameByDesktopCode(desktopCode: string): string | undefined {
     const codeStr = String(desktopCode).trim();
     for (const [name, state] of this.accountStates.entries()) {
-      const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
+      const d = state.desktops.find((item) => String(item.desktopCode) === codeStr || String(item.desktopId) === codeStr);
+      if (d) return name;
+    }
+    for (const [name, acc] of this.accounts.entries()) {
+      const d = (acc.desktops || []).find((item: any) => String(item.desktopCode) === codeStr || String(item.desktopId) === codeStr);
       if (d) return name;
     }
     return undefined;
@@ -87,20 +91,20 @@ export class ProfileManager {
   }
 
   /**
-   * 通过全局唯一 desktopCode 反查账号与桌面实例信息
+   * 通过全局唯一 desktopCode 或 desktopId 反查账号与桌面实例信息
    */
   public findDesktopByCode(desktopCode: string): { accountName: string; desktop: ManagedDesktopState } | undefined {
     if (!desktopCode) return undefined;
     const codeStr = String(desktopCode).trim();
     for (const [name, state] of this.accountStates.entries()) {
-      const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
+      const d = state.desktops.find((item) => String(item.desktopCode) === codeStr || String(item.desktopId) === codeStr);
       if (d) {
         return { accountName: name, desktop: d };
       }
     }
     // 兜底查 accounts 原生配置
     for (const [name, acc] of this.accounts.entries()) {
-      const d = (acc.desktops || []).find((item: any) => String(item.desktopCode) === codeStr);
+      const d = (acc.desktops || []).find((item: any) => String(item.desktopCode) === codeStr || String(item.desktopId) === codeStr);
       if (d) {
         return { accountName: name, desktop: d as ManagedDesktopState };
       }
@@ -113,22 +117,36 @@ export class ProfileManager {
   }
 
   public touchWebUserActive(accountName: string, desktopCode: string, durationSec: number = 60): void {
-    const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopCode);
+    const matched = this.findDesktopByCode(desktopCode);
+    const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopId(desktopCode);
     if (!matchedAccount) return;
+    
     // 仲裁器注册 Web 直连高优先级租约，驱逐所有后台长连接
     const arbiter = DesktopSessionArbiter.getInstance();
-    arbiter.acquireLease(desktopCode, 'web_direct', matchedAccount, async () => {
-      // 租约过期回调：无特殊释放操作
-    }).catch(() => {});
+    const dId = matched?.desktop?.desktopId ? String(matched.desktop.desktopId) : '';
+    if (dId) {
+      arbiter.acquireLease(dId, 'web_direct', matchedAccount, async () => {}).catch(() => {});
+    }
+    if (desktopCode && desktopCode !== dId) {
+      arbiter.acquireLease(desktopCode, 'web_direct', matchedAccount, async () => {}).catch(() => {});
+    }
+
     // 协同让位：若该账号正在执行后台纯协议挂机，立即主动中止挂机释放推流信道，彻底防止双端互踢冲突
     this.taskStrategyService.stopHang(matchedAccount).catch(() => {});
   }
 
   public releaseWebUserActive(accountName: string, desktopCode: string): void {
-    const matchedAccount = accountName || this.getAccountNameByDesktopId(desktopCode);
+    const matched = this.findDesktopByCode(desktopCode);
+    const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopId(desktopCode);
     if (!matchedAccount) return;
     const arbiter = DesktopSessionArbiter.getInstance();
-    arbiter.releaseLease(desktopCode, 'web_direct', matchedAccount).catch(() => {});
+    const dId = matched?.desktop?.desktopId ? String(matched.desktop.desktopId) : '';
+    if (dId) {
+      arbiter.releaseLease(dId, 'web_direct', matchedAccount).catch(() => {});
+    }
+    if (desktopCode && desktopCode !== dId) {
+      arbiter.releaseLease(desktopCode, 'web_direct', matchedAccount).catch(() => {});
+    }
   }
 
   public isManualShutdown(desktopCode: string): boolean {

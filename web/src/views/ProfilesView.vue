@@ -259,8 +259,11 @@ onMounted(() => {
       if (acc.hangStatus?.running) {
         const cur = acc.hangStatus.currentProgress || 0;
         const tot = acc.hangStatus.totalProgress || 3600;
-        if (cur < tot) {
+        if (cur + 1 < tot) {
           acc.hangStatus.currentProgress = cur + 1;
+        } else {
+          // 达标即刻清空，杜绝 3600/3600 滞留卡片假死
+          acc.hangStatus = undefined;
         }
       }
     }
