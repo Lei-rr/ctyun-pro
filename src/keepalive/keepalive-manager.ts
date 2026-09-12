@@ -44,7 +44,15 @@ export class KeepAliveManager {
     this.webUserActiveMap.set(desktopCode, until);
 
     if (isFirstActive) {
-      this.logger.addLog('info', `[${accountName}] 检测到前台 Web 直连视窗接入，保活长连主动避让挂起 (${durationSec}s)`);
+      let dPrefix = accountName;
+      const workers = this.workers.get(accountName) || [];
+      const w = workers.find(item => (item as any).options?.desktop?.desktopCode === desktopCode || (item as any).options?.desktop?.desktopId === desktopCode);
+      if (w) {
+        const d = (w as any).options?.desktop;
+        const dName = d?.desktopName || d?.computerName || d?.name || desktopCode;
+        if (dName) dPrefix = `${accountName} - ${dName}`;
+      }
+      this.logger.addLog('info', `[${dPrefix}] 检测到前台 Web 直连视窗接入，保活长连主动避让挂起 (${durationSec}s)`);
       this.pauseWorkers(accountName);
     }
   }
@@ -55,7 +63,15 @@ export class KeepAliveManager {
   public releaseWebUserActive(accountName: string, desktopCode: string): void {
     if (this.webUserActiveMap.has(desktopCode)) {
       this.webUserActiveMap.delete(desktopCode);
-      this.logger.addLog('info', `[${accountName}] 前台 Web 直连视窗已退出，正在恢复后台保活长连...`);
+      let dPrefix = accountName;
+      const workers = this.workers.get(accountName) || [];
+      const w = workers.find(item => (item as any).options?.desktop?.desktopCode === desktopCode || (item as any).options?.desktop?.desktopId === desktopCode);
+      if (w) {
+        const d = (w as any).options?.desktop;
+        const dName = d?.desktopName || d?.computerName || d?.name || desktopCode;
+        if (dName) dPrefix = `${accountName} - ${dName}`;
+      }
+      this.logger.addLog('info', `[${dPrefix}] 前台 Web 直连视窗已退出，正在恢复后台保活长连...`);
       this.resumeWorkers(accountName);
     }
   }
@@ -85,9 +101,12 @@ export class KeepAliveManager {
           this.webUserActiveMap.delete(desktopCode);
           // 寻找对应账号并恢复
           for (const [acc, workers] of this.workers.entries()) {
-            const matched = workers.some(w => (w as any).options?.desktop?.desktopCode === desktopCode || (w as any).options?.desktopCode === desktopCode);
+            const matched = workers.find(w => (w as any).options?.desktop?.desktopCode === desktopCode || (w as any).options?.desktopCode === desktopCode);
             if (matched) {
-              this.logger.addLog('info', `[${acc}] 前台 Web 直连避让已超时，正在自动恢复后台保活通道...`);
+              const d = (matched as any).options?.desktop;
+              const dName = d?.desktopName || d?.computerName || d?.name || desktopCode;
+              const dPrefix = dName ? `${acc} - ${dName}` : acc;
+              this.logger.addLog('info', `[${dPrefix}] 前台 Web 直连避让已超时，正在自动恢复后台保活通道...`);
               this.resumeWorkers(acc);
             }
           }
@@ -201,14 +220,17 @@ export class KeepAliveManager {
       const d = desktops[i];
       const state = desktopStates[i];
 
-      // 若用户主动手动关机，则严格跳过自动开机与保活建立
       const dCode = d.desktopCode || d.desktopId;
+      const dName = d.desktopName || (d as any).computerName || (d as any).name || dCode;
+      const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
+
+      // 若用户主动手动关机，则严格跳过自动开机与保活建立
       if (isManualShutdown && isManualShutdown(dCode)) {
         if (state) {
           state.status = 'stopped';
           state.useStatusText = '已关机';
         }
-        this.logger.addLog('info', `[${accountName}] 云电脑 [${d.desktopName || dCode}] 处于手动关机锁定状态，跳过自动唤醒`);
+        this.logger.addLog('info', `[${dPrefix}] 处于手动关机锁定状态，跳过自动唤醒`);
         continue;
       }
 
@@ -217,16 +239,16 @@ export class KeepAliveManager {
       if (!isRunning) {
         this.logger.addLog(
           'warn',
-          `[${accountName}] 当前状态: [${d.useStatusText}]，正在下发自动开机指令...`,
+          `[${dPrefix}] 当前状态: [${d.useStatusText}]，正在下发自动开机指令...`,
         );
         try {
           await client.operateDesktop(d.desktopId, 'on');
         } catch (e: any) {
-          this.logger.addLog('warn', `[${accountName}] 自动开机提示: ${e.message}`);
+          this.logger.addLog('warn', `[${dPrefix}] 自动开机提示: ${e.message}`);
         }
 
         // 异步等待云电脑开机完成（轮询检测官方状态，最多等待 5 分钟）
-        this.logger.addLog('info', `[${accountName}] 等待云电脑开机就绪中 (最长 5 分钟)...`);
+        this.logger.addLog('info', `[${dPrefix}] 等待云电脑开机就绪中 (最长 5 分钟)...`);
         let ready = false;
         for (let waitSec = 0; waitSec < 60; waitSec++) {
           await new Promise((r) => setTimeout(r, 5000));
@@ -236,13 +258,13 @@ export class KeepAliveManager {
             if (cur && (cur.useStatusText === '运行中' || cur.useStatusText === '离线运行')) {
               d.useStatusText = cur.useStatusText;
               ready = true;
-              this.logger.addLog('success', `[${accountName}] 云电脑已成功开机`);
+              this.logger.addLog('success', `[${dPrefix}] 云电脑已成功开机`);
               break;
             }
           } catch {}
         }
         if (!ready) {
-          this.logger.addLog('warn', `[${accountName}] 云电脑开机仍在进行中，稍后将自动接入保活`);
+          this.logger.addLog('warn', `[${dPrefix}] 云电脑开机仍在进行中，稍后将自动接入保活`);
         }
       }
 
@@ -255,7 +277,7 @@ export class KeepAliveManager {
           if (info && info.clinkLvsOutHost) break;
         } catch (e: any) {
           if (attempt === maxRetries) {
-            this.logger.addLog('warn', `[${accountName}] 暂时未能获取到云电脑连接信道，将在下个周期自动重试`);
+            this.logger.addLog('warn', `[${dPrefix}] 暂时未能获取到云电脑连接信道，将在下个周期自动重试`);
             break;
           }
           await new Promise((r) => setTimeout(r, 4000));
@@ -312,7 +334,7 @@ export class KeepAliveManager {
       } catch (err: any) {
         this.logger.addLog(
           'error',
-          `[${accountName}] 连接建立失败: ${err.message}`,
+          `[${dPrefix}] 连接建立失败: ${err.message}`,
         );
       }
     }

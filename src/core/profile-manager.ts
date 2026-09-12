@@ -409,8 +409,10 @@ export class ProfileManager {
 
     try {
       const targetObjType = desktop.objType ?? 0;
+      const dName = desktop.desktopName || (desktop as any).computerName || (desktop as any).name || canonicalDesktopCode;
+      const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
       const message = await client.operateDesktop(requestApiDesktopId, operation, targetObjType);
-      this.logger.addLog('info', `[${accountName}] ${message}`);
+      this.logger.addLog('info', `[${dPrefix}] ${message}`);
       // 后台轮询跟踪云电脑电源状态，直至真正开机或关机完成
       this.trackDesktopStatusAfterPower(accountName, canonicalDesktopCode, operation);
       return message;
@@ -653,13 +655,15 @@ export class ProfileManager {
         const target = state?.desktops.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
 
         if (current && target) {
+          const dName = target.desktopName || (target as any).computerName || (target as any).name || desktopId;
+          const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
           target.useStatusText = current.useStatusText;
 
           if (operation === 'on' || operation === 'reset') {
             if (current.useStatusText === '运行中') {
               clearInterval(timer);
               target.status = 'connecting';
-              this.logger.addLog('success', `[${accountName}] 云电脑已成功开机，正在接入保活...`);
+              this.logger.addLog('success', `[${dPrefix}] 云电脑已成功开机，正在接入保活...`);
               this.notifyStatusChange();
               // 云电脑开机成功后，若账号处于保活状态，自动启动该桌面的 WebSocket 保活
               this.reloadDesktops(accountName).catch(() => {});
@@ -669,7 +673,7 @@ export class ProfileManager {
             if (current.useStatusText === '已关机' || current.useStatusText === '关机') {
               clearInterval(timer);
               target.status = 'stopped';
-              this.logger.addLog('info', `[${accountName}] 云电脑已安全关机，已锁定保活防止误唤醒`);
+              this.logger.addLog('info', `[${dPrefix}] 云电脑已安全关机，已锁定保活防止误唤醒`);
               this.notifyStatusChange();
               return;
             }
