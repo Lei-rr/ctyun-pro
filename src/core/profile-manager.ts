@@ -73,7 +73,7 @@ export class ProfileManager {
     return this.taskStrategyService;
   }
 
-  public getAccountNameByDesktopId(desktopCode: string): string | undefined {
+  public getAccountNameByDesktopCode(desktopCode: string): string | undefined {
     const codeStr = String(desktopCode).trim();
     for (const [name, state] of this.accountStates.entries()) {
       const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
@@ -82,10 +82,14 @@ export class ProfileManager {
     return undefined;
   }
 
+  public getAccountNameByDesktopId(desktopCode: string): string | undefined {
+    return this.getAccountNameByDesktopCode(desktopCode);
+  }
+
   /**
    * 通过全局唯一 desktopCode 反查账号与桌面实例信息
    */
-  public findDesktopById(desktopCode: string): { accountName: string; desktop: ManagedDesktopState } | undefined {
+  public findDesktopByCode(desktopCode: string): { accountName: string; desktop: ManagedDesktopState } | undefined {
     if (!desktopCode) return undefined;
     const codeStr = String(desktopCode).trim();
     for (const [name, state] of this.accountStates.entries()) {
@@ -102,6 +106,10 @@ export class ProfileManager {
       }
     }
     return undefined;
+  }
+
+  public findDesktopById(desktopCode: string): { accountName: string; desktop: ManagedDesktopState } | undefined {
+    return this.findDesktopByCode(desktopCode);
   }
 
   public touchWebUserActive(accountName: string, desktopCode: string, durationSec: number = 60): void {
@@ -461,26 +469,23 @@ export class ProfileManager {
     }
 
     if (targetDesktop?.desktopCode) {
-      return this.getDesktopDirectUrlByDesktopId(targetDesktop.desktopCode, accountName);
+      return this.getDesktopDirectUrlByDesktopCode(targetDesktop.desktopCode, accountName);
     }
 
-    const token = await client.genLoginToken(300);
     const desktopCode = targetDesktop?.desktopCode || '';
-    const directUrl = desktopCode
-      ? `https://pc.ctyun.cn/#/oauth?token=${encodeURIComponent(token)}&desktopOid=${encodeURIComponent(desktopCode)}`
-      : `https://pc.ctyun.cn/#/oauth?token=${encodeURIComponent(token)}`;
-
-    this.logger.addLog('info', `[${accountName}] 生成远程桌面免密直连链接成功 (有效期 5 分钟)`);
+    const directUrl = desktopCode ? `/desktop/${encodeURIComponent(desktopCode)}` : '/';
+    this.logger.addLog('info', `[${accountName}] 生成同源远程桌面直连视窗链接 (${desktopCode})`);
     return { url: directUrl, desktopCode };
   }
 
   /**
-   * 通过全局唯一 desktopCode 反查账号与桌面，生成远程桌面免密直连链接（新窗口直接打开官方界面）
+   * 通过全局唯一 desktopCode 反查账号与桌面，生成标准同源远程桌面直连链接
+   * （纯同源 Cookie/Pinia 鉴权，严禁在 URL 中拼接 token 泄露凭据）
    */
-  public async getDesktopDirectUrlByDesktopId(
+  public async getDesktopDirectUrlByDesktopCode(
     desktopCode: string,
     accountHint?: string,
-  ): Promise<{ url: string; desktopCode?: string; accountName: string }> {
+  ): Promise<{ url: string; desktopCode: string; accountName: string }> {
     if (!desktopCode) {
       throw new Error('缺少全局唯一 desktopCode');
     }
@@ -538,14 +543,18 @@ export class ProfileManager {
       throw new Error(`云电脑所属账号 [${matchedAccountName}] 未登录或凭据失效`);
     }
 
-    const token = await client.genLoginToken(300);
     const code = targetDesktop.desktopCode || '';
-    const directUrl = code
-      ? `https://pc.ctyun.cn/#/oauth?token=${encodeURIComponent(token)}&desktopOid=${encodeURIComponent(code)}`
-      : `https://pc.ctyun.cn/#/oauth?token=${encodeURIComponent(token)}`;
+    const directUrl = `/desktop/${encodeURIComponent(code)}`;
 
-    this.logger.addLog('info', `[${matchedAccountName}] 生成远程桌面免密直连链接成功 (有效期 5 分钟)`);
+    this.logger.addLog('info', `[${matchedAccountName}] 生成同源远程桌面直连视窗链接 (${code})`);
     return { url: directUrl, desktopCode: code, accountName: matchedAccountName };
+  }
+
+  public async getDesktopDirectUrlByDesktopId(
+    desktopCode: string,
+    accountHint?: string,
+  ): Promise<{ url: string; desktopCode?: string; accountName: string }> {
+    return this.getDesktopDirectUrlByDesktopCode(desktopCode, accountHint);
   }
 
   /**
@@ -1330,8 +1339,13 @@ export class ProfileManager {
     };
     safeWriteFileSync(Config.configFile, JSON.stringify(sysData, null, 2));
 
-    // 2. 保存 accounts.json (账号与各账号独立策略配置)
-    const list: AccountConfig[] = Array.from(this.accounts.values());
+    // 2. 保存 accounts.json (账号与各账号独立策略配置，严禁任何明文密码或敏感凭据落盘)
+    const list: AccountConfig[] = Array.from(this.accounts.values()).map((acc) => {
+      const sanitized = { ...acc };
+      delete (sanitized as any).password;
+      delete (sanitized as any).rawPassword;
+      return sanitized;
+    });
     safeWriteFileSync(Config.accountsFile, JSON.stringify(list, null, 2));
 
     // 3. 保存 rewards.json (商品目录本地化独立存储)

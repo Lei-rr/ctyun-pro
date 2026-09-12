@@ -91,10 +91,10 @@ export class HangTask {
   public static async stopHang(accountName: string): Promise<void> {
     const s = activeHangSessions.get(accountName);
     if (s) {
+      activeHangSessions.delete(accountName);
       try {
         await s.stop();
       } catch {}
-      activeHangSessions.delete(accountName);
     }
   }
 
@@ -470,6 +470,8 @@ export class HangTask {
               // C. 互踢避让与抢占保护：收到 Type 119/120/137 服务端离线通知或多端抢占通知
               if (info.type === 119 || info.type === 120 || info.type === 137) {
                 logger.addLog('info', `[${logPrefix}] 收到服务端会话通知 (Type ${info.type})，用户客户端已接入，纯协议通道主动让位...`);
+                activeHangSessions.delete(accountName);
+                options.onProgress?.(session.currentProgress, totalProgress);
                 resolve({ success: true, message: '检测到官方客户端接入，纯协议通道主动避让' });
                 return;
               }
@@ -480,6 +482,11 @@ export class HangTask {
         ws.on('close', async (code, reason) => {
           const reasonStr = reason?.toString() || '';
           if (isTerminated) return;
+
+          // 核心合规：断开时毫秒级清空 hangStatus 广播复位，杜绝前端卡片滞留假死
+          activeHangSessions.delete(accountName);
+          options.onProgress?.(session.currentProgress, totalProgress);
+
           if (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) {
             logger.addLog('warn', `[${logPrefix}] 网关通知桌面被真实客户端接入，纯协议任务主动让位`);
             resolve({ success: true, message: '客户端主动接入，任务让位' });

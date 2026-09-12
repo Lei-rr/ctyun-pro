@@ -141,8 +141,8 @@ export function registerDesktopProxyRoutes(
   const renderDesktopView = async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
 
-    const params = request.params as { id?: string };
-    const desktopCode = params?.id;
+    const params = request.params as { desktopCode?: string; id?: string };
+    const desktopCode = (params?.desktopCode || params?.id || '').trim();
     if (!desktopCode) {
       reply.code(400).type('text/html; charset=utf-8').send('<h3 style="font-family:sans-serif;padding:20px;">缺少云电脑设备编码 (desktopCode)</h3>');
       return;
@@ -150,7 +150,7 @@ export function registerDesktopProxyRoutes(
 
     try {
       // 1. 通过 desktopCode 查找对应的账号与桌面
-      const target = manager.findDesktopById(desktopCode);
+      const target = manager.findDesktopByCode(desktopCode);
       if (!target) {
         reply.code(404).type('text/html; charset=utf-8').send(`<h3 style="font-family:sans-serif;padding:20px;">未检测到可用云电脑 (设备编码: ${desktopCode})</h3>`);
         return;
@@ -518,22 +518,24 @@ export function registerDesktopProxyRoutes(
     }
   };
 
-  // 顶级标准 RESTful 直连: /desktop/:id
-  fastify.get('/desktop/:id', renderDesktopView);
+  // 顶级标准 RESTful 直连: /desktop/:desktopCode
+  fastify.get('/desktop/:desktopCode', renderDesktopView);
 
   // 2. 接收前台 Web 用户活跃心跳 (刷新避让时长 30s)
-  fastify.post('/api/desktops/:id/web-active', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post('/api/desktops/:desktopCode/web-active', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
-    const { id } = request.params as { id: string };
-    manager.touchWebUserActive('', id, 30);
+    const { desktopCode, id } = request.params as { desktopCode?: string; id?: string };
+    const targetCode = (desktopCode || id || '').trim();
+    manager.touchWebUserActive('', targetCode, 30);
     reply.send({ success: true });
   });
 
   // 3. 接收前台 Web 用户关闭通知 (立即清除避让标记，使后台长连接无缝复活)
-  fastify.post('/api/desktops/:id/web-close', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post('/api/desktops/:desktopCode/web-close', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
-    const { id } = request.params as { id: string };
-    manager.releaseWebUserActive('', id);
+    const { desktopCode, id } = request.params as { desktopCode?: string; id?: string };
+    const targetCode = (desktopCode || id || '').trim();
+    manager.releaseWebUserActive('', targetCode);
     reply.send({ success: true });
   });
 

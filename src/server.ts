@@ -186,6 +186,23 @@ export async function createServer() {
     return { success: true, token };
   });
 
+  // 0.2 注销登录 (作废服务端 Token 并清除客户端 Cookie)
+  fastify.post('/api/auth/logout', async (request, reply) => {
+    const token =
+      (request.headers['x-admin-token'] as string) ||
+      (request.headers.authorization ? (request.headers.authorization as string).replace(/^Bearer\s+/i, '') : '') ||
+      parseCookieToken(request.headers.cookie);
+    if (token && sessions.has(token)) {
+      sessions.delete(token);
+      saveSessions();
+    }
+    reply.header(
+      'Set-Cookie',
+      'ctyun_admin_token=; Path=/; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    );
+    return { success: true, msg: '已安全退出登录' };
+  });
+
   fastify.post('/api/auth/password', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const body = request.body as { newPassword?: string };
@@ -739,23 +756,23 @@ export async function createServer() {
   });
 
   // 指定 Desktop 详情
-  fastify.get('/api/desktops/:id', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/api/desktops/:desktopCode', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
-    const params = request.params as { id: string };
+    const params = request.params as { desktopCode: string };
     const instances = manager.getAllInstancesSummary();
-    const inst = instances.find(i => i.desktopCode === params.id || i.id === params.id);
+    const inst = instances.find(i => i.desktopCode === params.desktopCode);
     if (!inst) {
       return reply.code(404).send({ success: false, msg: '云电脑未找到' });
     }
     return { success: true, data: inst };
   });
 
-  // 指定 Desktop 免密直接访问官方 Web 桌面（直连地址生成）
-  fastify.get('/api/desktops/:id/direct-url', async (request: FastifyRequest, reply: FastifyReply) => {
+  // 指定 Desktop 免密直接访问官方 Web 桌面（同源直连地址生成）
+  fastify.get('/api/desktops/:desktopCode/direct-url', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     try {
-      const params = request.params as { id: string };
-      const res = await manager.getDesktopDirectUrlByDesktopId(params.id);
+      const params = request.params as { desktopCode: string };
+      const res = await manager.getDesktopDirectUrlByDesktopCode(params.desktopCode);
       return { success: true, data: res };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });
@@ -763,13 +780,13 @@ export async function createServer() {
   });
 
   // 指定 Desktop 电源操作 (开机/关机/重启)
-  fastify.post('/api/desktops/:id/power', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post('/api/desktops/:desktopCode/power', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     try {
-      const params = request.params as { id: string };
+      const params = request.params as { desktopCode: string };
       const body = request.body as { action: 'on' | 'off' | 'reboot' | 'start' | 'stop' | 'restart' };
       const instances = manager.getAllInstancesSummary();
-      const inst = instances.find(i => i.desktopCode === params.id || i.id === params.id);
+      const inst = instances.find(i => i.desktopCode === params.desktopCode);
       if (!inst) {
         return reply.code(404).send({ success: false, msg: '云电脑未找到' });
       }
@@ -784,9 +801,10 @@ export async function createServer() {
     }
   });
 
-  // 9. SSE 实时日志推流 (带 token 验证)
+  // 9. SSE 实时日志推流 (带 token 验证，兼容同源 Cookie 鉴权)
   fastify.get('/api/logs/stream', (request: any, reply) => {
-    const token = request.query?.token;
+    const cookieToken = parseCookieToken(request.headers?.cookie);
+    const token = (request.query?.token as string) || cookieToken;
     if (manager.adminPassword && (!token || !isValidToken(token))) {
       return reply.code(401).send('Unauthorized');
     }

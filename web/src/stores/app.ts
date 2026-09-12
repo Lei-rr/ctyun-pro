@@ -137,6 +137,16 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function adminLogout() {
+    const prevToken = adminToken.value;
+    try {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(prevToken ? { 'x-admin-token': prevToken } : {}),
+        },
+      }).catch(() => {});
+    } catch {}
     adminToken.value = '';
     localStorage.removeItem('ctyun_admin_token');
     try {
@@ -1176,9 +1186,9 @@ export const useAppStore = defineStore('app', () => {
         return false;
       }
     },
-    async getDesktopDirectUrl(instanceId: string): Promise<string | null> {
+    async getDesktopDirectUrl(desktopCode: string): Promise<string | null> {
       try {
-        const res = await fetch(`/api/desktops/${encodeURIComponent(instanceId)}/direct-url`, {
+        const res = await fetch(`/api/desktops/${encodeURIComponent(desktopCode)}/direct-url`, {
           headers: getHeaders(),
         });
         const json = await res.json();
