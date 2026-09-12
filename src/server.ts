@@ -332,7 +332,7 @@ export async function createServer() {
           success: true,
           codeStatus: 'authorize',
           accountName: finalAccountName,
-          loginInfo,
+          loginInfo: manager.sanitizeAccount({ loginInfo }).loginInfo,
           msg: '登录成功',
         };
       }
@@ -351,7 +351,7 @@ export async function createServer() {
     if (!acc && !state) {
       return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
     }
-    return { success: true, data: state || acc };
+    return { success: true, data: state || manager.sanitizeAccount(acc) };
   });
 
   // 删除 Profile
@@ -577,6 +577,19 @@ export async function createServer() {
     try {
       const msg = await manager.manualSignIn(acc.name);
       return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  fastify.post('/api/profiles/:id/start', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    const params = request.params as { id: string };
+    const acc = manager.getAccount(params.id);
+    if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+    try {
+      await manager.startAccount(acc.name);
+      return { success: true, msg: `账号 [${acc.name}] 保活已启动` };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });
     }

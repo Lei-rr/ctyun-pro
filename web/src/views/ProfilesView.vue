@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
+import { toast } from '@/shared/lib/toast';
 import { useAppStore, type Account } from '@/stores/app';
 import {
   Monitor,

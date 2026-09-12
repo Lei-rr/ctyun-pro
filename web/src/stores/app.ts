@@ -613,6 +613,11 @@ export const useAppStore = defineStore('app', () => {
             method: 'DELETE',
             headers: getHeaders(),
           });
+        } else if (action === 'start') {
+          res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/start`, {
+            method: 'POST',
+            headers: getHeaders(),
+          });
         } else if (action === 'stop') {
           res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/stop`, {
             method: 'POST',

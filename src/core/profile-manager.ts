@@ -180,11 +180,25 @@ export class ProfileManager {
     return acc;
   }
 
+  public sanitizeAccount(accountOrState: any): any {
+    if (!accountOrState) return accountOrState;
+    const clone = { ...accountOrState };
+    if (clone.loginInfo) {
+      const sanitized: any = { ...clone.loginInfo };
+      delete sanitized.secretKey;
+      delete sanitized.clientKey;
+      delete sanitized.caCert;
+      delete sanitized.clientCert;
+      clone.loginInfo = sanitized;
+    }
+    return clone;
+  }
+
   public getAccountState(keyOrId: string): ManagedAccount | undefined {
     if (!keyOrId) return undefined;
     // 1. 优先按不可变 id (UUID) 匹配
     for (const s of this.accountStates.values()) {
-      if (s.id === keyOrId) return s;
+      if (s.id === keyOrId) return this.sanitizeAccount(s);
     }
     // 2. 兼容按 Map Key 查找
     let state = this.accountStates.get(keyOrId);
@@ -197,7 +211,7 @@ export class ProfileManager {
         }
       }
     }
-    return state;
+    return state ? this.sanitizeAccount(state) : undefined;
   }
 
   public getClient(keyOrId: string): CtYunClient {
@@ -249,18 +263,7 @@ export class ProfileManager {
         state.todayPoints = (pts && pts.date === todayStr) ? (pts.todayPoints ?? 0) : 0;
       }
     }
-    return Array.from(this.accountStates.values()).map((state) => {
-      if (!state.loginInfo) return state;
-      const sanitizedLoginInfo: any = { ...state.loginInfo };
-      delete sanitizedLoginInfo.secretKey;
-      delete sanitizedLoginInfo.clientKey;
-      delete sanitizedLoginInfo.caCert;
-      delete sanitizedLoginInfo.clientCert;
-      return {
-        ...state,
-        loginInfo: sanitizedLoginInfo,
-      };
-    });
+    return Array.from(this.accountStates.values()).map((state) => this.sanitizeAccount(state));
   }
 
   /**
@@ -327,6 +330,8 @@ export class ProfileManager {
     }
 
     // 立即秒级更新状态并广播通知前端，避免用户等待外部网络 I/O
+    acc.autoStart = true;
+    this.saveToDisk();
     state.status = 'online';
     this.notifyStatusChange();
 
@@ -342,6 +347,11 @@ export class ProfileManager {
   }
 
   public stopAccount(accountName: string): void {
+    const acc = this.accounts.get(accountName);
+    if (acc) {
+      acc.autoStart = false;
+      this.saveToDisk();
+    }
     this.keepAliveManager.stopWorkers(accountName);
     const state = this.accountStates.get(accountName);
     if (state) {

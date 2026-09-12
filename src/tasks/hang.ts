@@ -491,7 +491,11 @@ export class HangTask {
       sessionResult = { success: false, message: `挂机执行异常: ${e.message}` };
     } finally {
       await cleanup();
-      activeHangSessions.delete(accountName);
+      const currentName = session?.accountName || accountName;
+      activeHangSessions.delete(currentName);
+      if (currentName !== accountName) {
+        activeHangSessions.delete(accountName);
+      }
     }
 
     return sessionResult;
