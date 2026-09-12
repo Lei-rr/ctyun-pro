@@ -376,7 +376,11 @@ export class HangTask {
                     session.currentProgress = cur;
                     options.onProgress?.(cur, totalProgress);
 
-                    if (currentProgress + elapsedSec >= totalProgress) {
+                    // 为彻底防范官方服务端离线结算时的向下取整/时钟截断导致的 1 秒误差 (如官方结算计为 3599 秒)，
+                    // 挂机安全达标阈值设定为 3602 秒 (微量护航 2 秒安全裕量)；
+                    // 并且在断开瞬间立即原子清空 hangStatus 并广播，UI 毫秒级复位，既杜绝卡片假死滞留，又确保护航达标 3600 秒
+                    const targetThreshold = totalProgress + 2;
+                    if (currentProgress + elapsedSec >= targetThreshold) {
                       logger.addLog('info', `[${accountName}] 挂机目标时长已达标 (推演 ${cur}/${totalProgress}秒)，主动断开长连触发官方离线结算...`);
                       // 立即从全局会话中移除并清理，确保外部读取立即为已完成
                       activeHangSessions.delete(accountName);
