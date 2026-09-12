@@ -17,6 +17,7 @@ export class TaskScheduler {
   private lastCheckedMinute = '';
   private lastDigestDate = '';
   private lastMidnightResetDate = '';
+  private lastHangWatchdogTime = new Map<string, number>();
 
   constructor(profileManager: ProfileManager, logger: Logger) {
     this.accountManager = profileManager;
@@ -147,25 +148,31 @@ export class TaskScheduler {
           // 2. 长时间网络故障/异常断线自愈兜底机制 (看门狗防漏挂)：
           // 仅在「总开关开启 + 挂机子开关开启 + 今日定时已触发过 + 当前无进行中的挂机会话」时，
           // 基于今日最新任务缓存检查官方时长是否已满 3600 秒。若因长时间断网未挂满，自动唤醒差额补挂
-          const cached = this.accountManager.getCachedTodayPoints(name);
-          const hangTask = cached?.summary?.tasks?.find(
-            (t: any) => t.name.includes('使用1小时') || t.name.includes('使用'),
-          );
-          if (hangTask && !hangTask.isCompleted && (hangTask.currentProgress || 0) < (hangTask.totalProgress || 3600)) {
-            const cur = hangTask.currentProgress || 0;
-            const tot = hangTask.totalProgress || 3600;
-            this.logger.addLog(
-              'info',
-              `[${name}] 智能调度检测到今日挂机时长未满额 (${cur}/${tot}秒)，自动触发差额续挂自愈...`,
+          // 冷却退避机制：至少冷却 10 分钟 (600,000ms)，避免断网期间每 30 秒频繁拉起刷屏
+          const lastWatchdog = this.lastHangWatchdogTime.get(name) || 0;
+          const WATCHDOG_COOLDOWN_MS = 10 * 60 * 1000;
+          if (Date.now() - lastWatchdog >= WATCHDOG_COOLDOWN_MS) {
+            const cached = this.accountManager.getCachedTodayPoints(name);
+            const hangTask = cached?.summary?.tasks?.find(
+              (t: any) => t.name.includes('使用1小时') || t.name.includes('使用'),
             );
-            this.accountManager.manualHang(name).catch(() => {});
+            if (hangTask && !hangTask.isCompleted && (hangTask.currentProgress || 0) < (hangTask.totalProgress || 3600)) {
+              const cur = hangTask.currentProgress || 0;
+              const tot = hangTask.totalProgress || 3600;
+              this.lastHangWatchdogTime.set(name, Date.now());
+              this.logger.addLog(
+                'info',
+                `[${name}] 智能调度检测到今日挂机时长未满额 (${cur}/${tot}秒)，自动触发差额续挂自愈 (冷却期 10m)...`,
+              );
+              this.accountManager.manualHang(name).catch(() => {});
+            }
           }
         }
       }
 
-      // 2. 自动兑换策略精准调度 (准点在 07:00 执行)
+      // 2. 自动兑换策略精准调度 (到达或超过 07:00 且今日未执行时触发，防止容器重启错过整点)
       const rConf = acc.redeemConfig;
-      if (rConf && rConf.enabled && rConf.lastRedeemDate !== today && currentHHmm === '07:00') {
+      if (rConf && rConf.enabled && rConf.lastRedeemDate !== today && currentHHmm >= '07:00') {
         let shouldRedeem = false;
         let reason = '';
 
@@ -205,6 +212,10 @@ export class TaskScheduler {
         }
 
         if (shouldRedeem) {
+          // 先行锁定今日执行标记，防止抖动等待与重试期间并发重入
+          rConf.lastRedeemDate = today;
+          this.accountManager.saveToDisk();
+
           // 仿生抖动：多账号自动兑换引入 1~12 秒离散延迟，避免多账号同一秒向商城并发下单
           const redeemJitterMs = Math.floor(Math.random() * 11000) + 1000;
           await new Promise((r) => setTimeout(r, redeemJitterMs));
