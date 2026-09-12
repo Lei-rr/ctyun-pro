@@ -368,10 +368,6 @@ export class HangTask {
                 }
 
                 // 5. 纯本地时间平滑推演进度 (每 1 秒根据本地时间戳递增计算流逝秒数，严禁中途频繁轮询接口)
-                // 冗余缓冲时间：额外增加 15 秒挂机时长，抵消网络延迟与官方网关统计误差
-                const BUFFER_SECONDS = 15;
-                const targetSeconds = totalProgress + BUFFER_SECONDS;
-
                 if (!progressUpdateTimer) {
                   progressUpdateTimer = setInterval(async () => {
                     if (isTerminated || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -380,8 +376,14 @@ export class HangTask {
                     session.currentProgress = cur;
                     options.onProgress?.(cur, totalProgress);
 
-                    if (currentProgress + elapsedSec >= targetSeconds) {
-                      logger.addLog('info', `[${accountName}] 挂机目标时长已达标 (推演 ${cur}/${totalProgress}秒，含 ${BUFFER_SECONDS}s 冗余缓冲)，主动断开长连触发官方结算...`);
+                    // 为彻底防范官方服务端离线结算时的向下取整/时钟截断导致的 1 秒误差 (如官方结算计为 3599 秒)，
+                    // 挂机安全达标阈值设定为 3602 秒 (微量护航 2 秒安全裕量)；
+                    // 并且在断开瞬间立即原子清空 hangStatus 并广播，UI 毫秒级复位，既杜绝卡片假死滞留，又确保护航达标 3600 秒
+                    const targetThreshold = totalProgress + 2;
+                    if (currentProgress + elapsedSec >= targetThreshold) {
+                      logger.addLog('info', `[${accountName}] 挂机目标时长已达标 (推演 ${cur}/${totalProgress}秒)，主动断开长连触发官方离线结算...`);
+                      // 立即从全局会话中移除并清理，确保外部读取立即为已完成
+                      activeHangSessions.delete(accountName);
                       await cleanup();
 
                       // 离线断开后，等待 3 秒调用官方接口核验积分与时长
@@ -396,6 +398,20 @@ export class HangTask {
                           logger.addLog('success', `[${accountName}] 官方接口复核通过：今日使用 AI 云电脑 1 小时任务已达成 (+100积分)！`);
                           resolve({ success: true, message: `今日挂机任务已达成 (${cur}/${totalProgress}秒)`, isCompleted: true });
                         } else {
+                          // 如果官方由于离线同步延迟刚好差 1~2 秒，且推演已经满额，再宽容等待 3 秒重试一次官方复核，防误判
+                          await new Promise((r) => setTimeout(r, 3000));
+                          try {
+                            const secondSummary = await SignTask.getPointsAndTasks(client);
+                            const t2 = secondSummary.tasks.find((item: any) => item.name.includes('使用1小时') || item.name.includes('使用'));
+                            const cloudProgress2 = t2?.currentProgress || 0;
+                            const isDone2 = Boolean(t2 && (t2.isCompleted || (t2 as any).status === 2 || cloudProgress2 >= totalProgress));
+                            if (isDone2) {
+                              logger.addLog('success', `[${accountName}] 官方接口二次复核通过：今日使用 AI 云电脑 1 小时任务已达成 (+100积分)！`);
+                              resolve({ success: true, message: `今日挂机任务已达成 (${cur}/${totalProgress}秒)`, isCompleted: true });
+                              return;
+                            }
+                          } catch {}
+
                           const gap = Math.max(1, totalProgress - cloudProgress);
                           logger.addLog('warn', `[${accountName}] 官方接口复核发现时长未计满 (云端记录: ${cloudProgress}/${totalProgress}秒)，仍差 ${gap} 秒，需自动补挂`);
                           resolve({ success: false, message: `云端时长不足 (当前 ${cloudProgress}/${totalProgress}秒)，触发补挂`, isCompleted: false });
