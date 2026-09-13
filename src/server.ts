@@ -17,7 +17,7 @@ import { ProfileManager } from './core/index.js';
 import { DesktopSessionArbiter } from './modules/arbiter/index.js';
 import { StrategyService } from './modules/strategy/index.js';
 import { CtYunClient, type ChallengeData } from './core/client.js';
-import { safeWriteFileSync, sendWebhookNotification } from './core/utils.js';
+import { safeWriteFileSync, sendWebhookNotification, getCstDateTimeString } from './core/utils.js';
 import { EMBEDDED_WEB_FILES } from './embedded-web.js';
 import { registerDesktopProxyRoutes } from './core/desktop-proxy.js';
 
@@ -269,7 +269,7 @@ export async function createServer() {
       return reply.send({ success: false, msg: '请先填写 Webhook 推送地址' });
     }
 
-    const nowStr = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    const nowStr = getCstDateTimeString();
     const success = await sendWebhookNotification(
       targetUrl,
       'CTYUN-PRO - Webhook 通知测试',

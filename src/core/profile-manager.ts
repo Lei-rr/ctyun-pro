@@ -9,7 +9,7 @@ import { isHangTaskName, TaskStrategyService, type PointsSummary } from '../modu
 import { RewardRedeemService, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../modules/reward/index.js';
 import { DesktopSessionArbiter } from '../modules/arbiter/desktop-session-arbiter.js';
 import { AccountService } from '../modules/account/index.js';
-import { safeWriteFileSync, sendWebhookNotification, getCstDateString } from './utils.js';
+import { safeWriteFileSync, sendWebhookNotification, getCstDateString, getCstDateTimeString } from './utils.js';
 
 export interface ManagedAccount {
   id: string; // 全局唯一不可变 UUID (主键)
@@ -1199,7 +1199,7 @@ export class ProfileManager {
                 ? `天翼云电脑 - [${accountName}] 智能挂机已达标`
                 : `天翼云电脑 - [${accountName}] 智能挂机完成`)
             : `天翼云电脑 - [${accountName}] 智能挂机异常`;
-          const content = `账号: ${accountName}\n挂机结果: ${hangResult.message}\n最新总积分: ${finalPoints || '已刷新'}\n完成时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
+          const content = `账号: ${accountName}\n挂机结果: ${hangResult.message}\n最新总积分: ${finalPoints || '已刷新'}\n完成时间: ${getCstDateTimeString()}`;
           sendWebhookNotification(this.webhookUrl, title, content).catch(() => {});
         }
 

@@ -210,11 +210,11 @@ export async function sendWebhookNotification(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        event: 'ctyun_alert',
         title,
-        message: content,
         content,
         timestamp: Date.now(),
-        time: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
+        time: getCstDateTimeString(),
       }),
       timeoutMs: 8000,
     });
@@ -246,4 +246,23 @@ export function getCstDateString(date: Date = new Date()): string {
   })
     .format(date)
     .replace(/\//g, '-');
+}
+
+/**
+ * 获取东八区北京时间标准时间字符串 (YYYY-MM-DD HH:mm:ss)
+ */
+export function getCstDateTimeString(date: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const get = (type: string) => parts.find((p) => p.type === type)?.value || '00';
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`;
 }
