@@ -188,9 +188,20 @@ export class KeepaliveService {
       const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
       const dIdStr = String(d.desktopId);
 
-      // 高优先级独占避让：若桌面正处于智能挂机或前台直连中，保活通道暂缓建立
+      // 外部客户端避让或高优先级独占避让：若桌面正处于智能挂机、前台直连或外部避让中，保活通道暂缓建立
       if (this.arbiter.isBusy(dIdStr) || (dCode && this.arbiter.isBusy(String(dCode)))) {
-        this.logger.addLog('info', `[${dPrefix}] 桌面正在执行高优先级业务 (挂机/直连)，保活通道暂缓建立`);
+        const yieldStatus = this.arbiter.getYieldStatus(dIdStr);
+        if (yieldStatus.yielding) {
+          this.logger.addLog(
+            'info',
+            `[${dPrefix}] 桌面处于外部官方客户端主动避让期 (剩余 ${yieldStatus.remainingSeconds}秒)，保活通道暂缓建立`,
+          );
+          if (state && state.status !== 'reconnecting') {
+            state.status = 'reconnecting';
+          }
+        } else {
+          this.logger.addLog('info', `[${dPrefix}] 桌面正在执行高优先级业务 (挂机/直连)，保活通道暂缓建立`);
+        }
         continue;
       }
 

@@ -76,6 +76,24 @@ export class ProfileManager {
         }
       }
     });
+
+    // 外部避让期结束协同：当外部客户端避让期自然过期或被主动清除时，唤醒保活通道尝试恢复
+    arbiter.on('yield:expired', ({ desktopId }) => {
+      const matched = this.findDesktopByCode(desktopId);
+      if (matched?.accountName) {
+        const acc = this.accounts.get(matched.accountName);
+        if (acc && acc.autoStart !== false) {
+          this.keepaliveService.resumeWorkers(matched.accountName);
+        }
+      }
+      this.notifyStatusChange();
+    });
+    arbiter.on('yield:cleared', () => {
+      this.notifyStatusChange();
+    });
+    arbiter.on('yield:triggered', () => {
+      this.notifyStatusChange();
+    });
   }
 
   public getKeepaliveService(): KeepaliveService {
@@ -1150,6 +1168,17 @@ export class ProfileManager {
 
     if (this.taskStrategyService.isHangRunning(accountName)) {
       return '后台挂机任务已在运行中，无需重复触发';
+    }
+
+    // 外部官方客户端主动避让检查
+    const arbiter = DesktopSessionArbiter.getInstance();
+    const curState = this.accountStates.get(accountName);
+    const yieldingDesktop = curState?.desktops?.find((d) => arbiter.getYieldStatus(d.desktopId).yielding);
+    if (yieldingDesktop) {
+      const yInfo = arbiter.getYieldStatus(yieldingDesktop.desktopId);
+      const msg = `云电脑正处于外部官方客户端主动避让期 (剩余 ${yInfo.remainingSeconds}秒)，暂缓启动挂机`;
+      this.logger.addLog('warn', `[${accountName}] ${msg}`);
+      return msg;
     }
 
     // 确保清理残留的旧挂机状态与会话缓存

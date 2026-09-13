@@ -5,6 +5,7 @@ import { isHangTaskName } from '../task/index.js';
 import { RewardRedeemService } from '../reward/reward-service.js';
 import { sendWebhookNotification } from '../../core/utils.js';
 import type { ProfileManager } from '../../core/profile-manager.js';
+import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
 
 /**
  * 工业级精准时间点调度器
@@ -216,6 +217,19 @@ export class TaskScheduler {
               (t: any) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress),
             );
             if (hangTask && !hangTask.isCompleted && (hangTask.currentProgress || 0) < (hangTask.totalProgress || 3600)) {
+              // 检查该账号绑定的云电脑是否处于外部客户端主动避让期
+              const curAcc = this.profileManager.getAccount(name);
+              const arbiter = DesktopSessionArbiter.getInstance();
+              const yieldingDesktop = curAcc?.desktops?.find((d) => arbiter.getYieldStatus(d.desktopId).yielding);
+              if (yieldingDesktop) {
+                const yInfo = arbiter.getYieldStatus(yieldingDesktop.desktopId);
+                this.logger.addLog(
+                  'info',
+                  `[${name}] 桌面正处于外部官方客户端主动避让期 (剩余 ${yInfo.remainingSeconds}秒)，看门狗暂缓补挂自愈`,
+                );
+                continue;
+              }
+
               const cur = hangTask.currentProgress || 0;
               const tot = hangTask.totalProgress || 3600;
               this.lastHangWatchdogTime.set(name, Date.now());

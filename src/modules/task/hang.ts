@@ -227,6 +227,19 @@ export class HangTask {
     // 5. 纯协议握手长连接：向仲裁器申请 TASK 独占租约，杜绝 1005 竞态互踢
     const arbiter = DesktopSessionArbiter.getInstance();
     arbiter.setLogger(logger);
+
+    const yieldStatus = arbiter.getYieldStatus(dId);
+    if (yieldStatus.yielding) {
+      logger.addLog(
+        'info',
+        `[${logPrefix}] 桌面处于外部官方客户端主动避让期 (剩余 ${yieldStatus.remainingSeconds}秒，原因: ${yieldStatus.reason})，挂机任务主动礼让`,
+      );
+      return {
+        success: true,
+        message: `检测到官方客户端接入中，任务主动礼让避让 (${yieldStatus.remainingSeconds}s)`,
+      };
+    }
+
     let ws: WebSocket | null = null;
     let heartbeatTimer: NodeJS.Timeout | null = null;
     let progressUpdateTimer: NodeJS.Timeout | null = null;
@@ -481,7 +494,8 @@ export class HangTask {
 
               // C. 互踢避让与抢占保护：收到 Type 119/120/137 服务端离线通知或多端抢占通知
               if (info.type === 119 || info.type === 120 || info.type === 137) {
-                logger.addLog('info', `[${logPrefix}] 收到服务端会话通知 (Type ${info.type})，用户客户端已接入，纯协议通道主动让位...`);
+                logger.addLog('warn', `[${logPrefix}] 收到服务端会话通知 (Type ${info.type})，检测到外部官方客户端接入，系统主动避让 5 分钟`);
+                await arbiter.yieldToExternal(dId, 5, `服务端通知外部客户端接入 (Type ${info.type})`);
                 activeHangSessions.delete(accountName);
                 options.onProgress?.(session.currentProgress, totalProgress);
                 resolve({ success: true, message: '检测到官方客户端接入，纯协议通道主动避让' });
@@ -500,7 +514,8 @@ export class HangTask {
           options.onProgress?.(session.currentProgress, totalProgress);
 
           if (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) {
-            logger.addLog('warn', `[${logPrefix}] 网关通知桌面被真实客户端接入，纯协议任务主动让位`);
+            logger.addLog('warn', `[${logPrefix}] 网关通知桌面被真实客户端接入 (Code 4001)，系统主动避让 5 分钟`);
+            await arbiter.yieldToExternal(dId, 5, '网关通知真实客户端接入 (Code 4001)');
             resolve({ success: true, message: '客户端主动接入，任务让位' });
             return;
           }

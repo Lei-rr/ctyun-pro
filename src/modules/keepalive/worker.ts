@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import { Protocol } from '../../core/protocol.js';
 import type { Desktop, DesktopInfo } from '../../core/client.js';
+import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
 
 export interface KeepAliveWorkerOptions {
   accountName: string;
@@ -136,6 +137,24 @@ export class KeepAliveWorker {
     }
 
     this.cleanupSocket();
+
+    const dId = String(this.options.desktop.desktopId);
+    const yieldStatus = DesktopSessionArbiter.getInstance().getYieldStatus(dId);
+    if (yieldStatus.yielding) {
+      this.log(
+        'info',
+        `桌面处于外部官方客户端主动避让期 (剩余 ${yieldStatus.remainingSeconds}秒)，暂缓建立长连接`,
+      );
+      this.isReconnecting = true;
+      this.options.onStatusChange?.('reconnecting');
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        this.isReconnecting = false;
+        this.connect();
+      }, Math.max(1000, yieldStatus.remainingSeconds * 1000));
+      return;
+    }
+
     this.isReconnecting = false;
     this.options.onStatusChange?.('connecting');
 
@@ -162,9 +181,10 @@ export class KeepAliveWorker {
       this.options.onStatusChange?.('reconnecting');
       const reasonStr = reason?.toString() || '';
       
-      // 检测是否为官方客户端接入导致的避让
-      if (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) {
-        this.log('info', `检测到客户端在线接入 (Code ${code})，通道主动避让，将在 5 分钟后恢复保活...`);
+      const isConflict = code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict');
+      if (isConflict) {
+        this.log('warn', `检测到云电脑已被外部官方客户端接入 (Code ${code})，系统主动避让 5 分钟，暂停长连接保活`);
+        await DesktopSessionArbiter.getInstance().yieldToExternal(dId, 5, `网关通知外部客户端接入 (Code ${code})`);
       } else {
         this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
       }
@@ -175,25 +195,26 @@ export class KeepAliveWorker {
       }
       this.cleanupSocket();
 
-      const retryDelay = (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) ? 300000 : 5000;
+      const retryDelay = isConflict ? 300000 : 5000;
       this.reconnectTimer = setTimeout(async () => {
-      this.reconnectTimer = null;
-      if (!this.isRunning || this.isPaused) return;
+        this.reconnectTimer = null;
+        this.isReconnecting = false;
+        if (!this.isRunning || this.isPaused) return;
 
-      // 重连前重新获取最新动态连接凭证
-      if (this.options.onRefreshInfo) {
-        try {
-          const freshInfo = await this.options.onRefreshInfo(String(this.options.desktop.desktopId));
-          if (freshInfo && freshInfo.clinkLvsOutHost) {
-            this.options.desktopInfo = freshInfo;
+        // 重连前重新获取最新动态连接凭证
+        if (this.options.onRefreshInfo) {
+          try {
+            const freshInfo = await this.options.onRefreshInfo(String(this.options.desktop.desktopId));
+            if (freshInfo && freshInfo.clinkLvsOutHost) {
+              this.options.desktopInfo = freshInfo;
+            }
+          } catch (err: any) {
+            this.log('warn', `刷新云电脑连接凭证失败: ${err.message}`);
           }
-        } catch (err: any) {
-          this.log('warn', `刷新云电脑连接凭证失败: ${err.message}`);
         }
-      }
 
-      this.connect();
-    }, retryDelay);
+        this.connect();
+      }, retryDelay);
     };
 
     ws.on('open', async () => {
@@ -273,9 +294,11 @@ export class KeepAliveWorker {
             }
           }
 
-          // 监听官方客户端状态通知 (Type 119/120/137)
+          // 监听官方客户端状态通知 (Type 119/120/137 会话挤占/离线)
           if (info.type === 119 || info.type === 120 || info.type === 137) {
-            this.log('info', `收到会话状态通知 (Type ${info.type})，保活通道正常维持`);
+            this.log('warn', `收到服务端会话通知 (Type ${info.type})，检测到外部官方客户端接入，系统主动避让 5 分钟`);
+            triggerReconnect(4001, `Type ${info.type} preempt`);
+            return;
           }
         }
       } catch {}
