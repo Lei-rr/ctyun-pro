@@ -141,8 +141,8 @@ export function registerDesktopProxyRoutes(
   const renderDesktopView = async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
 
-    const params = request.params as { desktopCode?: string; id?: string };
-    const desktopCode = (params?.desktopCode || params?.id || '').trim();
+    const params = request.params as { desktopCode?: string };
+    const desktopCode = (params?.desktopCode || '').trim();
     if (!desktopCode) {
       reply.code(400).type('text/html; charset=utf-8').send('<h3 style="font-family:sans-serif;padding:20px;">缺少云电脑设备编码 (desktopCode)</h3>');
       return;

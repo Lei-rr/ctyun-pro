@@ -206,7 +206,30 @@ export async function sendWebhookNotification(
       return true;
     }
 
-    // 6. 默认通用 JSON POST Webhook
+    // 6. Telegram Bot 推送
+    if (url.includes('api.telegram.org') || url.includes('/sendMessage')) {
+      let chatId = '';
+      try {
+        const u = new URL(url);
+        chatId = u.searchParams.get('chat_id') || '';
+      } catch {}
+
+      if (chatId) {
+        await safeFetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `*${title}*\n\n${content}`,
+            parse_mode: 'Markdown',
+          }),
+          timeoutMs: 8000,
+        });
+        return true;
+      }
+    }
+
+    // 7. 默认通用 JSON POST Webhook
     await safeFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

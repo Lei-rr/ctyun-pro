@@ -262,9 +262,10 @@ export class RewardRedeemService {
       throw new Error(`下单接口 HTTP 响应异常: ${res.status}`);
     }
 
-    const resJson = (await res.json()) as { code: number; message?: string; data?: any };
+    const resJson = (await res.json()) as { code: number; message?: string; msg?: string; data?: any };
     if (resJson.code !== 0) {
-      throw new Error(`官方兑换失败: ${resJson.message || '未知错误'}`);
+      const errDetail = resJson.message || resJson.msg || '未知错误';
+      throw new Error(`官方兑换失败: ${errDetail}`);
     }
 
     return {

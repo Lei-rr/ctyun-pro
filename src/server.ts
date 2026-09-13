@@ -298,6 +298,25 @@ export async function createServer() {
     return { success: true };
   });
 
+  // 2.4 导出安全配置备份
+  fastify.get('/api/config/export', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    return { success: true, data: manager.exportConfigSafe() };
+  });
+
+  // 2.5 导入配置备份
+  fastify.post('/api/config/import', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const body = request.body;
+      const res = manager.importConfigSafe(body);
+      manager.addLog('info', `配置导入成功，已恢复 ${res.importedAccounts} 个账号配置`);
+      return { success: true, msg: `配置恢复成功，已导入 ${res.importedAccounts} 个账号配置`, data: res };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: `配置导入失败: ${err.message}` });
+    }
+  });
+
   // ==========================================
   // 标准 RESTful 优雅 API 体系 (profiles & desktops)
   // 彻底废除历史老旧兼容垫片 (/api/account/*, /api/instances/*)
@@ -806,14 +825,30 @@ export async function createServer() {
     if (!verifyAuth(request, reply)) return;
     try {
       const params = request.params as { desktopCode: string };
-      const body = request.body as { action: 'on' | 'off' | 'reboot' | 'start' | 'stop' | 'restart' | 'awake' | 'wake' };
+      const body = request.body as {
+        action:
+          | 'on'
+          | 'off'
+          | 'shutdown'
+          | 'reboot'
+          | 'start'
+          | 'stop'
+          | 'restart'
+          | 'reset'
+          | 'awake'
+          | 'wake'
+          | 'force_off'
+          | 'force_reboot';
+      };
       const res = manager.findDesktopByCode(params.desktopCode);
       if (!res) {
         return reply.code(404).send({ success: false, msg: '云电脑未找到' });
       }
-      let op: 'on' | 'awake' | 'shutdown' | 'reset' = 'on';
-      if (body.action === 'off' || body.action === 'stop') op = 'shutdown';
-      else if (body.action === 'reboot' || body.action === 'restart') op = 'reset';
+      let op: 'on' | 'awake' | 'shutdown' | 'reset' | 'force_off' | 'force_reboot' = 'on';
+      if (body.action === 'shutdown' || body.action === 'off' || body.action === 'stop') op = 'shutdown';
+      else if (body.action === 'force_off') op = 'force_off';
+      else if (body.action === 'reset' || body.action === 'reboot' || body.action === 'restart') op = 'reset';
+      else if (body.action === 'force_reboot') op = 'force_reboot';
       else if (body.action === 'awake' || body.action === 'wake') op = 'awake';
 
       const msg = await manager.operateDesktop(res.accountName, params.desktopCode, op);

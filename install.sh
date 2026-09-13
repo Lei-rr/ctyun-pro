@@ -121,7 +121,7 @@ fi
 IP_ADDR=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
 
 echo -e "\n${GREEN}====================================================${PLAIN}"
-echo -e "${GREEN}🎉 恭喜！CTYUN-PRO 原生部署成功并已开启开机自启！${PLAIN}"
+echo -e "${GREEN}CTYUN-PRO 原生部署成功并已开启开机自启！${PLAIN}"
 echo -e "${GREEN}====================================================${PLAIN}"
 echo -e "Web 控制台地址: ${CYAN}http://${IP_ADDR}:${DEFAULT_PORT}${PLAIN} (本地: http://127.0.0.1:${DEFAULT_PORT})"
 echo -e "数据存储目录:   ${YELLOW}${DATA_DIR}${PLAIN}"

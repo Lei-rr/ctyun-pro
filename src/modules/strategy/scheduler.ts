@@ -20,6 +20,7 @@ export class TaskScheduler {
   private lastMidnightResetDate = '';
   private lastHangWatchdogTime = new Map<string, number>();
   private taskRetryStats = new Map<string, { date: string; attempts: number; nextRetryTime: number }>();
+  private redeemRetryStats = new Map<string, { date: string; attempts: number; nextRetryTime: number }>();
 
   constructor(profileManager: ProfileManager, logger: Logger) {
     this.profileManager = profileManager;
@@ -245,7 +246,11 @@ export class TaskScheduler {
 
       // 2. 自动兑换策略精准调度 (到达或超过 07:00 且今日未执行时触发，防止容器重启错过整点)
       const rConf = acc.redeemConfig;
-      if (rConf && rConf.enabled && rConf.lastRedeemDate !== today && currentHHmm >= '07:00') {
+      const redeemRetry = this.redeemRetryStats.get(name);
+      const isRedeemInBackoff =
+        redeemRetry && redeemRetry.date === today && Date.now() < redeemRetry.nextRetryTime;
+
+      if (rConf && rConf.enabled && rConf.lastRedeemDate !== today && currentHHmm >= '07:00' && !isRedeemInBackoff) {
         let shouldRedeem = false;
         let reason = '';
 
@@ -285,10 +290,6 @@ export class TaskScheduler {
         }
 
         if (shouldRedeem) {
-          // 先行锁定今日执行标记，防止抖动等待与重试期间并发重入
-          rConf.lastRedeemDate = today;
-          this.profileManager.saveToDisk();
-
           // 仿生抖动：多账号自动兑换引入 1~12 秒离散延迟，避免多账号同一秒向商城并发下单
           const redeemJitterMs = Math.floor(Math.random() * 11000) + 1000;
           await new Promise((r) => setTimeout(r, redeemJitterMs));
@@ -343,6 +344,7 @@ export class TaskScheduler {
                 ).catch(() => {});
               }
               redeemSuccess = true;
+              this.redeemRetryStats.delete(name);
               break;
             } catch (e: any) {
               lastRedeemMsg = e.message;
@@ -359,6 +361,10 @@ export class TaskScheduler {
                 lastRedeemMsg.includes('限制');
               if (isInsufficientPoints || isRiskLimited) {
                 this.logger.addLog('warn', `[${name}] 自动兑换终止: ${lastRedeemMsg}，触发保护终止重试`);
+                // 积分不足或风控属于当日业务终态，锁定当日标记并清除重试状态
+                rConf.lastRedeemDate = today;
+                this.profileManager.saveToDisk();
+                this.redeemRetryStats.delete(name);
                 break;
               }
               this.logger.addLog('warn', `[${name}] 第 ${attempt} 次自动兑换未成功: ${e.message}`);
@@ -370,16 +376,60 @@ export class TaskScheduler {
               lastRedeemMsg.includes('积分不足') ||
               lastRedeemMsg.includes('点数不足') ||
               lastRedeemMsg.includes('余额不足');
-            const failTitle = isInsufficientPoints
-              ? `[${name}] 自动兑换跳过: 积分不足`
-              : `[${name}] 自动兑换失败（重试3次）: ${lastRedeemMsg}`;
-            this.logger.addLog('error', failTitle);
-            if (this.profileManager.webhookUrl) {
-              sendWebhookNotification(
-                this.profileManager.webhookUrl,
-                `天翼云电脑 - [${name}] 自动兑换未达成`,
-                `策略触发: ${reason}\n原因: ${lastRedeemMsg}`,
-              ).catch(() => {});
+            const isRiskLimited =
+              lastRedeemMsg.includes('风控') ||
+              lastRedeemMsg.includes('频繁') ||
+              lastRedeemMsg.includes('异常') ||
+              lastRedeemMsg.includes('限制');
+
+            if (isInsufficientPoints || isRiskLimited) {
+              const failTitle = isInsufficientPoints
+                ? `[${name}] 自动兑换跳过: 积分不足`
+                : `[${name}] 自动兑换跳过: 触发安全风控保护`;
+              this.logger.addLog('error', failTitle);
+              if (this.profileManager.webhookUrl) {
+                sendWebhookNotification(
+                  this.profileManager.webhookUrl,
+                  `天翼云电脑 - [${name}] 自动兑换未达成`,
+                  `策略触发: ${reason}\n原因: ${lastRedeemMsg}`,
+                ).catch(() => {});
+              }
+            } else {
+              // 临时网络或服务异常：引入 15 分钟跨周期退避重试（当日上限 3 轮）
+              const memAttempts =
+                this.redeemRetryStats.get(name)?.date === today
+                  ? this.redeemRetryStats.get(name)?.attempts || 0
+                  : 0;
+              const currentAttempts = memAttempts + 1;
+              const MAX_REDEEM_ROUNDS = 3;
+
+              if (currentAttempts >= MAX_REDEEM_ROUNDS) {
+                this.redeemRetryStats.delete(name);
+                rConf.lastRedeemDate = today;
+                this.profileManager.saveToDisk();
+                this.logger.addLog(
+                  'error',
+                  `[${name}] 自动兑换退避重试已达上限 (${MAX_REDEEM_ROUNDS} 轮)，停止今日自动兑换调度: ${lastRedeemMsg}`,
+                );
+                if (this.profileManager.webhookUrl) {
+                  sendWebhookNotification(
+                    this.profileManager.webhookUrl,
+                    `天翼云电脑 - [${name}] 自动兑换失败达上限`,
+                    `策略触发: ${reason}\n今日连续重试 ${MAX_REDEEM_ROUNDS} 轮均遭遇异常，已停止今日调度。\n最后错误: ${lastRedeemMsg}`,
+                  ).catch(() => {});
+                }
+              } else {
+                const nextRetryTime = Date.now() + 15 * 60 * 1000;
+                this.redeemRetryStats.set(name, {
+                  date: today,
+                  attempts: currentAttempts,
+                  nextRetryTime,
+                });
+                this.logger.addLog(
+                  'warn',
+                  `[${name}] 自动兑换遭遇临时异常（第 ${currentAttempts}/${MAX_REDEEM_ROUNDS} 轮，将在 15 分钟后退避重试）: ${lastRedeemMsg}`,
+                );
+              }
             }
           }
         }

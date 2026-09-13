@@ -528,20 +528,31 @@ export class CtYunClient {
 
   /**
    * 8.0 模拟官方上报活动事件与桌面进入/电源管理事件
-   * 支持 on (开机), awake (唤醒, 18), shutdown (关机, 2), reset (重启, 3)
+   * 支持 on (开机, 1), awake (唤醒, 18), shutdown (关机, 2), reset (重启, 3), force_off (强制关机, 4), force_reboot (强制重启, 5)
    */
   public async operateDesktop(
     desktopId: string,
-    operation: 'on' | 'awake' | 'shutdown' | 'reset',
+    operation: 'on' | 'awake' | 'shutdown' | 'reset' | 'off' | 'stop' | 'reboot' | 'restart' | 'force_off' | 'force_reboot',
     objType = 0,
   ): Promise<string> {
-    const typeMap: Record<'on' | 'awake' | 'shutdown' | 'reset', number> = {
+    const typeMap: Record<string, number> = {
       on: 1,
+      start: 1,
       shutdown: 2,
+      off: 2,
+      stop: 2,
+      poweroff: 2,
       reset: 3,
+      reboot: 3,
+      restart: 3,
+      force_off: 4,
+      force_reboot: 5,
       awake: 18,
+      wake: 18,
+      wakeup: 18,
+      resume: 18,
     };
-    const opType = typeMap[operation] || 1;
+    const opType = typeMap[operation] ?? 1;
     const formData = new URLSearchParams();
     formData.append('desktopId', desktopId);
     formData.append('objId', desktopId);
@@ -559,17 +570,19 @@ export class CtYunClient {
 
     const json = (await res.json()) as { code: number; msg?: string };
     if (json.code === 0) {
-      const opNames: Record<'on' | 'awake' | 'shutdown' | 'reset', string> = {
-        on: '开机指令已下发，正在启动...',
-        awake: '唤醒指令已下发，正在从休眠中唤醒...',
-        shutdown: '关机指令已下发...',
-        reset: '重启指令已下发，正在重启...',
+      const opNames: Record<number, string> = {
+        1: '开机指令已下发，正在启动...',
+        18: '唤醒指令已下发，正在从休眠中唤醒...',
+        2: '关机指令已下发...',
+        3: '重启指令已下发，正在重启...',
+        4: '强制关机指令已下发...',
+        5: '强制重启指令已下发，正在重启...',
       };
-      return opNames[operation];
+      return opNames[opType] || '电源控制指令已下发';
     }
     // 特殊容错：若提示“只有已关机状态允许进行开机操作”或状态不符，平滑判定
     if (
-      (operation === 'on' || operation === 'awake') &&
+      (opType === 1 || opType === 18) &&
       (json.code === 30010 || json.msg?.includes('已关机状态') || json.msg?.includes('已运行') || json.msg?.includes('已经处于'))
     ) {
       return '云电脑已在运行中或处于可用状态';

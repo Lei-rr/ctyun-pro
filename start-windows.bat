@@ -4,7 +4,7 @@ title CTYUN-PRO Windows 启动器
 color 0B
 
 echo ====================================================
-echo       ⚡ CTYUN-PRO Windows 桌面原生启动器
+echo       CTYUN-PRO Windows 桌面原生启动器
 echo ====================================================
 echo.
 

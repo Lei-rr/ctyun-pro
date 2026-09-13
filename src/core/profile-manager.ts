@@ -486,7 +486,7 @@ export class ProfileManager {
   public async operateDesktop(
     accountName: string,
     desktopCode: string,
-    operation: 'on' | 'awake' | 'shutdown' | 'reset',
+    operation: 'on' | 'awake' | 'shutdown' | 'reset' | 'off' | 'stop' | 'reboot' | 'restart' | 'force_off' | 'force_reboot',
   ): Promise<string> {
     const state = this.accountStates.get(accountName);
     const client = this.getClient(accountName);
@@ -497,14 +497,17 @@ export class ProfileManager {
     const canonicalDesktopCode = desktop.desktopCode;
     const requestApiDesktopId = desktop.desktopId;
 
-    if (operation === 'shutdown' || operation === 'reset') {
-      if (operation === 'shutdown') {
+    const isShutdown = operation === 'shutdown' || operation === 'off' || operation === 'stop' || operation === 'force_off';
+    const isReset = operation === 'reset' || operation === 'reboot' || operation === 'restart' || operation === 'force_reboot';
+
+    if (isShutdown || isReset) {
+      if (isShutdown) {
         this.setManualShutdown(canonicalDesktopCode, true);
       }
       this.keepaliveService.stopWorkerForDesktop(accountName, canonicalDesktopCode);
       desktop.status = 'stopped';
       desktop.lastHeartbeat = undefined;
-      desktop.useStatusText = operation === 'shutdown' ? '已关机' : '重启中';
+      desktop.useStatusText = isShutdown ? (operation === 'force_off' ? '正在强制关机' : '已关机') : (operation === 'force_reboot' ? '正在强制重启' : '重启中');
       this.notifyStatusChange();
     } else {
       this.setManualShutdown(canonicalDesktopCode, false);
@@ -553,7 +556,8 @@ export class ProfileManager {
 
       this.logger.addLog('info', `[${dPrefix}] ${message}`);
       // 后台轮询跟踪云电脑电源状态，直至真正开机或关机完成
-      this.trackDesktopStatusAfterPower(accountName, canonicalDesktopCode, operation === 'awake' ? 'on' : operation);
+      const trackTarget: 'on' | 'shutdown' | 'reset' = isShutdown ? 'shutdown' : isReset ? 'reset' : 'on';
+      this.trackDesktopStatusAfterPower(accountName, canonicalDesktopCode, trackTarget);
       return message;
     } catch (error) {
       desktop.status = 'stopped';
@@ -564,59 +568,13 @@ export class ProfileManager {
   }
 
   /**
-   * 生成官方远程桌面免密直达 URL
+   * 精准反查云电脑实例及归属账号
+   * 优先提示排查 -> 内存状态反查 -> 全量刷新重载兜底
    */
-  public async getDesktopDirectUrl(
-    accountName: string,
-    desktopId?: string,
-  ): Promise<{ url: string; desktopCode?: string }> {
-    const state = this.accountStates.get(accountName);
-    if (state && desktopId) {
-      const d = state.desktops.find((item) => item.desktopId === desktopId || item.desktopCode === desktopId);
-      if (d?.desktopCode) {
-        return this.getDesktopDirectUrlByDesktopId(d.desktopCode, accountName);
-      }
-    }
-    const client = this.getClient(accountName);
-    if (!state || !client || !client.loginInfo) {
-      throw new Error('未找到该账号或账号未登录');
-    }
-
-    let targetDesktop = desktopId
-      ? state.desktops.find((item) => item.desktopId === desktopId || item.desktopCode === desktopId)
-      : state.desktops[0];
-
-    // 如果还没有加载过云电脑列表，则刷新一次
-    if (!targetDesktop) {
-      try {
-        await this.reloadDesktops(accountName);
-        const updatedState = this.accountStates.get(accountName);
-        targetDesktop = desktopId
-          ? updatedState?.desktops.find((item) => item.desktopId === desktopId || item.desktopCode === desktopId)
-          : updatedState?.desktops[0];
-      } catch (err: any) {
-        this.logger.addLog('warn', `[${accountName}] 刷新云电脑列表失败: ${err.message}`);
-      }
-    }
-
-    if (targetDesktop?.desktopCode) {
-      return this.getDesktopDirectUrlByDesktopCode(targetDesktop.desktopCode, accountName);
-    }
-
-    const desktopCode = targetDesktop?.desktopCode || '';
-    const directUrl = desktopCode ? `/desktop/${encodeURIComponent(desktopCode)}` : '/';
-    this.logger.addLog('info', `[${accountName}] 生成同源远程桌面直连视窗链接 (${desktopCode})`);
-    return { url: directUrl, desktopCode };
-  }
-
-  /**
-   * 通过全局唯一 desktopCode 反查账号与桌面，生成标准同源远程桌面直连链接
-   * （纯同源 Cookie/Pinia 鉴权，严禁在 URL 中拼接 token 泄露凭据）
-   */
-  public async getDesktopDirectUrlByDesktopCode(
+  public async resolveDesktop(
     desktopCode: string,
     accountHint?: string,
-  ): Promise<{ url: string; desktopCode: string; accountName: string }> {
+  ): Promise<{ accountName: string; desktop: ManagedDesktopState }> {
     if (!desktopCode) {
       throw new Error('缺少全局唯一 desktopCode');
     }
@@ -625,22 +583,20 @@ export class ProfileManager {
     let matchedAccountName: string | undefined;
     let targetDesktop: ManagedDesktopState | undefined;
 
-    // 1. 如果提供了账号提示，优先快速排查
+    // 1. 优先根据账号提示快速定位
     if (accountHint) {
       const state = this.accountStates.get(accountHint);
-      if (state) {
-        const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
-        if (d) {
-          matchedAccountName = state.name;
-          targetDesktop = d;
-        }
+      const d = state?.desktops.find((item) => String(item.desktopCode) === codeStr || String(item.desktopId) === codeStr);
+      if (d) {
+        matchedAccountName = state!.name;
+        targetDesktop = d;
       }
     }
 
-    // 2. 全局遍历所有已托管账号的桌面状态进行精准反查
+    // 2. 全局遍历所有已托管账号的桌面状态
     if (!targetDesktop) {
       for (const [name, state] of this.accountStates.entries()) {
-        const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
+        const d = state.desktops.find((item) => String(item.desktopCode) === codeStr || String(item.desktopId) === codeStr);
         if (d) {
           matchedAccountName = name;
           targetDesktop = d;
@@ -649,13 +605,13 @@ export class ProfileManager {
       }
     }
 
-    // 3. 如果内存状态中未命中，尝试全量刷新一次各账号桌面后再查
+    // 3. 内存未命中时，尝试全量刷新各账号桌面后再反查
     if (!targetDesktop) {
       for (const name of this.accounts.keys()) {
         try {
           await this.reloadDesktops(name);
           const state = this.accountStates.get(name);
-          const d = state?.desktops.find((item) => String(item.desktopCode) === codeStr);
+          const d = state?.desktops.find((item) => String(item.desktopCode) === codeStr || String(item.desktopId) === codeStr);
           if (d) {
             matchedAccountName = name;
             targetDesktop = d;
@@ -669,119 +625,27 @@ export class ProfileManager {
       throw new Error(`未找到设备编码为 [${desktopCode}] 的云电脑实例`);
     }
 
-    const client = this.getClient(matchedAccountName);
-    if (!client || !client.loginInfo) {
-      throw new Error(`云电脑所属账号 [${matchedAccountName}] 未登录或凭据失效`);
-    }
-
-    const code = targetDesktop.desktopCode || '';
-    const directUrl = `/desktop/${encodeURIComponent(code)}`;
-
-    this.logger.addLog('info', `[${matchedAccountName}] 生成同源远程桌面直连视窗链接 (${code})`);
-    return { url: directUrl, desktopCode: code, accountName: matchedAccountName };
-  }
-
-  public async getDesktopDirectUrlByDesktopId(
-    desktopCode: string,
-    accountHint?: string,
-  ): Promise<{ url: string; desktopCode?: string; accountName: string }> {
-    return this.getDesktopDirectUrlByDesktopCode(desktopCode, accountHint);
+    return { accountName: matchedAccountName, desktop: targetDesktop };
   }
 
   /**
-   * 通过全局唯一 desktopCode 反查账号与桌面，并获取推流直连参数
-   * （彻底解决账号重名/改名与同名寻址冲突问题）
+   * 通过全局唯一 desktopCode 反查账号与桌面，生成标准同源远程桌面直连链接
+   * （纯同源 Cookie/Pinia 鉴权，严禁在 URL 中拼接 token 泄露凭据）
    */
-  public async getDesktopConnectionParamsByDesktopId(
+  public async getDesktopDirectUrlByDesktopCode(
     desktopCode: string,
     accountHint?: string,
-  ): Promise<{
-    wsHost: string;
-    desktopId: string;
-    desktopInfo: any;
-    deviceCode: string;
-    userAccount: string;
-    desktopName?: string;
-    accountName: string;
-  }> {
-    if (!desktopCode) {
-      throw new Error('缺少全局唯一 desktopCode');
-    }
-
-    const codeStr = String(desktopCode).trim();
-    let matchedAccountName: string | undefined;
-    let targetDesktop: ManagedDesktopState | undefined;
-
-    // 1. 如果提供了账号提示，优先快速排查
-    if (accountHint) {
-      const state = this.accountStates.get(accountHint);
-      if (state) {
-        const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
-        if (d) {
-          matchedAccountName = state.name;
-          targetDesktop = d;
-        }
-      }
-    }
-
-    // 2. 全局遍历所有已托管账号的桌面状态进行精准反查
-    if (!targetDesktop) {
-      for (const [name, state] of this.accountStates.entries()) {
-        const d = state.desktops.find((item) => String(item.desktopCode) === codeStr);
-        if (d) {
-          matchedAccountName = name;
-          targetDesktop = d;
-          break;
-        }
-      }
-    }
-
-    // 3. 如果内存状态中未命中，尝试全量刷新一次各账号桌面后再查
-    if (!targetDesktop) {
-      for (const name of this.accounts.keys()) {
-        try {
-          await this.reloadDesktops(name);
-          const state = this.accountStates.get(name);
-          const d = state?.desktops.find((item) => String(item.desktopCode) === codeStr);
-          if (d) {
-            matchedAccountName = name;
-            targetDesktop = d;
-            break;
-          }
-        } catch {}
-      }
-    }
-
-    if (!matchedAccountName || !targetDesktop) {
-      throw new Error(`全局未找到设备编码为 [${desktopCode}] 的云电脑实例`);
-    }
-
-    const client = this.getClient(matchedAccountName);
+  ): Promise<{ url: string; desktopCode: string; accountName: string }> {
+    const { accountName, desktop } = await this.resolveDesktop(desktopCode, accountHint);
+    const client = this.getClient(accountName);
     if (!client || !client.loginInfo) {
-      throw new Error(`云电脑所属账号 [${matchedAccountName}] 未登录或凭据失效`);
+      throw new Error(`云电脑所属账号 [${accountName}] 未登录或凭据失效`);
     }
 
-    const dId = String(targetDesktop.desktopId);
-    const objType = targetDesktop.objType ?? 0;
-    const desktopInfo = await client.connectDesktop(dId, objType);
-
-    // 官方 Clink WebSocket 网关地址，格式对齐官方 SDK: wss://${desktopInfo.clinkLvsOutHost}/clinkProxy/${desktopId}
-    const hostWithPort = desktopInfo.clinkLvsOutHost
-      ? (desktopInfo.clinkLvsOutHost.includes(':') ? desktopInfo.clinkLvsOutHost : `${desktopInfo.clinkLvsOutHost}:9011`)
-      : 'deskmsgz.ctyun.cn:9011';
-    const gateway = `wss://${hostWithPort}/clinkProxy/${dId}`;
-
-    this.logger.addLog('info', `[${matchedAccountName}] 全局命中云电脑 [${dId}] 直连凭证与推流网关: ${gateway}`);
-
-    return {
-      wsHost: gateway,
-      desktopId: dId,
-      desktopInfo,
-      deviceCode: client.getDeviceCode(),
-      userAccount: ((client.loginInfo as any)?.account as string) || matchedAccountName,
-      desktopName: targetDesktop.desktopName,
-      accountName: matchedAccountName,
-    };
+    const code = desktop.desktopCode || '';
+    const directUrl = `/desktop/${encodeURIComponent(code)}`;
+    this.logger.addLog('info', `[${accountName}] 生成同源远程桌面直连视窗链接 (${code})`);
+    return { url: directUrl, desktopCode: code, accountName };
   }
 
   /**
@@ -829,8 +693,10 @@ export class ProfileManager {
               target.status = 'connecting';
               this.logger.addLog('success', `[${dPrefix}] 云电脑已成功开机，正在接入保活...`);
               this.notifyStatusChange();
-              // 云电脑开机成功后，若账号处于保活状态，自动启动该桌面的 WebSocket 保活
-              this.reloadDesktops(accountName).catch(() => {});
+              // 云电脑开机成功后，若账号处于保活状态，缓冲 2 秒后接入 WebSocket 保活，确保官方推流端口与网关完全就绪
+              setTimeout(() => {
+                this.reloadDesktops(accountName).catch(() => {});
+              }, 2000);
               return;
             }
           } else if (operation === 'shutdown') {
@@ -1537,6 +1403,52 @@ export class ProfileManager {
     }
 
     return summary;
+  }
+
+  public exportConfigSafe() {
+    return {
+      version: '2.2.0',
+      exportedAt: new Date().toISOString(),
+      system: {
+        keepAliveSeconds: this.keepAliveSeconds,
+        webhookUrl: this.webhookUrl,
+      },
+      accounts: Array.from(this.accounts.values()).map((acc) => {
+        const sanitized = { ...acc };
+        delete (sanitized as any).password;
+        delete (sanitized as any).rawPassword;
+        return sanitized;
+      }),
+    };
+  }
+
+  public importConfigSafe(data: any): { importedAccounts: number } {
+    if (!data || typeof data !== 'object') {
+      throw new Error('导入的配置文件格式非法');
+    }
+    if (data.system) {
+      if (typeof data.system.keepAliveSeconds === 'number' && data.system.keepAliveSeconds >= 10) {
+        this.keepAliveSeconds = data.system.keepAliveSeconds;
+      }
+      if (typeof data.system.webhookUrl === 'string') {
+        this.webhookUrl = data.system.webhookUrl.trim();
+      }
+    }
+    let importedAccounts = 0;
+    if (Array.isArray(data.accounts)) {
+      for (const acc of data.accounts) {
+        if (!acc || !acc.name) continue;
+        const sanitized: AccountConfig = {
+          ...acc,
+        };
+        delete (sanitized as any).password;
+        delete (sanitized as any).rawPassword;
+        this.accounts.set(sanitized.name, sanitized);
+        importedAccounts++;
+      }
+    }
+    this.saveToDisk();
+    return { importedAccounts };
   }
 
   public saveToDisk(): void {
