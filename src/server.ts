@@ -806,14 +806,15 @@ export async function createServer() {
     if (!verifyAuth(request, reply)) return;
     try {
       const params = request.params as { desktopCode: string };
-      const body = request.body as { action: 'on' | 'off' | 'reboot' | 'start' | 'stop' | 'restart' };
+      const body = request.body as { action: 'on' | 'off' | 'reboot' | 'start' | 'stop' | 'restart' | 'awake' | 'wake' };
       const res = manager.findDesktopByCode(params.desktopCode);
       if (!res) {
         return reply.code(404).send({ success: false, msg: '云电脑未找到' });
       }
-      let op: 'on' | 'shutdown' | 'reset' = 'on';
+      let op: 'on' | 'awake' | 'shutdown' | 'reset' = 'on';
       if (body.action === 'off' || body.action === 'stop') op = 'shutdown';
       else if (body.action === 'reboot' || body.action === 'restart') op = 'reset';
+      else if (body.action === 'awake' || body.action === 'wake') op = 'awake';
 
       const msg = await manager.operateDesktop(res.accountName, params.desktopCode, op);
       return { success: true, msg };

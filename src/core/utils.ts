@@ -41,7 +41,7 @@ export function requestIpv4(
     body?: string;
     timeoutMs?: number;
   } = {},
-): Promise<{ status: number; headers: Record<string, any>; json: () => Promise<any> }> {
+): Promise<{ status: number; headers: Record<string, any>; text: () => Promise<string>; json: () => Promise<any> }> {
   return new Promise((resolve, reject) => {
     const url = new URL(urlStr);
     const timeoutMs = options.timeoutMs || 60000;
@@ -63,6 +63,7 @@ export function requestIpv4(
           resolve({
             status: res.statusCode || 200,
             headers: res.headers,
+            text: () => Promise.resolve(data),
             json: () => {
               try {
                 return Promise.resolve(JSON.parse(data));

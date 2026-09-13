@@ -455,7 +455,7 @@ export class ProfileManager {
   public async operateDesktop(
     accountName: string,
     desktopCode: string,
-    operation: 'on' | 'shutdown' | 'reset',
+    operation: 'on' | 'awake' | 'shutdown' | 'reset',
   ): Promise<string> {
     const state = this.accountStates.get(accountName);
     const client = this.getClient(accountName);
@@ -478,7 +478,7 @@ export class ProfileManager {
     } else {
       this.setManualShutdown(canonicalDesktopCode, false);
       desktop.status = 'connecting';
-      desktop.useStatusText = '启动中';
+      desktop.useStatusText = operation === 'awake' ? '唤醒中' : '启动中';
       this.notifyStatusChange();
     }
 
@@ -486,10 +486,43 @@ export class ProfileManager {
       const targetObjType = desktop.objType ?? 0;
       const dName = desktop.desktopName || (desktop as any).computerName || (desktop as any).name || canonicalDesktopCode;
       const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
-      const message = await client.operateDesktop(requestApiDesktopId, operation, targetObjType);
+      
+      let message = '';
+      const isPowerOnOrAwake = operation === 'on' || operation === 'awake';
+      
+      if (isPowerOnOrAwake) {
+        // 智能电源探测：若云电脑状态提示休眠或指定 awake，优先发 18 唤醒；若提示关机则发 1 开机；失败时双向回退互补
+        const isSleep = (desktop.useStatusText || '').includes('休眠') || (desktop.useStatusText || '').includes('睡眠') || operation === 'awake';
+        const primaryOp: 'on' | 'awake' = isSleep ? 'awake' : 'on';
+        const fallbackOp: 'on' | 'awake' = isSleep ? 'on' : 'awake';
+
+        try {
+          message = await client.operateDesktop(requestApiDesktopId, primaryOp, targetObjType);
+        } catch (firstErr: any) {
+          const firstErrMsg = firstErr.message || '';
+          if (firstErrMsg.includes('已运行') || firstErrMsg.includes('已经处于') || firstErrMsg.includes('已在运行')) {
+            message = '云电脑已处于运行可用状态';
+          } else {
+            try {
+              message = await client.operateDesktop(requestApiDesktopId, fallbackOp, targetObjType);
+            } catch (secondErr: any) {
+              // 若两路信令均失败，尝试通过 connectDesktop 接口触发官方云端的 goingRetry 机制拉起桌面
+              try {
+                await client.connectDesktop(desktop, targetObjType);
+                message = '云电脑拉起请求已触发，正在建立连接...';
+              } catch {
+                throw secondErr;
+              }
+            }
+          }
+        }
+      } else {
+        message = await client.operateDesktop(requestApiDesktopId, operation, targetObjType);
+      }
+
       this.logger.addLog('info', `[${dPrefix}] ${message}`);
       // 后台轮询跟踪云电脑电源状态，直至真正开机或关机完成
-      this.trackDesktopStatusAfterPower(accountName, canonicalDesktopCode, operation);
+      this.trackDesktopStatusAfterPower(accountName, canonicalDesktopCode, operation === 'awake' ? 'on' : operation);
       return message;
     } catch (error) {
       desktop.status = 'stopped';
@@ -917,6 +950,17 @@ export class ProfileManager {
     // 维持既有桌面心跳与状态，防止重复覆盖
     const oldDesktopsMap = new Map(state.desktops.map(d => [d.desktopId, d]));
     state.desktops = list.map((d) => {
+      // 外部开机状态自愈探针：若在外部 App/客户端或控制台开机 (useStatus === 25 或 useStatusText 为运行中)
+      // 且本地仍处于手动关机锁定标记中，自动解除手动关机标记，恢复守护
+      const isRunning = d.useStatus === 25 || (d.useStatusText && (d.useStatusText.includes('运行') || d.useStatusText.includes('使用')));
+      if (isRunning) {
+        if (this.isManualShutdown(d.desktopCode) || this.isManualShutdown(d.desktopId)) {
+          this.setManualShutdown(d.desktopCode, false);
+          this.setManualShutdown(d.desktopId, false);
+          this.logger.addLog('info', `[${accountName} - ${d.desktopName || d.desktopCode}] 检测到云电脑在外部已开机启动，自动解除本地手动关机标记`);
+        }
+      }
+
       const old = oldDesktopsMap.get(d.desktopId);
       return {
         desktopId: d.desktopId,

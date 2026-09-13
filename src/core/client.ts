@@ -35,6 +35,7 @@ export interface Desktop {
   desktopName: string;
   desktopCode: string;
   useStatusText: string;
+  useStatus?: number | string;
   desktopInfo?: DesktopInfo;
   imageName?: string;
   flavorName?: string;
@@ -358,6 +359,7 @@ export class CtYunClient {
           desktopName: item.desktopName || '天翼云电脑',
           desktopCode: item.desktopCode || '',
           useStatusText: item.useStatusText || item.useStatus || '运行中',
+          useStatus: item.useStatus,
           imageName: item.imageName || '',
           flavorName: item.flavorName || item.prodGroupName || '',
           objType: item.objType ?? 0,
@@ -376,6 +378,7 @@ export class CtYunClient {
           desktopName: item.poolName || item.desktopName || '天翼云电脑(政企桌面池)',
           desktopCode: item.desktopCode || poolId,
           useStatusText: item.useStatusText || item.useStatus || '运行中',
+          useStatus: item.useStatus,
           imageName: item.imageName || '',
           flavorName: item.flavorName || item.prodGroupName || '政企版',
           objType: item.objType ?? 1,
@@ -395,6 +398,7 @@ export class CtYunClient {
           desktopName: item.desktopName || '天翼云电脑(抢占式)',
           desktopCode: item.desktopCode || objId,
           useStatusText: item.useStatusText || item.useStatus || '运行中',
+          useStatus: item.useStatus,
           imageName: item.imageName || '',
           flavorName: item.flavorName || item.prodGroupName || '',
           objType: item.objType ?? 2,
@@ -523,14 +527,20 @@ export class CtYunClient {
   }
 
   /**
-   * 8.0 模拟官方上报活动事件与桌面进入事件 (推进「登录AI云电脑」任务)
+   * 8.0 模拟官方上报活动事件与桌面进入/电源管理事件
+   * 支持 on (开机), awake (唤醒, 18), shutdown (关机, 2), reset (重启, 3)
    */
   public async operateDesktop(
     desktopId: string,
-    operation: 'on' | 'shutdown' | 'reset',
+    operation: 'on' | 'awake' | 'shutdown' | 'reset',
     objType = 0,
   ): Promise<string> {
-    const typeMap: Record<'on' | 'shutdown' | 'reset', number> = { on: 1, shutdown: 2, reset: 3 };
+    const typeMap: Record<'on' | 'awake' | 'shutdown' | 'reset', number> = {
+      on: 1,
+      shutdown: 2,
+      reset: 3,
+      awake: 18,
+    };
     const opType = typeMap[operation] || 1;
     const formData = new URLSearchParams();
     formData.append('desktopId', desktopId);
@@ -549,16 +559,20 @@ export class CtYunClient {
 
     const json = (await res.json()) as { code: number; msg?: string };
     if (json.code === 0) {
-      const opNames: Record<'on' | 'shutdown' | 'reset', string> = {
+      const opNames: Record<'on' | 'awake' | 'shutdown' | 'reset', string> = {
         on: '开机指令已下发，正在启动...',
+        awake: '唤醒指令已下发，正在从休眠中唤醒...',
         shutdown: '关机指令已下发...',
         reset: '重启指令已下发，正在重启...',
       };
       return opNames[operation];
     }
-    // 特殊容错：若提示“只有已关机状态允许进行开机操作”，说明已在运行中或正在开机，平滑接管
-    if (operation === 'on' && (json.code === 30010 || json.msg?.includes('已关机状态'))) {
-      return '云电脑已在运行中或开机流程中';
+    // 特殊容错：若提示“只有已关机状态允许进行开机操作”或状态不符，平滑判定
+    if (
+      (operation === 'on' || operation === 'awake') &&
+      (json.code === 30010 || json.msg?.includes('已关机状态') || json.msg?.includes('已运行') || json.msg?.includes('已经处于'))
+    ) {
+      return '云电脑已在运行中或处于可用状态';
     }
     throw new Error(json.msg || `操作失败 (Code: ${json.code})`);
   }

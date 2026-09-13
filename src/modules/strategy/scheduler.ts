@@ -337,8 +337,14 @@ export class TaskScheduler {
                 lastRedeemMsg.includes('积分不足') ||
                 lastRedeemMsg.includes('点数不足') ||
                 lastRedeemMsg.includes('余额不足');
-              if (isInsufficientPoints) {
-                this.logger.addLog('warn', `[${name}] 自动兑换失败: ${lastRedeemMsg}，无需重试`);
+              // 若触发官方风控拦截、操作过于频繁等，立即熔断阻断重试，保护账号安全
+              const isRiskLimited =
+                lastRedeemMsg.includes('风控') ||
+                lastRedeemMsg.includes('频繁') ||
+                lastRedeemMsg.includes('异常') ||
+                lastRedeemMsg.includes('限制');
+              if (isInsufficientPoints || isRiskLimited) {
+                this.logger.addLog('warn', `[${name}] 自动兑换终止: ${lastRedeemMsg}，触发保护终止重试`);
                 break;
               }
               this.logger.addLog('warn', `[${name}] 第 ${attempt} 次自动兑换未成功: ${e.message}`);
