@@ -807,6 +807,30 @@ export async function createServer() {
     }
   });
 
+  // 指定 Desktop 挂机操作 (启动/停止)
+  fastify.post('/api/desktops/:desktopCode/hang', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const params = request.params as { desktopCode: string };
+      const body = (request.body as { action?: 'start' | 'stop' }) || {};
+      const instances = manager.getAllInstancesSummary();
+      const inst = instances.find(i => i.desktopCode === params.desktopCode);
+      if (!inst) {
+        return reply.code(404).send({ success: false, msg: '云电脑未找到' });
+      }
+
+      if (body.action === 'stop') {
+        await manager.stopHang(inst.profileName);
+        return { success: true, msg: '已成功中止挂机任务，并恢复保活长连接' };
+      } else {
+        const msg = await manager.manualHang(inst.profileName);
+        return { success: true, msg };
+      }
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
   // 9. SSE 实时日志推流 (带 token 验证，兼容同源 Cookie 鉴权)
   fastify.get('/api/logs/stream', (request: any, reply) => {
     const cookieToken = parseCookieToken(request.headers?.cookie);
