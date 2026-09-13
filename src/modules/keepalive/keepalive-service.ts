@@ -297,9 +297,6 @@ export class KeepaliveService {
           desktopInfo: info,
           loginInfo: client.loginInfo,
           deviceCode: client.getDeviceCode(),
-          onRefreshInfo: async (): Promise<DesktopInfo> => {
-            return await client.connectDesktop(d);
-          },
           onLog: (level, msg) => this.logger.addLog(level, msg),
           onStatusChange: (status) => {
             if (state) {

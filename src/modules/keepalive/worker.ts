@@ -9,7 +9,6 @@ export interface KeepAliveWorkerOptions {
   desktopInfo: DesktopInfo;
   loginInfo: any;
   deviceCode: string;
-  onRefreshInfo?: (desktopId: string) => Promise<DesktopInfo>;
   onStatusChange?: (status: 'connecting' | 'connected' | 'reconnecting' | 'stopped') => void;
   onHeartbeat?: () => void;
   onLog?: (level: 'info' | 'warn' | 'error' | 'success', msg: string) => void;
@@ -223,23 +222,12 @@ export class KeepAliveWorker {
       this.cleanupSocket();
 
       const retryDelay = isConflict ? 300000 : 5000;
-      this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null;
         this.isReconnecting = false;
         if (!this.isRunning || this.isPaused) return;
 
-        // 重连前重新获取最新动态连接凭证
-        if (this.options.onRefreshInfo) {
-          try {
-            const freshInfo = await this.options.onRefreshInfo(String(this.options.desktop.desktopId));
-            if (freshInfo && freshInfo.clinkLvsOutHost) {
-              this.options.desktopInfo = freshInfo;
-            }
-          } catch (err: any) {
-            this.log('warn', `刷新云电脑连接凭证失败: ${err.message}`);
-          }
-        }
-
+        // 对齐官方机制：断线重连直接复用原长效连接凭据，无需重复请求 HTTP 换票
         this.connect();
       }, retryDelay);
     };
