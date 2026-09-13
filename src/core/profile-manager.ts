@@ -1163,7 +1163,13 @@ export class ProfileManager {
             try {
               const list = await client.getDesktopList();
               const desktopStates = state?.desktops || [];
-              await this.keepaliveService.syncWorkersForAccount(accountName, client, list, desktopStates);
+              await this.keepaliveService.syncWorkersForAccount(
+                accountName,
+                client,
+                list,
+                desktopStates,
+                (dId) => this.isManualShutdown(dId),
+              );
             } catch {}
           }
         } else {
@@ -1227,7 +1233,13 @@ export class ProfileManager {
         if (!resumed) {
           const list = await client.getDesktopList();
           const desktopStates = state?.desktops || [];
-          await this.keepaliveService.syncWorkersForAccount(accountName, client, list, desktopStates);
+          await this.keepaliveService.syncWorkersForAccount(
+            accountName,
+            client,
+            list,
+            desktopStates,
+            (dId) => this.isManualShutdown(dId),
+          );
         }
       }
     } catch {}
