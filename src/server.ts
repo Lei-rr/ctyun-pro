@@ -182,7 +182,7 @@ export async function createServer() {
     const token = `${ts}.${sig}`;
     sessions.add(token);
     saveSessions();
-    reply.header('Set-Cookie', `ctyun_admin_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=${30 * 24 * 3600}`);
+    reply.header('Set-Cookie', `ctyun_admin_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 3600}`);
     return { success: true, token };
   });
 
@@ -198,7 +198,7 @@ export async function createServer() {
     }
     reply.header(
       'Set-Cookie',
-      'ctyun_admin_token=; Path=/; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+      'ctyun_admin_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
     );
     return { success: true, msg: '已安全退出登录' };
   });
@@ -1043,6 +1043,16 @@ export async function createServer() {
   (fastify as any).manager = manager;
   // 注册天翼云官方反代与免密直通视窗模块
   registerDesktopProxyRoutes(fastify, manager, verifyAuth);
+
+  // 优雅停机钩子：Fastify 停机时安全关闭 WebSocket Server 实例
+  fastify.addHook('onClose', async () => {
+    wss.clients.forEach((client) => {
+      try {
+        client.terminate();
+      } catch {}
+    });
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+  });
 
   return fastify;
 }

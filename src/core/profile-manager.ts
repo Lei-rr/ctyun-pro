@@ -121,10 +121,6 @@ export class ProfileManager {
     return undefined;
   }
 
-  public findDesktopById(desktopCode: string): { accountName: string; desktop: ManagedDesktopState } | undefined {
-    return this.findDesktopByCode(desktopCode);
-  }
-
   public touchWebUserActive(accountName: string, desktopCode: string, durationSec: number = 60): void {
     const matched = this.findDesktopByCode(desktopCode);
     const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopCode(desktopCode);
@@ -415,6 +411,10 @@ export class ProfileManager {
     this.taskScheduler.stop();
     this.keepaliveService.stopAll();
     await this.taskStrategyService.destroyAllHang();
+    for (const [key, timer] of this.powerTrackingTimers.entries()) {
+      clearTimeout(timer);
+    }
+    this.powerTrackingTimers.clear();
     DesktopSessionArbiter.getInstance().clearAll();
     this.saveToDisk();
   }
