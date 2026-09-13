@@ -831,6 +831,31 @@ export async function createServer() {
     }
   });
 
+  // 指定 Desktop 积分商品兑换操作 (支持绑定当前 Desktop 进行兑换)
+  fastify.post('/api/desktops/:desktopCode/redeem', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const params = request.params as { desktopCode: string };
+      const body = (request.body as { prodId?: number; costPoints?: number; prodType?: string }) || {};
+      const instances = manager.getAllInstancesSummary();
+      const inst = instances.find(i => i.desktopCode === params.desktopCode);
+      if (!inst) {
+        return reply.code(404).send({ success: false, msg: '云电脑未找到' });
+      }
+
+      const msg = await manager.manualRedeem(
+        inst.profileName,
+        body.prodId,
+        body.costPoints,
+        body.prodType,
+        params.desktopCode,
+      );
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
   // 9. SSE 实时日志推流 (带 token 验证，兼容同源 Cookie 鉴权)
   fastify.get('/api/logs/stream', (request: any, reply) => {
     const cookieToken = parseCookieToken(request.headers?.cookie);

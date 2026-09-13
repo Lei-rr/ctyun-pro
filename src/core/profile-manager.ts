@@ -1014,6 +1014,10 @@ export class ProfileManager {
     }
     // 3. 停止该账号下的所有保活信道与心跳 Worker
     this.keepaliveService.stopWorkers(name);
+    // 4. 清理今日积分与告警缓存
+    this.todayPointsCache.delete(name);
+    this.expiredNotifiedAccounts.delete(name);
+    this.reloadDesktopsPromises.delete(name);
     this.accounts.delete(name);
     this.clients.delete(name);
     this.accountStates.delete(name);
