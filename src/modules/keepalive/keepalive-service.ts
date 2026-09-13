@@ -246,6 +246,7 @@ export class KeepaliveService {
         }
         if (!ready) {
           this.logger.addLog('warn', `[${dPrefix}] 云电脑开机仍在进行中，稍后将自动接入保活`);
+          continue;
         }
       }
 
@@ -316,6 +317,18 @@ export class KeepaliveService {
               state.useStatusText = '运行中';
             }
             this.onStateChange?.();
+          },
+          onRefreshInfo: async () => {
+            try {
+              const newInfo = await client.connectDesktop(d);
+              if (newInfo && newInfo.clinkLvsOutHost) {
+                d.desktopInfo = newInfo;
+                return newInfo;
+              }
+            } catch (err: any) {
+              // 换票异常由 worker 自适应退避
+            }
+            return null;
           },
         });
 

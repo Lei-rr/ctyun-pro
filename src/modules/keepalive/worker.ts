@@ -11,6 +11,7 @@ export interface KeepAliveWorkerOptions {
   deviceCode: string;
   onStatusChange?: (status: 'connecting' | 'connected' | 'reconnecting' | 'stopped') => void;
   onHeartbeat?: () => void;
+  onRefreshInfo?: () => Promise<DesktopInfo | null>;
   onLog?: (level: 'info' | 'warn' | 'error' | 'success', msg: string) => void;
 }
 
@@ -32,6 +33,8 @@ export class KeepAliveWorker {
   private isRunning = false;
   private isReconnecting = false;
   private isPaused = false;
+  private isHandshakeComplete = false;
+  private consecutiveFailures = 0;
   private yieldClearedHandler: ((data: { desktopId: string }) => void) | null = null;
 
   constructor(options: KeepAliveWorkerOptions) {
@@ -83,6 +86,8 @@ export class KeepAliveWorker {
   public stop(): void {
     this.isRunning = false;
     this.isPaused = false;
+    this.isHandshakeComplete = false;
+    this.consecutiveFailures = 0;
     this.unbindYieldCleared();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -102,6 +107,8 @@ export class KeepAliveWorker {
   public pause(): void {
     if (!this.isRunning || this.isPaused) return;
     this.isPaused = true;
+    this.isHandshakeComplete = false;
+    this.consecutiveFailures = 0;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -211,8 +218,6 @@ export class KeepAliveWorker {
       if (isConflict) {
         this.log('warn', `检测到云电脑已被外部官方客户端接入 (Code ${code})，系统主动避让 5 分钟，暂停长连接保活`);
         await DesktopSessionArbiter.getInstance().yieldToExternal(dId, 5, `网关通知外部客户端接入 (Code ${code})`);
-      } else {
-        this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
       }
 
       if (this.heartbeatTimer) {
@@ -221,13 +226,46 @@ export class KeepAliveWorker {
       }
       this.cleanupSocket();
 
-      const retryDelay = isConflict ? 300000 : 5000;
-      this.reconnectTimer = setTimeout(() => {
+      let retryDelay = isConflict ? 300000 : 5000;
+
+      if (!isConflict) {
+        if (this.isHandshakeComplete) {
+          // 运行中正常网络断开：直接复用长效凭据，5秒后秒级重连
+          this.isHandshakeComplete = false;
+          this.consecutiveFailures = 0;
+          this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
+        } else {
+          // 未完成握手即断开（如网关直接 1005 关闭）：累计握手失败计数
+          this.consecutiveFailures++;
+          if (this.consecutiveFailures <= 1) {
+            this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
+          } else {
+            // 连续握手未通过，凭据大概率已失效或桌面离线，退避防死循环并准备换票
+            retryDelay = Math.min(30000, 5000 * Math.pow(2, this.consecutiveFailures - 2));
+            this.log('warn', `长连接握手连续未通过 (${this.consecutiveFailures}次)，将在 ${Math.round(retryDelay / 1000)}秒后刷新凭据重试...`);
+          }
+        }
+      }
+
+      this.reconnectTimer = setTimeout(async () => {
         this.reconnectTimer = null;
         this.isReconnecting = false;
         if (!this.isRunning || this.isPaused) return;
 
-        // 对齐官方机制：断线重连直接复用原长效连接凭据，无需重复请求 HTTP 换票
+        // 若连续握手失败，自适应换取新凭据自愈
+        if (!isConflict && this.consecutiveFailures >= 2 && this.options.onRefreshInfo) {
+          try {
+            const newInfo = await this.options.onRefreshInfo();
+            if (newInfo && newInfo.clinkLvsOutHost) {
+              this.options.desktopInfo = newInfo;
+              this.consecutiveFailures = 0;
+              this.log('info', '已成功刷新云电脑长连接凭据，准备重新建立连接');
+            }
+          } catch (e: any) {
+            this.log('warn', `刷新长连接凭据提示: ${e.message}`);
+          }
+        }
+
         this.connect();
       }, retryDelay);
     };
@@ -236,15 +274,17 @@ export class KeepAliveWorker {
       this.log('success', 'WebSocket 连接就绪，发送握手配置...');
 
       // 1. 发送连接握手 JSON
+      const currentInfo = this.options.desktopInfo;
+      const currentHostParts = currentInfo.clinkLvsOutHost.split(':');
       const connectMessage = {
         type: 1,
         ssl: 1,
-        host: hostParts[0],
-        port: hostParts.length > 1 ? hostParts[1] : '443',
-        ca: desktopInfo.caCert,
-        cert: desktopInfo.clientCert,
-        key: desktopInfo.clientKey,
-        servername: `${desktopInfo.host}:${desktopInfo.port}`,
+        host: currentHostParts[0],
+        port: currentHostParts.length > 1 ? currentHostParts[1] : '443',
+        ca: currentInfo.caCert,
+        cert: currentInfo.clientCert,
+        key: currentInfo.clientKey,
+        servername: `${currentInfo.host}:${currentInfo.port}`,
         oqs: 0,
       };
 
@@ -263,6 +303,8 @@ export class KeepAliveWorker {
           const initialPayload = Buffer.from('UkVEUQIAAAACAAAAGgAAAAAAAAABAAEAAAABAAAAEgAAAAkAAAAECAAA', 'base64');
           ws.send(initialPayload);
           this.log('success', '云电脑保活会话建立成功');
+          this.isHandshakeComplete = true;
+          this.consecutiveFailures = 0;
           this.options.onStatusChange?.('connected');
 
           // 3. 启动官方标准的 30s 活跃心跳定时器
@@ -278,6 +320,10 @@ export class KeepAliveWorker {
     ws.on('message', (data: WebSocket.RawData) => {
       if (!this.isRunning || this.isPaused) return;
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+
+      // 收到服务端有效响应，标记会话完全建立
+      this.isHandshakeComplete = true;
+      this.consecutiveFailures = 0;
 
       // 收到 REDQ 保活校验帧 -> 动态响应
       if (buffer.length >= 4 && buffer.subarray(0, 4).toString('ascii') === 'REDQ') {
