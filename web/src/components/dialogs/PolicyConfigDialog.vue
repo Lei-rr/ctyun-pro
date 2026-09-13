@@ -182,17 +182,31 @@ const store = useAppStore();
     </div>
 
     <template #footer>
-      <div class="flex items-center justify-end gap-2 w-full">
-        <Button variant="outline" class="h-9 cursor-pointer" @click="store.showPolicyModal = false">
-          取消
-        </Button>
-        <Button
-          class="h-9 shadow-xs cursor-pointer px-5"
-          :disabled="store.policyLoading"
-          @click="store.savePolicy"
-        >
-          {{ store.policyLoading ? '正在保存...' : '保存策略' }}
-        </Button>
+      <div class="flex items-center justify-between gap-2 w-full">
+        <div>
+          <Button
+            v-if="store.policyRedeemEnabled"
+            variant="secondary"
+            size="sm"
+            class="h-9 px-3 text-xs gap-1 cursor-pointer"
+            @click="store.manualRedeem(store.policyAccount)"
+            title="立即测试执行当前选中的商品兑换"
+          >
+            <span>立即兑换</span>
+          </Button>
+        </div>
+        <div class="flex items-center gap-2">
+          <Button variant="outline" class="h-9 cursor-pointer" @click="store.showPolicyModal = false">
+            取消
+          </Button>
+          <Button
+            class="h-9 shadow-xs cursor-pointer px-5"
+            :disabled="store.policyLoading"
+            @click="store.savePolicy"
+          >
+            {{ store.policyLoading ? '正在保存...' : '保存策略' }}
+          </Button>
+        </div>
       </div>
     </template>
   </AppDialog>

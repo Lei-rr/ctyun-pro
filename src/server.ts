@@ -419,6 +419,17 @@ export async function createServer() {
       return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
     }
     manager.removeAccount(acc.name);
+    if (acc.name) {
+      challengeCache.delete(acc.name);
+      smsSessionCache.delete(acc.name);
+    }
+    if (acc.id) {
+      challengeCache.delete(acc.id);
+      smsSessionCache.delete(acc.id);
+    }
+    if (acc.user) {
+      challengeCache.delete(acc.user);
+    }
     return { success: true, msg: 'Profile 已成功注销' };
   });
 
@@ -489,6 +500,9 @@ export async function createServer() {
     try {
       manager.addLog('info', `[${name}] 正在验证登录...`);
       const loginInfo = await client.login(user, body.password || '', challenge, (body.captchaCode || '').trim());
+      challengeCache.delete(name);
+      challengeCache.delete(user);
+      challengeCache.delete('__latest__');
       await manager.addOrUpdateAccount({
         name,
         user,
@@ -568,6 +582,7 @@ export async function createServer() {
     const cachedSmsKey = smsSessionCache.get(name)?.smsKey || '';
     try {
       await client.bindDevice(body.smsCode.trim(), cachedSmsKey);
+      smsSessionCache.delete(name);
       if (acc && client.loginInfo) {
         acc.loginInfo = client.loginInfo;
       }
