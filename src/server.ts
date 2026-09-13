@@ -324,7 +324,14 @@ export async function createServer() {
       user,
       autoSign: body.autoSign !== false,
       autoStart: body.autoStart !== false,
-      taskConfig: body.taskConfig || { enabled: true, scheduleTime: StrategyService.generateRandomSchedule(), autoHang: true, autoAiChat: true },
+      taskConfig: body.taskConfig || {
+        enabled: true,
+        scheduleTime: StrategyService.generateRandomSchedule(),
+        autoSign: true,
+        aiChat: true,
+        loginDesktop: true,
+        keepAliveHang: true,
+      },
       redeemConfig: body.redeemConfig || { ...DEFAULT_REDEEM_CONFIG, enabled: true },
     });
     manager.addLog('info', `[${name}] 档案已创建`);
