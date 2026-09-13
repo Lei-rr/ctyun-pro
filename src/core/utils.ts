@@ -225,6 +225,15 @@ export async function sendWebhookNotification(
   }
 }
 
+export function getCstHour(date: Date = new Date()): number {
+  const hourStr = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour: 'numeric',
+    hour12: false,
+  }).format(date);
+  return parseInt(hourStr, 10);
+}
+
 /**
  * 获取东八区北京时间当天日期字符串 (YYYY-MM-DD)
  */

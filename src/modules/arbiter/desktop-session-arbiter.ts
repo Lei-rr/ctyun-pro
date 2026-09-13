@@ -88,7 +88,8 @@ export class DesktopSessionArbiter extends EventEmitter {
     const newLock = new Promise<void>((resolve) => {
       releaseLock = resolve;
     });
-    this.leaseLocks.set(key, prevLock.then(() => newLock));
+    const thisLock = prevLock.then(() => newLock);
+    this.leaseLocks.set(key, thisLock);
 
     try {
       await prevLock;
@@ -154,6 +155,9 @@ export class DesktopSessionArbiter extends EventEmitter {
       return true;
     } finally {
       releaseLock();
+      if (this.leaseLocks.get(key) === thisLock) {
+        this.leaseLocks.delete(key);
+      }
     }
   }
 
