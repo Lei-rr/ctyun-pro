@@ -1,4 +1,5 @@
 import type { AccountConfig } from '../../config.js';
+import { getRandomScheduleTime } from '../../config.js';
 import type { Logger } from '../../core/logger.js';
 import { isHangTaskName } from '../task/index.js';
 import { RewardRedeemService } from '../reward/reward-service.js';
@@ -87,7 +88,7 @@ export class TaskScheduler {
       if (!tConf || tConf.enabled === false) {
         // 用户未开启或关闭了每日任务总开关，绝不自动执行
       } else {
-        const targetTime = tConf.scheduleTime || '03:30';
+        const targetTime = tConf.scheduleTime || getRandomScheduleTime();
         const retryStat = this.taskRetryStats.get(name);
         const nextTime = tConf.retryDate === today ? (tConf.nextRetryTime || retryStat?.nextRetryTime || 0) : (retryStat?.nextRetryTime || 0);
         const isInCooldown = (tConf.retryDate === today || retryStat?.date === today) && Date.now() < nextTime;

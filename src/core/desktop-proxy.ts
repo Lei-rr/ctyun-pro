@@ -524,8 +524,8 @@ export function registerDesktopProxyRoutes(
   // 2. 接收前台 Web 用户活跃心跳 (刷新避让时长 30s)
   fastify.post('/api/desktops/:desktopCode/web-active', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
-    const { desktopCode, id } = request.params as { desktopCode?: string; id?: string };
-    const targetCode = (desktopCode || id || '').trim();
+    const { desktopCode } = request.params as { desktopCode: string };
+    const targetCode = (desktopCode || '').trim();
     manager.touchWebUserActive('', targetCode, 30);
     reply.send({ success: true });
   });
@@ -533,8 +533,8 @@ export function registerDesktopProxyRoutes(
   // 3. 接收前台 Web 用户关闭通知 (立即清除避让标记，使后台长连接无缝复活)
   fastify.post('/api/desktops/:desktopCode/web-close', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
-    const { desktopCode, id } = request.params as { desktopCode?: string; id?: string };
-    const targetCode = (desktopCode || id || '').trim();
+    const { desktopCode } = request.params as { desktopCode: string };
+    const targetCode = (desktopCode || '').trim();
     manager.releaseWebUserActive('', targetCode);
     reply.send({ success: true });
   });

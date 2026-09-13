@@ -97,10 +97,6 @@ export class ProfileManager {
     return undefined;
   }
 
-  public getAccountNameByDesktopId(desktopCode: string): string | undefined {
-    return this.getAccountNameByDesktopCode(desktopCode);
-  }
-
   /**
    * 通过全局唯一 desktopCode 或 desktopId 反查账号与桌面实例信息
    */
@@ -129,7 +125,7 @@ export class ProfileManager {
 
   public touchWebUserActive(accountName: string, desktopCode: string, durationSec: number = 60): void {
     const matched = this.findDesktopByCode(desktopCode);
-    const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopId(desktopCode);
+    const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopCode(desktopCode);
     if (!matchedAccount) return;
     
     // 仲裁器注册 Web 直连高优先级租约（带 TTL 自动防死锁），驱逐所有后台长连接
@@ -149,7 +145,7 @@ export class ProfileManager {
 
   public releaseWebUserActive(accountName: string, desktopCode: string): void {
     const matched = this.findDesktopByCode(desktopCode);
-    const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopId(desktopCode);
+    const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopCode(desktopCode);
     if (!matchedAccount) return;
     const arbiter = DesktopSessionArbiter.getInstance();
     const dId = matched?.desktop?.desktopId ? String(matched.desktop.desktopId) : '';
@@ -978,6 +974,9 @@ export class ProfileManager {
   }
 
   public removeAccount(name: string): void {
+    // 1. 若该账号正在执行后台挂机，立即释放挂机长连接与状态
+    this.taskStrategyService.stopHang(name).catch(() => {});
+    // 2. 停止该账号下的所有保活信道与心跳 Worker
     this.keepaliveService.stopWorkers(name);
     this.accounts.delete(name);
     this.clients.delete(name);
