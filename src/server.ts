@@ -979,7 +979,21 @@ export async function createServer() {
       }
     });
 
+    const pingTimer = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.ping();
+        } catch {}
+      }
+    }, 30000);
+
     ws.on('close', () => {
+      clearInterval(pingTimer);
+      unSubStatus();
+      unSubLogs();
+    });
+    ws.on('error', () => {
+      clearInterval(pingTimer);
       unSubStatus();
       unSubLogs();
     });
