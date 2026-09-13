@@ -121,15 +121,28 @@ export class ProfileManager {
     return undefined;
   }
 
+  private webReleaseTimers = new Map<string, NodeJS.Timeout>();
+
   public touchWebUserActive(accountName: string, desktopCode: string, durationSec: number = 60): void {
     const matched = this.findDesktopByCode(desktopCode);
     const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopCode(desktopCode);
     if (!matchedAccount) return;
     
+    // 如果存在待延迟释放的计时器（例如用户刷新网页），立即取消该释放任务
+    const dId = matched?.desktop?.desktopId ? String(matched.desktop.desktopId) : '';
+    const lookupKey = dId || String(desktopCode);
+    if (this.webReleaseTimers.has(lookupKey)) {
+      clearTimeout(this.webReleaseTimers.get(lookupKey)!);
+      this.webReleaseTimers.delete(lookupKey);
+    }
+    if (desktopCode && this.webReleaseTimers.has(String(desktopCode))) {
+      clearTimeout(this.webReleaseTimers.get(String(desktopCode))!);
+      this.webReleaseTimers.delete(String(desktopCode));
+    }
+
     // 仲裁器注册 Web 直连高优先级租约（带 TTL 自动防死锁），驱逐所有后台长连接
     const arbiter = DesktopSessionArbiter.getInstance();
     const ttlMs = Math.max(30, Number(durationSec) || 60) * 1000;
-    const dId = matched?.desktop?.desktopId ? String(matched.desktop.desktopId) : '';
     if (dId) {
       arbiter.acquireLease(dId, 'web_direct', matchedAccount, async () => {}, ttlMs).catch(() => {});
     }
@@ -141,24 +154,44 @@ export class ProfileManager {
     this.taskStrategyService.stopHang(matchedAccount).catch(() => {});
   }
 
-  public releaseWebUserActive(accountName: string, desktopCode: string): void {
+  public releaseWebUserActive(accountName: string, desktopCode: string, delaySec: number = 10): void {
     const matched = this.findDesktopByCode(desktopCode);
     const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopCode(desktopCode);
     if (!matchedAccount) return;
-    const arbiter = DesktopSessionArbiter.getInstance();
+    
     const dId = matched?.desktop?.desktopId ? String(matched.desktop.desktopId) : '';
-    if (dId) {
-      arbiter.releaseLease(dId, 'web_direct', matchedAccount).catch(() => {});
-    }
-    if (desktopCode && desktopCode !== dId) {
-      arbiter.releaseLease(desktopCode, 'web_direct', matchedAccount).catch(() => {});
+    const lookupKey = dId || String(desktopCode);
+
+    // 清理可能存在的旧延迟释放任务
+    if (this.webReleaseTimers.has(lookupKey)) {
+      clearTimeout(this.webReleaseTimers.get(lookupKey)!);
+      this.webReleaseTimers.delete(lookupKey);
     }
 
-    // 关键恢复：前台直连关闭后，自动恢复该账号下的保活 Worker 运行
-    const acc = this.accounts.get(matchedAccount);
-    if (acc && acc.autoStart !== false) {
-      this.keepaliveService.resumeWorkers(matchedAccount);
-    }
+    // 引入延迟释放宽限期（Grace Period，默认 10 秒）：
+    // 浏览器用户刷新网页时会触发 beforeunload 发送 web-close，但 1~2 秒后新页面就会加载并发送 web-active。
+    // 若立即释放租约，后台保活 Worker 会瞬时唤醒发起连接导致天翼云 1005 踢线。
+    const timer = setTimeout(() => {
+      this.webReleaseTimers.delete(lookupKey);
+      if (desktopCode) this.webReleaseTimers.delete(String(desktopCode));
+
+      const arbiter = DesktopSessionArbiter.getInstance();
+      if (dId) {
+        arbiter.releaseLease(dId, 'web_direct', matchedAccount).catch(() => {});
+      }
+      if (desktopCode && desktopCode !== dId) {
+        arbiter.releaseLease(desktopCode, 'web_direct', matchedAccount).catch(() => {});
+      }
+
+      // 关键恢复：前台直连关闭且宽限期到期后，自动恢复该账号下的保活 Worker 运行
+      const acc = this.accounts.get(matchedAccount);
+      if (acc && acc.autoStart !== false) {
+        this.keepaliveService.resumeWorkers(matchedAccount);
+      }
+    }, Math.max(1, delaySec) * 1000);
+
+    this.webReleaseTimers.set(lookupKey, timer);
+    if (desktopCode) this.webReleaseTimers.set(String(desktopCode), timer);
   }
 
   public isManualShutdown(desktopCode: string): boolean {

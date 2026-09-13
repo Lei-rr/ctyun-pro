@@ -414,6 +414,8 @@ export const useAppStore = defineStore('app', () => {
     }, 1500);
   }
 
+  const currentChallenge = ref<{ challengeId: string; challengeCode: string } | null>(null);
+
   function switchLoginMode(mode: 'qrcode' | 'password') {
     loginMode.value = mode;
     modalError.value = '';
@@ -443,6 +445,7 @@ export const useAppStore = defineStore('app', () => {
       lastFetchedPhone = '';
       captchaImgUrl.value = '';
       formCaptcha.value = '';
+      currentChallenge.value = null;
     }
   }
 
@@ -454,6 +457,7 @@ export const useAppStore = defineStore('app', () => {
     formPassword.value = '';
     formCaptcha.value = '';
     captchaImgUrl.value = '';
+    currentChallenge.value = null;
     modalError.value = '';
     lastFetchedPhone = '';
     smsSentSuccess.value = false;
@@ -471,6 +475,7 @@ export const useAppStore = defineStore('app', () => {
     const userPhone = (forceUser !== undefined ? forceUser : formUser.value).trim();
     if (!userPhone) {
       captchaImgUrl.value = '';
+      currentChallenge.value = null;
       return;
     }
     const name = formName.value.trim() || userPhone;
@@ -478,17 +483,20 @@ export const useAppStore = defineStore('app', () => {
     formCaptcha.value = ''; // 刷新验证码清空旧输入
     try {
       const res = await fetch(
-        `/api/profiles/${encodeURIComponent(name)}/captcha?_t=${Date.now()}`,
+        `/api/profiles/${encodeURIComponent(name)}/captcha?user=${encodeURIComponent(userPhone)}&_t=${Date.now()}`,
         { headers: getHeaders() },
       );
       const json = await res.json();
       if (json.success && json.data) {
         captchaImgUrl.value = json.data.image;
+        if (json.data.challenge) {
+          currentChallenge.value = json.data.challenge;
+        }
       }
     } catch {
       captchaImgUrl.value = `/api/profiles/${encodeURIComponent(
         name,
-      )}/captcha?_t=${Date.now()}`;
+      )}/captcha?user=${encodeURIComponent(userPhone)}&_t=${Date.now()}`;
     } finally {
       captchaLoading.value = false;
     }
@@ -512,6 +520,7 @@ export const useAppStore = defineStore('app', () => {
             user: formUser.value.trim(),
             password: formPassword.value,
             captchaCode: formCaptcha.value.trim(),
+            challenge: currentChallenge.value,
           }),
         });
         const data = await res.json();
@@ -1047,6 +1056,7 @@ export const useAppStore = defineStore('app', () => {
     formName,
     formPassword,
     formCaptcha,
+    currentChallenge,
     captchaImgUrl,
     modalLoading,
     captchaLoading,

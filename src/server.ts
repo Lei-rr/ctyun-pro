@@ -120,8 +120,7 @@ export async function createServer() {
     return false;
   };
 
-  // 临时暂存各账号的登录 challenge 与短信流程 key
-  const challengeCache = new Map<string, ChallengeData>();
+  // 临时暂存各账号的短信流程 key
   const smsSessionCache = new Map<string, { captchaKey?: string; smsKey?: string }>();
 
   // 校验中间件 (如果设置了 adminPassword)
@@ -420,15 +419,10 @@ export async function createServer() {
     }
     manager.removeAccount(acc.name);
     if (acc.name) {
-      challengeCache.delete(acc.name);
       smsSessionCache.delete(acc.name);
     }
     if (acc.id) {
-      challengeCache.delete(acc.id);
       smsSessionCache.delete(acc.id);
-    }
-    if (acc.user) {
-      challengeCache.delete(acc.user);
     }
     return { success: true, msg: 'Profile 已成功注销' };
   });
@@ -465,16 +459,24 @@ export async function createServer() {
   fastify.get('/api/profiles/:id/captcha', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
+    const query = (request.query as any) || {};
     const acc = manager.getAccount(params.id);
-    const user = acc?.user || params.id;
+    const user = query.user || acc?.user || params.id;
     const client = manager.getClient(acc?.name || params.id);
     try {
+      // 严格对齐官方登录协议：单次拉取挑战与图片，直接透传给前端，服务端不设任何可能导致错位的内存缓存
       const challenge = await client.getChallengeData();
-      challengeCache.set(acc?.name || params.id, challenge);
-      challengeCache.set(user, challenge);
-      challengeCache.set('__latest__', challenge);
       const imgBuffer = await client.getLoginCaptcha(user);
-      return { success: true, data: { image: `data:image/jpeg;base64,${imgBuffer.toString('base64')}` } };
+      return {
+        success: true,
+        data: {
+          image: `data:image/jpeg;base64,${imgBuffer.toString('base64')}`,
+          challenge: {
+            challengeId: challenge.challengeId,
+            challengeCode: challenge.challengeCode,
+          },
+        },
+      };
     } catch (err: any) {
       return reply.code(500).send({ success: false, msg: err.message });
     }
@@ -488,21 +490,19 @@ export async function createServer() {
     const user = body.user || acc?.user || params.id;
     const name = acc?.name || body.name || params.id;
     const client = manager.getClient(name);
-    let challenge = challengeCache.get(name) || challengeCache.get(user) || challengeCache.get('__latest__');
-    if (!challenge) {
+
+    let challenge = body.challenge;
+    if (!challenge || !challenge.challengeId || !challenge.challengeCode) {
       try {
         challenge = await client.getChallengeData();
-        challengeCache.set(name, challenge);
       } catch {
         return reply.code(400).send({ success: false, msg: '请先刷新验证码' });
       }
     }
+
     try {
       manager.addLog('info', `[${name}] 正在验证登录...`);
       const loginInfo = await client.login(user, body.password || '', challenge, (body.captchaCode || '').trim());
-      challengeCache.delete(name);
-      challengeCache.delete(user);
-      challengeCache.delete('__latest__');
       await manager.addOrUpdateAccount({
         name,
         user,
@@ -512,13 +512,13 @@ export async function createServer() {
       });
       if (!loginInfo.bondedDevice) {
         manager.addLog('warn', `[${name}] 设备未绑定，需要短信验证码确认`);
-        return { success: true, needSms: true, msg: '登录成功，但当前设备未绑���，需要输入短信验证码' };
+        return { success: true, needSms: true, msg: '登录成功，但当前设备未绑定，需要输入短信验证码' };
       }
       manager.addLog('success', `[${name}] 登录成功！正在启动云电脑保活...`);
       manager.startAccount(name).catch((e) => manager.addLog('error', `[${name}] 启动保活失败: ${e.message}`));
       return { success: true, needSms: false, msg: '登录成功并已启动保活', data: manager.getAccountState(name) };
     } catch (err: any) {
-      manager.addLog('error', `[${name}] 登录失败: ${err.message}`);
+      manager.addLog('error', `[${name}] 登录验证失败: ${err.message}`);
       return reply.code(400).send({ success: false, msg: err.message });
     }
   });

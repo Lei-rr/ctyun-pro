@@ -340,9 +340,11 @@ export function registerDesktopProxyRoutes(
       }).catch(() => {});
     } catch (e) {}
   }
-  setInterval(sendWebHeartbeat, 15000);
+  // 页面进入或刷新时立即首发一次活跃心跳，主动续期并取消延迟让渡，彻底防止刷新期间被后台保活抢占踢下线
+  sendWebHeartbeat();
+  setInterval(sendWebHeartbeat, 5000);
 
-  // 页面关闭或卸载时通知后端立即恢复保活连接 (基于桌面唯一 desktopCode 寻址，免传 account)
+  // 页面关闭通知：由于用户刷新浏览器也会触发 beforeunload，故此处由后端提供防抖宽限期，避免刷新瞬时触发抢占
   window.addEventListener('beforeunload', function() {
     try {
       if (navigator.sendBeacon) {
