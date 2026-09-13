@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import { Protocol } from '../../core/protocol.js';
+import { Protocol, ClinkMsgType } from '../../core/protocol.js';
 import type { CtYunClient, Desktop, DesktopInfo } from '../../core/client.js';
 import type { Logger } from '../../core/logger.js';
 import { SignTask, isHangTaskName } from './sign.js';
@@ -167,13 +167,13 @@ export class HangTask {
         logger.addLog('warn', `[${logPrefix}] 下发开机指令提示: ${e.message}`);
       }
 
-      // 等待开机就绪（最多等待 3 分钟）
+      // 等待开机就绪（20s 一次轮询，最长 5 分钟共 15 次）
       let ready = false;
-      for (let i = 0; i < 36; i++) {
-        await new Promise((r) => setTimeout(r, 5000));
+      for (let i = 0; i < 15; i++) {
+        await new Promise((r) => setTimeout(r, 20000));
         try {
           const list = await client.getDesktopList();
-          const cur = list.find((d) => String(d.desktopId) === dId);
+          const cur = list.find((d) => String(d.desktopId) === dId || String(d.desktopCode) === String(targetDesktop.desktopCode));
           if (cur && (cur.useStatusText === '运行中' || cur.useStatusText === '离线运行')) {
             targetDesktop.useStatusText = cur.useStatusText;
             ready = true;
@@ -371,18 +371,32 @@ export class HangTask {
           try {
             const infos = Protocol.parseSendInfo(buffer);
             for (const info of infos) {
-              // 收到服务端 Type 103 用户认证挑战
-              if (info.type === 103) {
+              // 官方规范: 收到服务端 Type 3 ACK 窗口协商 -> 回复 Type 1 ACK_SYNC
+              if (info.type === ClinkMsgType.MSG_SET_ACK && info.data && info.data.length >= 4) {
+                const generation = info.data.readUInt32LE(0);
+                const ackSync = Protocol.buildAckSync(generation);
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                  ws.send(ackSync);
+                }
+              }
+
+              // 官方规范: 收到服务端 Type 4 Ping 探测 -> 立即回复 Type 3 Pong
+              if (info.type === ClinkMsgType.MSG_PING) {
+                const pong = Protocol.buildPong();
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                  ws.send(pong);
+                }
+              }
+
+              // 收到服务端 Type 103 用户认证挑战 (CLINK_MSG_MAIN_INIT)
+              if (info.type === ClinkMsgType.MSG_MAIN_INIT) {
                 logger.addLog('info', `[${logPrefix}] 收到云电脑 103 握手认证，正在回传用户凭证与通道认领包...`);
 
                 // 1. 回传 Type 118 用户身份包
-                const userPayload = JSON.stringify({
-                  type: 1,
-                  userName: client.loginInfo!.userName,
-                  userInfo: '',
-                  userId: client.loginInfo!.userId,
-                });
-                const msg118 = Protocol.buildSendInfoBuffer(118, Buffer.from(userPayload, 'utf-8'), true);
+                const msg118 = Protocol.buildClientUserName(
+                  client.loginInfo!.userName,
+                  client.loginInfo!.userId,
+                );
                 ws.send(msg118);
 
                 // 2. 发送 Type 112 会话认领包 (CLINK_MSGC_MAIN_CLIENT_LOGIN_INFO)
@@ -396,8 +410,17 @@ export class HangTask {
                 );
                 ws.send(msg112);
 
+                // 2.1 对齐官方 Web: 主动查询 Clink 版本 (Type 116)
+                setTimeout(() => {
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    try {
+                      ws.send(Protocol.buildGetClinkVersion());
+                    } catch {}
+                  }
+                }, 500);
+
                 // 3. 发送 Type 104 通道挂接就绪包 (CLINK_MSGC_MAIN_ATTACH_CHANNELS)
-                const msg104 = Protocol.buildMessage(104);
+                const msg104 = Protocol.buildAttachChannels();
                 ws.send(msg104);
 
                 logger.addLog('success', `[${logPrefix}] 桌面会话认领与通道挂接完成，在线状态已激活！`);

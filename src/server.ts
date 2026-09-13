@@ -447,20 +447,24 @@ export async function createServer() {
   });
 
   // 重命名 Profile 备注名
-  fastify.post('/api/profiles/:id/rename', async (request, reply) => {
+  const handleProfileRename = async (request: any, reply: any) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
-    const body = request.body as { name: string };
-    if (!body?.name?.trim()) {
+    const body = (request.body || {}) as { name?: string; newName?: string; oldName?: string };
+    const targetName = (body.newName || body.name || '').trim();
+    if (!targetName) {
       return reply.code(400).send({ success: false, msg: '名称不能为空' });
     }
     const acc = manager.getAccount(params.id);
     if (!acc) {
       return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
     }
-    manager.updateAccountName(acc.name, body.name.trim());
+    manager.updateAccountName(acc.name, targetName);
     return { success: true, msg: '重命名成功' };
-  });
+  };
+
+  fastify.post('/api/profiles/:id/rename', handleProfileRename);
+  fastify.put('/api/profiles/:id/rename', handleProfileRename);
 
   // 触发指定 Profile 的实例列表同步与本地落盘
   fastify.post('/api/profiles/:id/sync', async (request, reply) => {
@@ -904,6 +908,25 @@ export async function createServer() {
       return reply.code(400).send({ success: false, msg: err.message });
     }
   });
+
+  // 指定 Desktop 重命名/修改官方昵称操作 (对齐官方 modifyDesktopNickName)
+  const handleDesktopRename = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const params = request.params as { desktopCode: string };
+      const body = (request.body as { desktopName?: string; newName?: string; nickName?: string }) || {};
+      const newName = (body.desktopName || body.newName || body.nickName || '').trim();
+      if (!newName) {
+        return reply.code(400).send({ success: false, msg: '云电脑名称不能为空' });
+      }
+      await manager.renameDesktop(params.desktopCode, newName);
+      return { success: true, msg: '修改成功' };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  };
+  fastify.post('/api/desktops/:desktopCode/rename', handleDesktopRename);
+  fastify.put('/api/desktops/:desktopCode/rename', handleDesktopRename);
 
   // 9. SSE 实时日志推流 (带 token 验证，兼容同源 Cookie 鉴权)
   fastify.get('/api/logs/stream', (request: any, reply) => {

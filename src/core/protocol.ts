@@ -1,6 +1,61 @@
 import crypto from 'node:crypto';
 
 /**
+ * 天翼云官方 Clink 消息类型定义
+ * 服务端下发 (CLINK_MSG_*) 与 客户端上报 (CLINK_MSGC_*)
+ */
+export enum ClinkMsgType {
+  // === 客户端上报 (Client -> Server) ===
+  MSGC_ACK_SYNC = 1, // 客户端 ACK 窗口同步响应
+  MSGC_ACK = 2, // 客户端 ACK
+  MSGC_PONG = 3, // 客户端回复 Pong (响应服务端的 Type 4 Ping)
+  PONG = 3, // 兼容别名
+  MSGC_MIGRATE_FLUSH_MARK = 4,
+  MSGC_MIGRATE_DATA = 5,
+  MSGC_DISCONNECTING = 6,
+  MSGC_HEARTBEAT = 7, // 客户端主动活跃心跳 (30s 心跳保活)
+  HEARTBEAT = 7, // 兼容别名
+  MSGC_MAIN_CLIENT_INFO = 101,
+  MSGC_MAIN_ATTACH_CHANNELS = 104, // 客户端声明通道挂接就绪
+  MAIN_ATTACH_CHANNELS = 104, // 兼容别名
+  MSGC_MAIN_CLIENT_LOGIN_INFO = 112, // 客户端向主通道认领桌面会话凭证
+  MAIN_CLIENT_LOGIN_INFO = 112, // 兼容别名
+  MSGC_MAIN_APP_STATUS_FRONT = 113, // 声明应用前台激活
+  MSGC_MAIN_APP_STATUS_BACK = 114, // 声明应用后台静默
+  MSGC_MAIN_GET_CLINK_VERSION = 116, // 查询 Clink 版本
+  MSGC_MAIN_CLIENT2SERVER_CUSTOM = 118, // 客户端回传自定义 JSON (用户身份)
+  USER_IDENTITY_RESPONSE = 118, // 兼容别名
+  MSGC_END_MAIN = 120,
+
+  // === 服务端下发 (Server -> Client) ===
+  MSG_MIGRATE = 1,
+  MSG_MIGRATE_DATA = 2,
+  MSG_SET_ACK = 3, // 服务端 ACK 窗口协商下发
+  SET_ACK = 3, // 兼容别名
+  MSG_PING = 4, // 服务端心跳 Ping 探测
+  PING = 4, // 兼容别名
+  MSG_WAIT_FOR_CHANNELS = 5,
+  MSG_DISCONNECTING = 6, // 服务端通知即将断开
+  MSG_NOTIFY = 7,
+  MSG_LIST = 8,
+  MSG_HEARTBEAT_RES = 9, // 服务端心跳确认回执 (CLINK_MSG_HEARTBEAT_RES)
+  HEARTBEAT_RES = 9, // 官方标准心跳回执
+  HEARTBEAT_ACK = 8, // 兼容早期回执判定
+  MSG_MAIN_INIT = 103, // 服务端主通道握手初始化信令
+  USER_STATUS_PROBE = 103, // 兼容别名
+  MSG_MAIN_CHANNELS_LIST = 104,
+  MSG_MAIN_CLIENT_OFFLINE = 119, // 服务端通知客户端离线 / 会话剔除
+  SESSION_KICK = 119, // 兼容别名
+  MSG_MAIN_DESKTOP_LOCKED = 120, // 外部客户端挤占锁定桌面
+  SESSION_PREEMPTION = 120, // 兼容别名
+  MSG_MAIN_MGR_MESSAGE = 121,
+  MSG_MAIN_SERVER2CLIENT_CUSTOM = 127,
+  MSG_MAIN_CLIENT_LOGIN_INFO_RES = 136, // 登录认领结果回执
+  MSG_END_MAIN = 137, // 服务端结束主通道
+  SESSION_RESET = 137, // 兼容别名
+}
+
+/**
  * 天翼云电脑底层核心协议与安全算法 (纯净极简版，剔除原版死代码与第三方依赖)
  */
 export class Protocol {
@@ -63,6 +118,36 @@ export class Protocol {
     return result;
   }
 
+  /**
+   * 官方规范: 客户端 ACK 窗口同步响应 (Type 1 CLINK_MSGC_ACK_SYNC)
+   */
+  public static buildAckSync(generation: number): Buffer {
+    const data = Buffer.alloc(4);
+    data.writeUInt32LE(generation, 0);
+    return this.buildMessage(ClinkMsgType.MSGC_ACK_SYNC, data);
+  }
+
+  /**
+   * 官方规范: 客户端通道挂接就绪通知 (Type 104 CLINK_MSGC_MAIN_ATTACH_CHANNELS)
+   */
+  public static buildAttachChannels(): Buffer {
+    return this.buildMessage(ClinkMsgType.MSGC_MAIN_ATTACH_CHANNELS);
+  }
+
+  /**
+   * 官方规范: 响应服务端 Type 4 Ping 探测 -> 回复 Type 3 Pong
+   */
+  public static buildPong(): Buffer {
+    return this.buildMessage(ClinkMsgType.MSGC_PONG);
+  }
+
+  /**
+   * 官方规范: 客户端 30s 周期性活跃心跳报文 (Type 7)
+   */
+  public static buildHeartbeat(): Buffer {
+    return this.buildMessage(ClinkMsgType.MSGC_HEARTBEAT);
+  }
+
   public static buildClientUserName(userName: string, userId: number): Buffer {
     const json = Buffer.from(JSON.stringify({ type: 1, userName, userInfo: '', userId }), 'utf8');
     const data = Buffer.alloc(8 + json.length);
@@ -70,6 +155,13 @@ export class Protocol {
     data.writeUInt32LE(8, 4);
     json.copy(data, 8);
     return this.buildMessage(118, data);
+  }
+
+  /**
+   * 官方规范: 客户端获取 Clink 版本报文 (Type 116 CLINK_MSGC_MAIN_GET_CLINK_VERSION)
+   */
+  public static buildGetClinkVersion(): Buffer {
+    return this.buildMessage(ClinkMsgType.MSGC_MAIN_GET_CLINK_VERSION);
   }
 
   public static buildMainClientLoginInfo(

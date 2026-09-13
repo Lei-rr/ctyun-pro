@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import { Protocol } from '../../core/protocol.js';
+import { Protocol, ClinkMsgType } from '../../core/protocol.js';
 import type { Desktop, DesktopInfo } from '../../core/client.js';
 import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
 
@@ -338,25 +338,50 @@ export class KeepAliveWorker {
         return;
       }
 
-      // 收到 Type 103 用户状态探测 -> 仅响应 Type 118 用户身份（后台静默保活）
+      // 收到 Clink 协议消息 -> 按照官方规范分发响应
       try {
         const infos = Protocol.parseSendInfo(buffer);
         for (const info of infos) {
-          if (info.type === 103) {
-            const payload = JSON.stringify({
-              type: 1,
-              userName: this.options.loginInfo.userName,
-              userInfo: '',
-              userId: this.options.loginInfo.userId,
-            });
-            const byUserName = Protocol.buildSendInfoBuffer(118, Buffer.from(payload, 'utf-8'), true);
+          // 官方规范: 收到服务端 Type 3 ACK 窗口协商 -> 回复 Type 1 ACK_SYNC
+          if (info.type === ClinkMsgType.MSG_SET_ACK && info.data && info.data.length >= 4) {
+            const generation = info.data.readUInt32LE(0);
+            const ackSync = Protocol.buildAckSync(generation);
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(ackSync);
+            }
+          }
+
+          // 官方规范: 收到服务端 Type 4 Ping 探测 -> 立即回复 Type 3 Pong
+          if (info.type === ClinkMsgType.MSG_PING) {
+            const pong = Protocol.buildPong();
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(pong);
+            }
+          }
+
+          // 官方规范: 收到服务端心跳回执确认 (Type 9 CLINK_MSG_HEARTBEAT_RES / Type 8)
+          if (info.type === ClinkMsgType.MSG_HEARTBEAT_RES || info.type === ClinkMsgType.HEARTBEAT_ACK) {
+            this.consecutiveFailures = 0;
+            this.isHandshakeComplete = true;
+          }
+
+          // 收到 Type 103 主通道握手挑战 -> 仅响应 Type 118 用户身份（后台静默保活）
+          if (info.type === ClinkMsgType.MSG_MAIN_INIT) {
+            const byUserName = Protocol.buildClientUserName(
+              this.options.loginInfo.userName,
+              this.options.loginInfo.userId,
+            );
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(byUserName);
             }
           }
 
-          // 监听官方客户端状态通知 (Type 119/120/137 会话挤占/离线)
-          if (info.type === 119 || info.type === 120 || info.type === 137) {
+          // 监听官方客户端状态通知 (Type 119 离线 / 120 挤占锁定 / 137 主通道结束)
+          if (
+            info.type === ClinkMsgType.MSG_MAIN_CLIENT_OFFLINE ||
+            info.type === ClinkMsgType.MSG_MAIN_DESKTOP_LOCKED ||
+            info.type === ClinkMsgType.MSG_END_MAIN
+          ) {
             this.log('warn', `收到服务端会话通知 (Type ${info.type})，检测到外部官方客户端接入，系统主动避让 5 分钟`);
             triggerReconnect(4001, `Type ${info.type} preempt`);
             return;

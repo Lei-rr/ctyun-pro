@@ -16,6 +16,7 @@ export interface LoginInfo {
   userName: string;
   mobilephone?: string;
   email?: string;
+  token?: string;
 }
 
 export interface DesktopInfo {
@@ -45,14 +46,32 @@ export interface Desktop {
   isPool?: boolean;
 }
 
+export interface DesktopStateInfo {
+  objType: number;
+  objId: string;
+  desktopId: number | string;
+  desktopState?: string;
+  runningTask?: any;
+  runningTaskName?: string | null;
+  useStatus?: string | number;
+  useStatusText?: string;
+  useStatusColor?: string;
+}
+
 export class CtYunClient {
-  public static readonly VERSION = '103020001';
+  public static readonly VERSION = '204000100';
   public static readonly DEVICE_TYPE = '60';
   public static readonly BASE_URL = 'https://desk.ctyun.cn:8810';
   public readonly baseUrl = CtYunClient.BASE_URL;
 
   private deviceCode: string;
   public loginInfo: LoginInfo | null = null;
+
+  private static requestIdCounter = 0;
+
+  public static getNextRequestId(): string {
+    return (Date.now() + (++CtYunClient.requestIdCounter)).toString();
+  }
 
   constructor(deviceCode: string) {
     this.deviceCode = deviceCode;
@@ -72,18 +91,26 @@ export class CtYunClient {
       'ctg-devicetype': CtYunClient.DEVICE_TYPE,
       'ctg-version': CtYunClient.VERSION,
       'ctg-devicecode': this.deviceCode,
+      'ctg-appmodel': '2',
+      'ctg-softwarecode': 'web_client',
       Referer: 'https://pc.ctyun.cn/',
     };
 
     if (this.loginInfo) {
       const timestamp = Date.now().toString();
+      const requestId = CtYunClient.getNextRequestId();
       headers['ctg-userid'] = this.loginInfo.userId.toString();
       headers['ctg-tenantid'] = this.loginInfo.tenantId.toString();
       headers['ctg-timestamp'] = timestamp;
-      headers['ctg-requestid'] = timestamp;
+      headers['ctg-requestid'] = requestId;
 
-      const signStr = `${CtYunClient.DEVICE_TYPE}${timestamp}${this.loginInfo.tenantId}${timestamp}${this.loginInfo.userId}${CtYunClient.VERSION}${this.loginInfo.secretKey}`;
-      headers['ctg-signaturestr'] = Protocol.md5(signStr);
+      // 官方标准签名规范: generatorSignJS({ deviceType, requestId, tenantId, timestamp, userId, version, secretKey }).toUpperCase()
+      const signStr = `${CtYunClient.DEVICE_TYPE}${requestId}${this.loginInfo.tenantId}${timestamp}${this.loginInfo.userId}${CtYunClient.VERSION}${this.loginInfo.secretKey}`;
+      headers['ctg-signaturestr'] = Protocol.md5(signStr).toUpperCase();
+
+      if (this.loginInfo.token) {
+        headers['Cookie'] = `token=${this.loginInfo.token}`;
+      }
     }
 
     return headers;
@@ -147,7 +174,7 @@ export class CtYunClient {
     formData.append('deviceName', 'Chrome浏览器');
     formData.append('deviceType', CtYunClient.DEVICE_TYPE);
     formData.append('deviceModel', 'Windows NT 10.0; Win64; x64');
-    formData.append('appVersion', '3.2.0');
+    formData.append('appVersion', '4.0.1');
     formData.append('sysVersion', 'Windows NT 10.0; Win64; x64');
     formData.append('clientVersion', CtYunClient.VERSION);
 
@@ -252,7 +279,7 @@ export class CtYunClient {
         accessToken,
         osType: 'Windows',
         deviceModel: 'Windows NT 10.0; Win64; x64',
-        appVersion: '3.2.0',
+        appVersion: '4.0.1',
         deviceCode: this.deviceCode,
         deviceName: 'Chrome浏览器',
         deviceType: CtYunClient.DEVICE_TYPE,
@@ -317,7 +344,7 @@ export class CtYunClient {
     formData.append('deviceCode', this.deviceCode);
     formData.append('deviceModel', 'Windows NT 10.0; Win64; x64');
     formData.append('sysVersion', 'Windows NT 10.0; Win64; x64');
-    formData.append('appVersion', '3.7.0');
+    formData.append('appVersion', '4.0.1');
     formData.append('hostName', 'pc.ctyun.cn');
     formData.append('deviceInfo', 'Win32');
 
@@ -466,6 +493,46 @@ export class CtYunClient {
   }
 
   /**
+   * 7.1 获取云电脑实时运行状态 (对齐官方 api/desktop/client/state 轻量级毫秒级接口)
+   */
+  public async getDesktopState(desktopId: string, objType = 0): Promise<DesktopStateInfo | null> {
+    try {
+      const res = await safeFetch(`${CtYunClient.BASE_URL}/api/desktop/client/state`, {
+        method: 'POST',
+        headers: {
+          ...this.getHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify([{ objId: String(desktopId), objType }]),
+      });
+      const json = (await res.json()) as { code: number; data?: DesktopStateInfo[] };
+      if (json.code === 0 && Array.isArray(json.data) && json.data.length > 0) {
+        return json.data[0];
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * 7.2 修改云电脑官方昵称/备注 (对齐官方 api/selforder/order/desktop/modifyDesktopNickName)
+   */
+  public async modifyDesktopNickName(desktopId: string, nickName: string): Promise<boolean> {
+    const res = await safeFetch(`${CtYunClient.BASE_URL}/api/selforder/order/desktop/modifyDesktopNickName`, {
+      method: 'POST',
+      headers: {
+        ...this.getHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ desktopId: String(desktopId), nickName }),
+    });
+    const json = (await res.json()) as { code: number; msg?: string; data?: boolean };
+    if (json.code === 0 && json.data) {
+      return true;
+    }
+    throw new Error(json.msg || '修改云电脑名称失败');
+  }
+
+  /**
    * 8. 获取云电脑连接信息 (WebSocket host & 证书凭证)
    * 完全对齐官方进入云电脑标准：支持普通机直连与政企桌面池动态分派连接
    */
@@ -499,6 +566,10 @@ export class CtYunClient {
     formData.append('deviceName', 'Chrome浏览器');
     formData.append('deviceType', CtYunClient.DEVICE_TYPE);
     formData.append('deviceModel', 'Windows NT 10.0; Win64; x64');
+    formData.append('sysVersion', 'Windows NT 10.0; Win64; x64');
+    formData.append('appVersion', '4.0.1');
+    formData.append('hostName', 'pc.ctyun.cn');
+    formData.append('hardwareFeatureCode', this.deviceCode);
     formData.append('desktopId', String(desktopId));
     formData.append('clientVersion', CtYunClient.VERSION);
     formData.append('specifiedCertCategory', '1');
@@ -528,11 +599,11 @@ export class CtYunClient {
 
   /**
    * 8.0 模拟官方上报活动事件与桌面进入/电源管理事件
-   * 支持 on (开机, 1), awake (唤醒, 18), shutdown (关机, 2), reset (重启, 3), force_off (强制关机, 4), force_reboot (强制重启, 5)
+   * 支持 on (开机, 1), awake (唤醒, 18), shutdown (关机, 2), reset (重启, 3), restore (恢复/开机重置, 6), force_off (强制关机, 4), force_reboot (强制重启, 5)
    */
   public async operateDesktop(
     desktopId: string,
-    operation: 'on' | 'awake' | 'shutdown' | 'reset' | 'off' | 'stop' | 'reboot' | 'restart' | 'force_off' | 'force_reboot',
+    operation: 'on' | 'awake' | 'shutdown' | 'reset' | 'restore' | 'off' | 'stop' | 'reboot' | 'restart' | 'force_off' | 'force_reboot',
     objType = 0,
   ): Promise<string> {
     const typeMap: Record<string, number> = {
@@ -547,6 +618,7 @@ export class CtYunClient {
       restart: 3,
       force_off: 4,
       force_reboot: 5,
+      restore: 6,
       awake: 18,
       wake: 18,
       wakeup: 18,
@@ -577,6 +649,7 @@ export class CtYunClient {
         3: '重启指令已下发，正在重启...',
         4: '强制关机指令已下发...',
         5: '强制重启指令已下发，正在重启...',
+        6: '恢复指令已下发...',
       };
       return opNames[opType] || '电源控制指令已下发';
     }
@@ -588,6 +661,40 @@ export class CtYunClient {
       return '云电脑已在运行中或处于可用状态';
     }
     throw new Error(json.msg || `操作失败 (Code: ${json.code})`);
+  }
+
+  /**
+   * 8.1 官方标准: 会话释放与退出连接上报 (对齐 api/desktop/client/quitConnect)
+   */
+  public async quitConnect(desktopId: string, objType = 0): Promise<boolean> {
+    try {
+      const formData = new URLSearchParams();
+      formData.append('objId', desktopId);
+      formData.append('objType', String(objType));
+      formData.append('osType', '15');
+      formData.append('deviceId', CtYunClient.DEVICE_TYPE);
+      formData.append('deviceCode', this.deviceCode);
+      formData.append('deviceName', 'Chrome浏览器');
+      formData.append('sysVersion', 'Windows NT 10.0; Win64; x64');
+      formData.append('appVersion', '4.0.1');
+      formData.append('hostName', 'pc.ctyun.cn');
+      formData.append('ipAddress', '');
+      formData.append('macAddress', '');
+      formData.append('hardwareFeatureCode', this.deviceCode);
+
+      const res = await safeFetch(`${CtYunClient.BASE_URL}/api/desktop/client/quitConnect`, {
+        method: 'POST',
+        headers: {
+          ...this.getHeaders(),
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: formData.toString(),
+      });
+      const json = (await res.json()) as { code: number; msg?: string };
+      return json.code === 0 || json.code === 200;
+    } catch {
+      return false;
+    }
   }
 
   /**

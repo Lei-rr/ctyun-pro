@@ -216,6 +216,48 @@ export class ProfileManager {
     return this.manualShutdownDesktops.has(desktopCode);
   }
 
+  public async renameDesktop(desktopCode: string, newNickName: string): Promise<boolean> {
+    const trimmed = (newNickName || '').trim();
+    if (!trimmed) throw new Error('云电脑名称不能为空');
+
+    const matched = this.findDesktopByCode(desktopCode);
+    if (!matched) throw new Error('未找到指定云电脑');
+
+    const { accountName, desktop } = matched;
+    const client = this.getClient(accountName);
+    if (!client.loginInfo) throw new Error(`账号 [${accountName}] 未登录`);
+
+    const dId = String(desktop.desktopId || desktop.desktopCode);
+    const oldName = desktop.desktopName || desktop.desktopCode;
+
+    // 1. 调用天翼云官方 API 修改云电脑名称
+    await client.modifyDesktopNickName(dId, trimmed);
+
+    // 2. 更新内存中云电脑名称
+    desktop.desktopName = trimmed;
+    const state = this.accountStates.get(accountName);
+    if (state && state.desktops) {
+      const target = state.desktops.find((d) => String(d.desktopCode) === String(desktopCode) || String(d.desktopId) === dId);
+      if (target) {
+        target.desktopName = trimmed;
+      }
+    }
+
+    // 3. 更新配置中缓存的云电脑列表并持久化
+    const acc = this.accounts.get(accountName);
+    if (acc && acc.desktops) {
+      const targetConfig = acc.desktops.find((d) => String(d.desktopCode) === String(desktopCode) || String(d.desktopId) === dId);
+      if (targetConfig) {
+        targetConfig.desktopName = trimmed;
+      }
+    }
+
+    this.saveToDisk();
+    this.notifyStatusChange();
+    this.logger.addLog('info', `[${accountName} - ${trimmed}] 云电脑名称已成功修改为 [${trimmed}] (原名: [${oldName}])`);
+    return true;
+  }
+
   public setManualShutdown(desktopCode: string, manual: boolean): void {
     if (manual) {
       this.manualShutdownDesktops.add(desktopCode);
@@ -665,7 +707,7 @@ export class ProfileManager {
 
     const client = this.getClient(accountName);
     let attempts = 0;
-    const maxAttempts = 60; // 最多轮询 5 分钟 (每 5 秒一次)
+    const maxAttempts = 15; // 官方标准: 20s 一次轮询，最长 5 分钟 (15 次)
 
     const timer = setInterval(async () => {
       attempts++;
@@ -719,7 +761,7 @@ export class ProfileManager {
         // 超时后执行一次全量刷新校准
         this.reloadDesktops(accountName).catch(() => {});
       }
-    }, 5000);
+    }, 20000);
 
     this.powerTrackingTimers.set(trackingKey, timer);
   }
@@ -731,17 +773,19 @@ export class ProfileManager {
       throw new Error(`已存在名为 [${trimmed}] 的账号`);
     }
 
-    const acc = this.accounts.get(oldName);
+    const acc = this.getAccount(oldName);
     if (!acc) throw new Error('未找到该账号');
+    const realOldName = acc.name;
+    if (realOldName === trimmed) return;
 
-    const state = this.accountStates.get(oldName);
-    const client = this.clients.get(oldName);
+    const state = this.accountStates.get(realOldName);
+    const client = this.clients.get(realOldName);
 
-    this.keepaliveService.stopWorkers(oldName);
-    this.taskStrategyService.renameHangSession(oldName, trimmed);
-    this.accounts.delete(oldName);
-    this.accountStates.delete(oldName);
-    if (client) this.clients.delete(oldName);
+    this.keepaliveService.stopWorkers(realOldName);
+    this.taskStrategyService.renameHangSession(realOldName, trimmed);
+    this.accounts.delete(realOldName);
+    this.accountStates.delete(realOldName);
+    if (client) this.clients.delete(realOldName);
 
     acc.name = trimmed;
     this.accounts.set(trimmed, acc);
@@ -754,16 +798,16 @@ export class ProfileManager {
       this.clients.set(trimmed, client);
     }
 
-    const pts = this.todayPointsCache.get(oldName);
+    const pts = this.todayPointsCache.get(realOldName);
     if (pts) {
-      this.todayPointsCache.delete(oldName);
+      this.todayPointsCache.delete(realOldName);
       this.todayPointsCache.set(trimmed, pts);
     }
 
     // 迁移该账号正在跟踪的电源状态轮询定时器键名
     for (const [key, timer] of Array.from(this.powerTrackingTimers.entries())) {
-      if (key.startsWith(`${oldName}:`)) {
-        const desktopId = key.slice(oldName.length + 1);
+      if (key.startsWith(`${realOldName}:`)) {
+        const desktopId = key.slice(realOldName.length + 1);
         this.powerTrackingTimers.delete(key);
         this.powerTrackingTimers.set(`${trimmed}:${desktopId}`, timer);
       }
@@ -771,7 +815,7 @@ export class ProfileManager {
 
     this.saveToDisk();
     this.notifyStatusChange();
-    this.logger.addLog('info', `[${oldName}] 备注名称已修改为 [${trimmed}]`);
+    this.logger.addLog('info', `[${realOldName}] 备注名称已修改为 [${trimmed}]`);
 
     if (acc.loginInfo) {
       this.reloadDesktops(trimmed).catch(() => {});

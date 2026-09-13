@@ -23,6 +23,7 @@ import { Badge } from '@/shared/ui/badge';
 import AccountRenameDialog from '@/components/dialogs/AccountRenameDialog.vue';
 import PointsTaskDialog from '@/components/dialogs/PointsTaskDialog.vue';
 import PowerOperateDialog, { type PowerTarget } from '@/components/dialogs/PowerOperateDialog.vue';
+import DesktopRenameDialog from '@/components/dialogs/DesktopRenameDialog.vue';
 import {
   Table,
   TableHeader,
@@ -49,6 +50,17 @@ const renameOldName = ref('');
 function openRename(name: string) {
   renameOldName.value = name;
   showRenameModal.value = true;
+}
+
+// 云电脑重命名
+const showDesktopRenameModal = ref(false);
+const renameDesktopCode = ref('');
+const renameDesktopCurrentName = ref('');
+
+function openDesktopRename(desktopCode: string, currentName: string) {
+  renameDesktopCode.value = desktopCode;
+  renameDesktopCurrentName.value = currentName || desktopCode;
+  showDesktopRenameModal.value = true;
 }
 
 // 电源控制确认弹窗
@@ -378,9 +390,18 @@ onUnmounted(() => {
                 <template v-for="desktop in account.desktops" :key="desktop.desktopCode">
                   <TableRow class="border-border/30 hover:bg-muted/30 transition-colors">
                     <TableCell class="py-2.5 font-medium text-foreground truncate">
-                      <div class="flex items-center gap-2 min-w-0">
+                      <div class="flex items-center gap-2 min-w-0 group/dtname">
                         <Monitor class="size-4 text-muted-foreground shrink-0" />
                         <span class="truncate" :title="desktop.desktopName">{{ desktop.desktopName || '云电脑' }}</span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="size-5 rounded-sm p-0 opacity-0 group-hover/dtname:opacity-100 transition-opacity text-muted-foreground hover:text-foreground shrink-0"
+                          title="修改云电脑名称"
+                          @click="openDesktopRename(desktop.desktopCode, desktop.desktopName)"
+                        >
+                          <Pencil class="size-3" />
+                        </Button>
                         <Badge v-if="desktop.isPool || (desktop.desktopName && desktop.desktopName.includes('桌面池'))" variant="outline" class="h-4 px-1 text-[9px] font-normal border-amber-500/30 text-amber-500 shrink-0">
                           政企桌面池
                         </Badge>
@@ -531,6 +552,15 @@ onUnmounted(() => {
                 <div class="flex items-center gap-2 font-medium text-sm text-foreground min-w-0">
                   <Monitor class="size-4 text-muted-foreground shrink-0" />
                   <span class="truncate">{{ desktop.desktopName || '云电脑' }}</span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground shrink-0"
+                    title="修改云电脑名称"
+                    @click="openDesktopRename(desktop.desktopCode, desktop.desktopName)"
+                  >
+                    <Pencil class="size-3" />
+                  </Button>
                   <Badge variant="outline" class="h-4 px-1.5 text-[10px] font-mono border-primary/40 text-primary shrink-0">
                      {{ parseDesktopSpec(desktop) }}
                   </Badge>
@@ -673,6 +703,13 @@ onUnmounted(() => {
     <PowerOperateDialog
       v-model:open="showPowerModal"
       :target="powerTarget"
+    />
+
+    <!-- 弹窗 4: 云电脑名称重命名弹窗 -->
+    <DesktopRenameDialog
+      v-model:open="showDesktopRenameModal"
+      :desktop-code="renameDesktopCode"
+      :current-name="renameDesktopCurrentName"
     />
   </div>
 </template>

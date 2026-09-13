@@ -231,11 +231,12 @@ export class KeepaliveService {
         }
 
         let ready = false;
-        for (let waitSec = 0; waitSec < 60; waitSec++) {
-          await new Promise((r) => setTimeout(r, 5000));
+        const maxWaitLoops = 15; // 20s 轮询一次，最长 5 分钟 (15 次)
+        for (let waitLoop = 1; waitLoop <= maxWaitLoops; waitLoop++) {
+          await new Promise((r) => setTimeout(r, 20000));
           try {
             const latestList = await client.getDesktopList();
-            const cur = latestList.find((item) => String(item.desktopId) === dIdStr);
+            const cur = latestList.find((item) => String(item.desktopId) === dIdStr || String(item.desktopCode) === String(d.desktopCode));
             if (cur && (cur.useStatusText === '运行中' || cur.useStatusText === '离线运行')) {
               d.useStatusText = cur.useStatusText;
               ready = true;

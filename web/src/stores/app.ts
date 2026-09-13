@@ -1089,7 +1089,18 @@ export const useAppStore = defineStore('app', () => {
       const data = await res.json();
       if (!data.success) throw new Error(data.msg || '修改备注失败');
       toast.success(`账号备注已修改为 [${newName}]`);
-      fetchStatus();
+      await fetchStatus();
+    },
+    renameDesktop: async (desktopCode: string, newName: string) => {
+      const res = await fetch(`/api/desktops/${encodeURIComponent(desktopCode)}/rename`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ desktopName: newName }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.msg || '修改云电脑名称失败');
+      toast.success(`云电脑名称已修改为 [${newName}]`);
+      await fetchStatus();
     },
     fetchPointsAndTasks: async (accountUserOrName: string) => {
       const res = await fetch(`/api/profiles/${encodeURIComponent(accountUserOrName)}/points`, {

@@ -7,7 +7,8 @@ import { AppDialog } from '@/shared/ui/dialog';
 
 const props = defineProps<{
   open: boolean;
-  accountName: string;
+  desktopCode: string;
+  currentName: string;
 }>();
 
 const emit = defineEmits<{
@@ -23,18 +24,19 @@ watch(
   () => props.open,
   (val) => {
     if (val) {
-      inputVal.value = props.accountName;
+      inputVal.value = props.currentName || '';
       errorMsg.value = '';
     }
   },
 );
 
 async function submitRename() {
-  if (!inputVal.value.trim() || !props.accountName) return;
+  const trimmed = inputVal.value.trim();
+  if (!trimmed || !props.desktopCode) return;
   loading.value = true;
   errorMsg.value = '';
   try {
-    await store.renameAccount(props.accountName, inputVal.value.trim());
+    await store.renameDesktop(props.desktopCode, trimmed);
     emit('update:open', false);
   } catch (err: any) {
     errorMsg.value = err.message || '修改失败，请重试';
@@ -48,17 +50,17 @@ async function submitRename() {
   <AppDialog
     :open="open"
     @update:open="emit('update:open', $event)"
-    title="修改账号备注"
-    description="给天翼云账号设置一个更易辨识的备注名称"
+    title="修改云电脑名称"
+    description="同步修改天翼云官方控制台显示的云电脑昵称"
     content-class="sm:max-w-sm"
   >
     <form @submit.prevent="submitRename" class="space-y-3.5">
       <div class="space-y-1.5">
-        <label class="text-xs font-medium text-foreground">账号新备注</label>
+        <label class="text-xs font-medium text-foreground">云电脑新名称</label>
         <Input
           type="text"
           v-model="inputVal"
-          placeholder="例如：主账号 / 二号机"
+          placeholder="例如：挂机专用机 / 开发机"
           required
           autofocus
           class="h-9"
