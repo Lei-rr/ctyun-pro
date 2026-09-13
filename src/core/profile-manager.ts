@@ -56,6 +56,8 @@ export class ProfileManager {
   private manualShutdownDesktops: Set<string> = new Set();
   // 账号云电脑同步互斥锁 (按账号 Promise 排重，防止并发多重触发)
   private reloadDesktopsPromises: Map<string, Promise<void>> = new Map();
+  // 电源操作异步状态轮询定时器追踪 (按 desktopCode 跟踪，防止重复轮询及账户卸载后野定时器)
+  private powerTrackingTimers: Map<string, NodeJS.Timeout> = new Map();
 
   constructor() {
     this.keepaliveService = new KeepaliveService(this.logger, () => this.notifyStatusChange());
@@ -693,6 +695,13 @@ export class ProfileManager {
     desktopId: string,
     operation: 'on' | 'shutdown' | 'reset',
   ): void {
+    const trackingKey = `${accountName}:${desktopId}`;
+    const existingTimer = this.powerTrackingTimers.get(trackingKey);
+    if (existingTimer) {
+      clearInterval(existingTimer);
+      this.powerTrackingTimers.delete(trackingKey);
+    }
+
     const client = this.getClient(accountName);
     let attempts = 0;
     const maxAttempts = 60; // 最多轮询 5 分钟 (每 5 秒一次)
@@ -700,6 +709,12 @@ export class ProfileManager {
     const timer = setInterval(async () => {
       attempts++;
       try {
+        if (!this.accounts.has(accountName)) {
+          clearInterval(timer);
+          this.powerTrackingTimers.delete(trackingKey);
+          return;
+        }
+
         const list = await client.getDesktopList();
         const current = list.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
         const state = this.accountStates.get(accountName);
@@ -713,6 +728,7 @@ export class ProfileManager {
           if (operation === 'on' || operation === 'reset') {
             if (current.useStatusText === '运行中') {
               clearInterval(timer);
+              this.powerTrackingTimers.delete(trackingKey);
               target.status = 'connecting';
               this.logger.addLog('success', `[${dPrefix}] 云电脑已成功开机，正在接入保活...`);
               this.notifyStatusChange();
@@ -723,6 +739,7 @@ export class ProfileManager {
           } else if (operation === 'shutdown') {
             if (current.useStatusText === '已关机' || current.useStatusText === '关机') {
               clearInterval(timer);
+              this.powerTrackingTimers.delete(trackingKey);
               target.status = 'stopped';
               this.logger.addLog('info', `[${dPrefix}] 云电脑已安全关机，已锁定保活防止误唤醒`);
               this.notifyStatusChange();
@@ -735,10 +752,13 @@ export class ProfileManager {
 
       if (attempts >= maxAttempts) {
         clearInterval(timer);
+        this.powerTrackingTimers.delete(trackingKey);
         // 超时后执行一次全量刷新校准
         this.reloadDesktops(accountName).catch(() => {});
       }
     }, 5000);
+
+    this.powerTrackingTimers.set(trackingKey, timer);
   }
 
   public updateAccountName(oldName: string, newName: string): void {
@@ -775,6 +795,15 @@ export class ProfileManager {
     if (pts) {
       this.todayPointsCache.delete(oldName);
       this.todayPointsCache.set(trimmed, pts);
+    }
+
+    // 迁移该账号正在跟踪的电源状态轮询定时器键名
+    for (const [key, timer] of Array.from(this.powerTrackingTimers.entries())) {
+      if (key.startsWith(`${oldName}:`)) {
+        const desktopId = key.slice(oldName.length + 1);
+        this.powerTrackingTimers.delete(key);
+        this.powerTrackingTimers.set(`${trimmed}:${desktopId}`, timer);
+      }
     }
 
     this.saveToDisk();
@@ -976,7 +1005,14 @@ export class ProfileManager {
   public removeAccount(name: string): void {
     // 1. 若该账号正在执行后台挂机，立即释放挂机长连接与状态
     this.taskStrategyService.stopHang(name).catch(() => {});
-    // 2. 停止该账号下的所有保活信道与心跳 Worker
+    // 2. 清理该账号正在跟踪的电源状态轮询定时器
+    for (const [key, timer] of this.powerTrackingTimers.entries()) {
+      if (key.startsWith(`${name}:`)) {
+        clearInterval(timer);
+        this.powerTrackingTimers.delete(key);
+      }
+    }
+    // 3. 停止该账号下的所有保活信道与心跳 Worker
     this.keepaliveService.stopWorkers(name);
     this.accounts.delete(name);
     this.clients.delete(name);
