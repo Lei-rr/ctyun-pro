@@ -780,11 +780,12 @@ export async function createServer() {
   fastify.get('/api/desktops/:desktopCode', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { desktopCode: string };
-    const instances = manager.getAllInstancesSummary();
-    const inst = instances.find(i => i.desktopCode === params.desktopCode);
-    if (!inst) {
+    const res = manager.findDesktopByCode(params.desktopCode);
+    if (!res) {
       return reply.code(404).send({ success: false, msg: '云电脑未找到' });
     }
+    const instances = manager.getAllInstancesSummary();
+    const inst = instances.find(i => i.desktopCode === res.desktop.desktopCode) || res.desktop;
     return { success: true, data: inst };
   });
 
@@ -806,16 +807,15 @@ export async function createServer() {
     try {
       const params = request.params as { desktopCode: string };
       const body = request.body as { action: 'on' | 'off' | 'reboot' | 'start' | 'stop' | 'restart' };
-      const instances = manager.getAllInstancesSummary();
-      const inst = instances.find(i => i.desktopCode === params.desktopCode);
-      if (!inst) {
+      const res = manager.findDesktopByCode(params.desktopCode);
+      if (!res) {
         return reply.code(404).send({ success: false, msg: '云电脑未找到' });
       }
       let op: 'on' | 'shutdown' | 'reset' = 'on';
       if (body.action === 'off' || body.action === 'stop') op = 'shutdown';
       else if (body.action === 'reboot' || body.action === 'restart') op = 'reset';
 
-      const msg = await manager.operateDesktop(inst.profileName, inst.desktopCode, op);
+      const msg = await manager.operateDesktop(res.accountName, params.desktopCode, op);
       return { success: true, msg };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });
@@ -828,17 +828,16 @@ export async function createServer() {
     try {
       const params = request.params as { desktopCode: string };
       const body = (request.body as { action?: 'start' | 'stop' }) || {};
-      const instances = manager.getAllInstancesSummary();
-      const inst = instances.find(i => i.desktopCode === params.desktopCode);
-      if (!inst) {
+      const res = manager.findDesktopByCode(params.desktopCode);
+      if (!res) {
         return reply.code(404).send({ success: false, msg: '云电脑未找到' });
       }
 
       if (body.action === 'stop') {
-        await manager.stopHang(inst.profileName);
+        await manager.stopHang(res.accountName);
         return { success: true, msg: '已成功中止挂机任务，并恢复保活长连接' };
       } else {
-        const msg = await manager.manualHang(inst.profileName);
+        const msg = await manager.manualHang(res.accountName);
         return { success: true, msg };
       }
     } catch (err: any) {
@@ -852,18 +851,17 @@ export async function createServer() {
     try {
       const params = request.params as { desktopCode: string };
       const body = (request.body as { prodId?: number; costPoints?: number; prodType?: string }) || {};
-      const instances = manager.getAllInstancesSummary();
-      const inst = instances.find(i => i.desktopCode === params.desktopCode);
-      if (!inst) {
+      const res = manager.findDesktopByCode(params.desktopCode);
+      if (!res) {
         return reply.code(404).send({ success: false, msg: '云电脑未找到' });
       }
 
       const msg = await manager.manualRedeem(
-        inst.profileName,
+        res.accountName,
         body.prodId,
         body.costPoints,
         body.prodType,
-        params.desktopCode,
+        params.desktopCode
       );
       return { success: true, msg };
     } catch (err: any) {
