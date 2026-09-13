@@ -63,7 +63,7 @@ export class HangTask {
       cur = Math.min(s.totalProgress || 3600, cur + elapsed);
     }
     const total = s.totalProgress || 3600;
-    // 只要推演达到或超过 3600s，立即对外部调用隐藏，杜绝前端卡片滞留假死
+    // 只要推演达到或超过 3600s，立即对外部调用隐藏，杜绝前端卡片状态异常残留
     if (cur >= total || s.status !== 'running') {
       return null;
     }
@@ -430,7 +430,7 @@ export class HangTask {
                         progressUpdateTimer = null;
                       }
 
-                      // 立即从全局会话中移除并回调清空 hangStatus，毫秒级广播复位，杜绝前端卡片滞留假死
+                      // 立即从全局会话中移除并回调清空 hangStatus，毫秒级广播复位，杜绝前端卡片状态异常残留
                       activeHangSessions.delete(accountName);
                       options.onProgress?.(totalProgress, totalProgress);
 
@@ -495,7 +495,7 @@ export class HangTask {
           const reasonStr = reason?.toString() || '';
           if (isTerminated) return;
 
-          // 核心合规：断开时毫秒级清空 hangStatus 广播复位，杜绝前端卡片滞留假死
+          // 核心合规：断开时毫秒级清空 hangStatus 广播复位，杜绝前端卡片状态异常残留
           activeHangSessions.delete(accountName);
           options.onProgress?.(session.currentProgress, totalProgress);
 

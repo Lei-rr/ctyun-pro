@@ -253,7 +253,7 @@ export class TaskScheduler {
             reason = `命中指定兑换日期 (${today})`;
           }
         } else if (rConf.scheduleType === 'interval_days') {
-          const interval = rConf.intervalDays || 30;
+          const interval = rConf.intervalDays || 4;
           if (!rConf.lastRedeemDate) {
             shouldRedeem = true;
             reason = '首次执行间隔兑换';

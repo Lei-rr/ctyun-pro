@@ -322,7 +322,6 @@ export async function createServer() {
     await manager.addOrUpdateAccount({
       name,
       user,
-      password: body.password || '',
       autoSign: body.autoSign !== false,
       autoStart: body.autoStart !== false,
       taskConfig: body.taskConfig || { enabled: true, scheduleTime: StrategyService.generateRandomSchedule(), autoHang: true, autoAiChat: true },
@@ -486,7 +485,6 @@ export async function createServer() {
       await manager.addOrUpdateAccount({
         name,
         user,
-        password: body.password || '',
         deviceCode: client.getDeviceCode(),
         loginInfo,
         autoStart: true,

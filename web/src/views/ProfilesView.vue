@@ -99,7 +99,7 @@ function getRedeemScheduleText(account: Account): string {
   const r = account.redeemConfig;
   if (!r || !r.enabled) return '';
   if (r.scheduleType === 'monthly_day') return `每月 ${r.monthlyDay || 28} 号`;
-  if (r.scheduleType === 'interval_days') return `每 ${r.intervalDays || 30} 天`;
+  if (r.scheduleType === 'interval_days') return `每 ${r.intervalDays || 4} 天`;
   if (r.scheduleType === 'specific_date') return `${r.specificDate || '指定日'}`;
   if (r.scheduleType === 'daily') return `每日`;
   return `月末`;
