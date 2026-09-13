@@ -8,6 +8,7 @@ export interface ExternalYieldInfo {
   reason: string;
   triggeredAt: number;
   durationMinutes: number;
+  timer?: NodeJS.Timeout;
 }
 
 export interface LeaseHolder {
@@ -93,11 +94,22 @@ export class DesktopSessionArbiter extends EventEmitter {
       hour12: false,
     });
 
+    const existing = this.externalYields.get(key);
+    if (existing?.timer) {
+      clearTimeout(existing.timer);
+    }
+
+    const timer = setTimeout(() => {
+      this.clearYield(key);
+    }, duration * 60 * 1000);
+    if (timer.unref) timer.unref();
+
     this.externalYields.set(key, {
       until,
       reason,
       triggeredAt: now,
       durationMinutes: duration,
+      timer,
     });
 
     this.logger?.addLog(
@@ -150,7 +162,9 @@ export class DesktopSessionArbiter extends EventEmitter {
    */
   public clearYield(desktopId: string): void {
     const key = String(desktopId);
-    if (this.externalYields.has(key)) {
+    const existing = this.externalYields.get(key);
+    if (existing) {
+      if (existing.timer) clearTimeout(existing.timer);
       this.externalYields.delete(key);
       this.emit('yield:cleared', { desktopId: key });
       this.logger?.addLog('info', `[桌面仲裁器] 桌面 ${desktopId} 外部避让状态已主动解除`);
@@ -334,6 +348,9 @@ export class DesktopSessionArbiter extends EventEmitter {
           await holder.releaseCallback();
         } catch {}
       }
+    }
+    for (const info of this.externalYields.values()) {
+      if (info.timer) clearTimeout(info.timer);
     }
     this.activeLeases.clear();
     this.externalYields.clear();

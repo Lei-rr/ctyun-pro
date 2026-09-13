@@ -11,6 +11,11 @@ export interface Desktop {
   useStatusText: string;
   status: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
   lastHeartbeat?: string;
+  yieldStatus?: {
+    yielding: boolean;
+    remainingSeconds: number;
+    reason?: string;
+  };
 }
 
 export interface Account {

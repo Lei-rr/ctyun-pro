@@ -33,6 +33,7 @@ export class KeepAliveWorker {
   private isRunning = false;
   private isReconnecting = false;
   private isPaused = false;
+  private yieldClearedHandler: ((data: { desktopId: string }) => void) | null = null;
 
   constructor(options: KeepAliveWorkerOptions) {
     this.options = options;
@@ -48,16 +49,42 @@ export class KeepAliveWorker {
     this.options.onLog?.(level, `[${this.logPrefix}] ${msg}`);
   }
 
+  private bindYieldCleared(): void {
+    if (this.yieldClearedHandler) return;
+    const dId = String(this.options.desktop.desktopId);
+    this.yieldClearedHandler = ({ desktopId }) => {
+      if (String(desktopId) === dId && this.isRunning && !this.isPaused) {
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
+        this.isReconnecting = false;
+        this.log('info', '外部客户端避让期已解除，立即尝试恢复保活长连接');
+        this.connect();
+      }
+    };
+    DesktopSessionArbiter.getInstance().on('yield:cleared', this.yieldClearedHandler);
+  }
+
+  private unbindYieldCleared(): void {
+    if (this.yieldClearedHandler) {
+      DesktopSessionArbiter.getInstance().off('yield:cleared', this.yieldClearedHandler);
+      this.yieldClearedHandler = null;
+    }
+  }
+
   public start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
     this.isPaused = false;
+    this.bindYieldCleared();
     this.connect();
   }
 
   public stop(): void {
     this.isRunning = false;
     this.isPaused = false;
+    this.unbindYieldCleared();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

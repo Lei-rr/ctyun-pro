@@ -357,7 +357,20 @@ export class ProfileManager {
         state.todayPoints = (pts && pts.date === todayStr) ? (pts.todayPoints ?? 0) : 0;
       }
     }
-    return Array.from(this.accountStates.values()).map((state) => this.sanitizeAccount(state));
+    const arbiter = DesktopSessionArbiter.getInstance();
+    return Array.from(this.accountStates.values()).map((state) => {
+      const sanitized = this.sanitizeAccount(state);
+      if (sanitized.desktops && Array.isArray(sanitized.desktops)) {
+        sanitized.desktops = sanitized.desktops.map((d: any) => {
+          const yieldStatus = arbiter.getYieldStatus(String(d.desktopId));
+          return {
+            ...d,
+            yieldStatus: yieldStatus.yielding ? yieldStatus : undefined,
+          };
+        });
+      }
+      return sanitized;
+    });
   }
 
   /**

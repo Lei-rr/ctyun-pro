@@ -147,6 +147,18 @@ onMounted(() => {
           acc.hangStatus = undefined;
         }
       }
+      if (acc.desktops && Array.isArray(acc.desktops)) {
+        for (const dt of acc.desktops) {
+          if (dt.yieldStatus?.yielding) {
+            if (dt.yieldStatus.remainingSeconds > 1) {
+              dt.yieldStatus.remainingSeconds -= 1;
+            } else {
+              dt.yieldStatus.yielding = false;
+              dt.yieldStatus.remainingSeconds = 0;
+            }
+          }
+        }
+      }
     }
   }, 1000);
 });
@@ -389,22 +401,24 @@ onUnmounted(() => {
                         variant="secondary"
                         class="h-5 px-2 text-[11px] font-normal"
                         :class="{
-                          'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': account.hangStatus?.running || desktop.status === 'hanging' || desktop.useStatusText === '运行中' || desktop.status === 'connected',
-                          'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': !(account.hangStatus?.running || desktop.status === 'hanging') && desktop.useStatusText !== '运行中' && desktop.status === 'connecting',
-                          'bg-muted text-muted-foreground': !(account.hangStatus?.running || desktop.status === 'hanging') && desktop.useStatusText !== '运行中' && desktop.status !== 'connected' && desktop.status !== 'connecting',
+                          'bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20': desktop.yieldStatus?.yielding,
+                          'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': !desktop.yieldStatus?.yielding && (account.hangStatus?.running || desktop.status === 'hanging' || desktop.useStatusText === '运行中' || desktop.status === 'connected'),
+                          'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': !desktop.yieldStatus?.yielding && !(account.hangStatus?.running || desktop.status === 'hanging') && desktop.useStatusText !== '运行中' && desktop.status === 'connecting',
+                          'bg-muted text-muted-foreground': !desktop.yieldStatus?.yielding && !(account.hangStatus?.running || desktop.status === 'hanging') && desktop.useStatusText !== '运行中' && desktop.status !== 'connected' && desktop.status !== 'connecting',
                         }"
+                        :title="desktop.yieldStatus?.yielding ? (desktop.yieldStatus.reason || '检测到外部官方客户端在线，系统主动避让中') : ''"
                       >
-                        {{ account.hangStatus?.running || desktop.status === 'hanging' ? '挂机中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机'))) }}
+                        {{ desktop.yieldStatus?.yielding ? `避让中 (${desktop.yieldStatus.remainingSeconds}s)` : (account.hangStatus?.running || desktop.status === 'hanging' ? '挂机中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机')))) }}
                       </Badge>
                     </TableCell>
                     <TableCell class="py-2.5 whitespace-nowrap">
                       <div class="flex items-center gap-1.5 text-xs font-medium">
                         <span
                           class="size-2 rounded-full shrink-0"
-                          :class="account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'bg-emerald-500 animate-pulse' : (desktop.status === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-muted-foreground/30')"
+                          :class="desktop.yieldStatus?.yielding ? 'bg-purple-500' : (account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'bg-emerald-500 animate-pulse' : (desktop.status === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-muted-foreground/30'))"
                         ></span>
-                        <span :class="account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'" class="truncate">
-                           {{ account.hangStatus?.running || desktop.status === 'hanging' ? '纯协议挂机' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : '未连接') }}
+                        <span :class="desktop.yieldStatus?.yielding ? 'text-purple-600 dark:text-purple-400' : (account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')" class="truncate">
+                           {{ desktop.yieldStatus?.yielding ? '主动避让' : (account.hangStatus?.running || desktop.status === 'hanging' ? '纯协议挂机' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : '未连接')) }}
                         </span>
                       </div>
                     </TableCell>
@@ -525,12 +539,14 @@ onUnmounted(() => {
                   variant="secondary"
                   class="h-5 px-1.5 text-[11px] font-normal"
                   :class="{
-                    'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': account.hangStatus?.running || desktop.status === 'hanging' || desktop.useStatusText === '运行中' || desktop.status === 'connected',
-                    'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': !(account.hangStatus?.running || desktop.status === 'hanging') && desktop.useStatusText !== '运行中' && desktop.status === 'connecting',
-                    'bg-muted text-muted-foreground': !(account.hangStatus?.running || desktop.status === 'hanging') && desktop.useStatusText !== '运行中' && desktop.status !== 'connected' && desktop.status !== 'connecting',
+                    'bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20': desktop.yieldStatus?.yielding,
+                    'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': !desktop.yieldStatus?.yielding && (account.hangStatus?.running || desktop.status === 'hanging' || desktop.useStatusText === '运行中' || desktop.status === 'connected'),
+                    'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': !desktop.yieldStatus?.yielding && !(account.hangStatus?.running || desktop.status === 'hanging') && desktop.useStatusText !== '运行中' && desktop.status === 'connecting',
+                    'bg-muted text-muted-foreground': !desktop.yieldStatus?.yielding && !(account.hangStatus?.running || desktop.status === 'hanging') && desktop.useStatusText !== '运行中' && desktop.status !== 'connected' && desktop.status !== 'connecting',
                   }"
+                  :title="desktop.yieldStatus?.yielding ? (desktop.yieldStatus.reason || '检测到外部官方客户端在线，系统主动避让中') : ''"
                 >
-                  {{ account.hangStatus?.running || desktop.status === 'hanging' ? '挂机中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机'))) }}
+                  {{ desktop.yieldStatus?.yielding ? `避让中 (${desktop.yieldStatus.remainingSeconds}s)` : (account.hangStatus?.running || desktop.status === 'hanging' ? '挂机中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机')))) }}
                 </Badge>
               </div>
               <div class="flex items-center justify-between text-xs text-muted-foreground font-mono">
@@ -541,10 +557,10 @@ onUnmounted(() => {
                 <div class="flex items-center gap-1.5 text-xs">
                   <span
                     class="size-2 rounded-full"
-                    :class="account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'bg-emerald-500 animate-pulse' : (desktop.status === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-muted-foreground/30')"
+                    :class="desktop.yieldStatus?.yielding ? 'bg-purple-500' : (account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'bg-emerald-500 animate-pulse' : (desktop.status === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-muted-foreground/30'))"
                   ></span>
-                  <span :class="account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'">
-                     {{ account.hangStatus?.running || desktop.status === 'hanging' ? '纯协议挂机' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : '未连接') }}
+                  <span :class="desktop.yieldStatus?.yielding ? 'text-purple-600 dark:text-purple-400' : (account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')">
+                     {{ desktop.yieldStatus?.yielding ? '主动避让' : (account.hangStatus?.running || desktop.status === 'hanging' ? '纯协议挂机' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : '未连接')) }}
                   </span>
                 </div>
                 <div class="inline-flex items-center gap-1">

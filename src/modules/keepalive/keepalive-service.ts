@@ -15,6 +15,11 @@ export interface ManagedDesktopState {
   isPool?: boolean;
   status: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
   lastHeartbeat?: string;
+  yieldStatus?: {
+    yielding: boolean;
+    remainingSeconds: number;
+    reason?: string;
+  };
 }
 
 /**
