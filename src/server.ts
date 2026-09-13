@@ -866,6 +866,12 @@ export async function createServer() {
     });
   });
 
+  // 9.0 获取历史日志快照
+  fastify.get('/api/logs', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    return { success: true, data: manager.getRecentLogs() };
+  });
+
   // 9.1 清空服务端日志
   fastify.post('/api/logs/clear', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
