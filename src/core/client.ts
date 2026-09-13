@@ -535,14 +535,15 @@ export class CtYunClient {
   /**
    * 8. 获取云电脑连接信息 (WebSocket host & 证书凭证)
    * 完全对齐官方进入云电脑标准：支持普通机直连与政企桌面池动态分派连接
+   * @param forceFresh 是否强制向官方调度中心申请全新 Ticket (跳过 status 缓存)
    */
-  public async connectDesktop(desktopIdOrObj: string | Desktop, objType = 0): Promise<DesktopInfo> {
+  public async connectDesktop(desktopIdOrObj: string | Desktop, objType = 0, forceFresh = false): Promise<DesktopInfo> {
     const desktopId = typeof desktopIdOrObj === 'string' ? desktopIdOrObj : desktopIdOrObj.desktopId;
     const targetObjType = typeof desktopIdOrObj === 'string' ? objType : (desktopIdOrObj.objType ?? objType);
     const targetObjId = typeof desktopIdOrObj === 'string' ? desktopId : (desktopIdOrObj.objId || desktopIdOrObj.poolId || desktopId);
 
-    // 1. 优先通过官方首选 status 接口获取桌面连接与证书信息 (普通单机优先)
-    if (targetObjType === 0) {
+    // 1. 优先通过官方 status 接口获取 (仅在非强制刷新模式且为普通单机时使用)
+    if (!forceFresh && targetObjType === 0) {
       try {
         const statusUrl = `${CtYunClient.BASE_URL}/api/desktop/client/status?desktopId=${desktopId}&specifiedCertCategory=1`;
         const sRes = await safeFetch(statusUrl, { headers: this.getHeaders() });
@@ -553,7 +554,7 @@ export class CtYunClient {
       } catch {}
     }
 
-    // 2. 备用通过 connect 接口获取 (政企桌面池必须使用 connect 接口并下发真实 objType)
+    // 2. 核心调度: 通过 connect 接口动态申请全新 Ticket 与双向证书
     const formData = new URLSearchParams();
     formData.append('objId', targetObjId);
     formData.append('objType', String(targetObjType));

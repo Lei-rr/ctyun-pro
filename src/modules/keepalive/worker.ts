@@ -35,6 +35,8 @@ export class KeepAliveWorker {
   private isPaused = false;
   private isHandshakeComplete = false;
   private consecutiveFailures = 0;
+  private needsFreshTicket = false;
+  private handshakeTimeout: NodeJS.Timeout | null = null;
   private yieldClearedHandler: ((data: { desktopId: string }) => void) | null = null;
 
   constructor(options: KeepAliveWorkerOptions) {
@@ -88,6 +90,7 @@ export class KeepAliveWorker {
     this.isPaused = false;
     this.isHandshakeComplete = false;
     this.consecutiveFailures = 0;
+    this.needsFreshTicket = false;
     this.unbindYieldCleared();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -109,6 +112,7 @@ export class KeepAliveWorker {
     this.isPaused = true;
     this.isHandshakeComplete = false;
     this.consecutiveFailures = 0;
+    this.needsFreshTicket = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -132,6 +136,10 @@ export class KeepAliveWorker {
   }
 
   private cleanupSocket(): void {
+    if (this.handshakeTimeout) {
+      clearTimeout(this.handshakeTimeout);
+      this.handshakeTimeout = null;
+    }
     if (this.currentWs) {
       try {
         this.currentWs.removeAllListeners();
@@ -157,7 +165,36 @@ export class KeepAliveWorker {
     }
   }
 
-  private connect(): void {
+  private isCertValid(cert?: string): boolean {
+    if (!cert || typeof cert !== 'string' || cert.trim().length === 0) return false;
+    try {
+      const buf = Buffer.from(cert, 'base64');
+      return buf.length > 20;
+    } catch {
+      return false;
+    }
+  }
+
+  private markHandshakeSuccess(ws: WebSocket): void {
+    if (this.handshakeTimeout) {
+      clearTimeout(this.handshakeTimeout);
+      this.handshakeTimeout = null;
+    }
+    if (!this.isHandshakeComplete) {
+      this.isHandshakeComplete = true;
+      this.consecutiveFailures = 0;
+      this.needsFreshTicket = false;
+      this.options.onStatusChange?.('connected');
+      this.log('success', '云电脑保活会话建立成功');
+
+      // 启动官方标准的 30s 活跃心跳定时器
+      if (!this.heartbeatTimer) {
+        this.heartbeatTimer = setInterval(() => this.sendClientHeartbeat(), 30000);
+      }
+    }
+  }
+
+  private async connect(): Promise<void> {
     if (!this.isRunning || this.isPaused) return;
 
     if (this.reconnectTimer) {
@@ -167,6 +204,10 @@ export class KeepAliveWorker {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+    if (this.handshakeTimeout) {
+      clearTimeout(this.handshakeTimeout);
+      this.handshakeTimeout = null;
     }
 
     this.cleanupSocket();
@@ -186,6 +227,27 @@ export class KeepAliveWorker {
         this.connect();
       }, Math.max(1000, yieldStatus.remainingSeconds * 1000));
       return;
+    }
+
+    // 凭据有效性前置防御检查
+    if (!this.isCertValid(this.options.desktopInfo?.clientCert)) {
+      this.log('warn', '检测到长连接凭据证书不完整，准备向官方申请全新凭据...');
+      this.needsFreshTicket = true;
+    }
+
+    // 如果标记需要刷新凭据，在建立连接前主动换取全新 Ticket
+    if (this.needsFreshTicket && this.options.onRefreshInfo) {
+      try {
+        this.log('info', '正在向官方调度中心申请全新 Ticket 与连接凭据...');
+        const newInfo = await this.options.onRefreshInfo();
+        if (newInfo && newInfo.clinkLvsOutHost) {
+          this.options.desktopInfo = newInfo;
+          this.needsFreshTicket = false;
+          this.log('info', '已成功换取全新长连接凭据');
+        }
+      } catch (e: any) {
+        this.log('warn', `换取长连接凭据提示: ${e.message}`);
+      }
     }
 
     this.isReconnecting = false;
@@ -224,48 +286,51 @@ export class KeepAliveWorker {
         clearInterval(this.heartbeatTimer);
         this.heartbeatTimer = null;
       }
+      if (this.handshakeTimeout) {
+        clearTimeout(this.handshakeTimeout);
+        this.handshakeTimeout = null;
+      }
       this.cleanupSocket();
 
       let retryDelay = isConflict ? 300000 : 5000;
 
       if (!isConflict) {
         if (this.isHandshakeComplete) {
-          // 运行中正常网络断开：直接复用长效凭据，5秒后秒级重连
+          // 运行中正常网络断开：重置握手完成标记，首选 5 秒快速重连
           this.isHandshakeComplete = false;
           this.consecutiveFailures = 0;
           this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
         } else {
-          // 未完成握手即断开（如网关直接 1005 关闭）：累计握手失败计数
+          // 未完成握手即断开（如网关 1005 关闭或拒接）：累计握手失败计数
           this.consecutiveFailures++;
-          if (this.consecutiveFailures <= 1) {
-            this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
+          // 标记下次重连必须换取新鲜 Ticket
+          this.needsFreshTicket = true;
+
+          // 阶梯指数退避：5s -> 10s -> 20s -> 30s，最高 60s
+          if (this.consecutiveFailures === 1) {
+            retryDelay = 5000;
+          } else if (this.consecutiveFailures === 2) {
+            retryDelay = 10000;
+          } else if (this.consecutiveFailures === 3) {
+            retryDelay = 20000;
+          } else if (this.consecutiveFailures === 4) {
+            retryDelay = 30000;
           } else {
-            // 连续握手未通过，凭据大概率已失效或桌面离线，退避防死循环并准备换票
-            retryDelay = Math.min(30000, 5000 * Math.pow(2, this.consecutiveFailures - 2));
-            this.log('warn', `长连接握手连续未通过 (${this.consecutiveFailures}次)，将在 ${Math.round(retryDelay / 1000)}秒后刷新凭据重试...`);
+            retryDelay = 60000;
           }
+
+          const retryDelaySec = Math.round(retryDelay / 1000);
+          this.log(
+            'warn',
+            `长连接握手未完成即断开 (${code}, ${reasonStr || '远程连接关闭'})，${retryDelaySec}秒后换取新凭据重试 (连续重试 ${this.consecutiveFailures} 次)...`,
+          );
         }
       }
 
-      this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null;
         this.isReconnecting = false;
         if (!this.isRunning || this.isPaused) return;
-
-        // 若连续握手失败，自适应换取新凭据自愈
-        if (!isConflict && this.consecutiveFailures >= 2 && this.options.onRefreshInfo) {
-          try {
-            const newInfo = await this.options.onRefreshInfo();
-            if (newInfo && newInfo.clinkLvsOutHost) {
-              this.options.desktopInfo = newInfo;
-              this.consecutiveFailures = 0;
-              this.log('info', '已成功刷新云电脑长连接凭据，准备重新建立连接');
-            }
-          } catch (e: any) {
-            this.log('warn', `刷新长连接凭据提示: ${e.message}`);
-          }
-        }
-
         this.connect();
       }, retryDelay);
     };
@@ -302,31 +367,44 @@ export class KeepAliveWorker {
         try {
           const initialPayload = Buffer.from('UkVEUQIAAAACAAAAGgAAAAAAAAABAAEAAAABAAAAEgAAAAkAAAAECAAA', 'base64');
           ws.send(initialPayload);
-          this.log('success', '云电脑保活会话建立成功');
-          this.isHandshakeComplete = true;
-          this.consecutiveFailures = 0;
-          this.options.onStatusChange?.('connected');
-
-          // 3. 启动官方标准的 30s 活跃心跳定时器
-          if (!this.heartbeatTimer) {
-            this.heartbeatTimer = setInterval(() => this.sendClientHeartbeat(), 30000);
-          }
+          // 注意：此处等待服务端实际协议回包确认，绝不假定握手成功
         } catch (err: any) {
           this.log('error', `握手流程异常: ${err.message}`);
         }
       }, 500);
+
+      // 3. 设置 15 秒握手超时防护
+      this.handshakeTimeout = setTimeout(() => {
+        if (!this.isHandshakeComplete && ws.readyState === WebSocket.OPEN) {
+          this.log('warn', '长连接握手未在规定时间内收到网关响应，主动断开重试');
+          ws.close(1006, 'Handshake Timeout');
+        }
+      }, 15000);
     });
 
     ws.on('message', (data: WebSocket.RawData) => {
       if (!this.isRunning || this.isPaused) return;
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
 
-      // 收到服务端有效响应，标记会话完全建立
-      this.isHandshakeComplete = true;
-      this.consecutiveFailures = 0;
+      // A. 识别网关明文拒绝错误 (如 ": failed to decode_base64,cert")
+      if (buffer.length > 0 && buffer.length < 256) {
+        const text = buffer.toString('utf8');
+        if (
+          text.startsWith(':') ||
+          text.includes('failed') ||
+          text.includes('decode_base64') ||
+          text.includes('cert') ||
+          text.toLowerCase().includes('error')
+        ) {
+          this.log('warn', `网关拒绝连接: ${text.trim()}`);
+          this.needsFreshTicket = true;
+          return;
+        }
+      }
 
-      // 收到 REDQ 保活校验帧 -> 动态响应
+      // B. 收到 REDQ 保活校验帧 -> 动态响应并确认会话成功
       if (buffer.length >= 4 && buffer.subarray(0, 4).toString('ascii') === 'REDQ') {
+        this.markHandshakeSuccess(ws);
         try {
           const response = Protocol.executeRedqEncryption(buffer);
           if (ws.readyState === WebSocket.OPEN) {
@@ -338,9 +416,19 @@ export class KeepAliveWorker {
         return;
       }
 
-      // 收到 Clink 协议消息 -> 按照官方规范分发响应
+      // C. 收到单字节握手确认帧 (0x01)
+      if (buffer.length === 1 && buffer[0] === 1) {
+        this.markHandshakeSuccess(ws);
+        return;
+      }
+
+      // D. 收到 Clink 协议消息 -> 按照官方规范分发响应
       try {
         const infos = Protocol.parseSendInfo(buffer);
+        if (infos.length > 0) {
+          this.markHandshakeSuccess(ws);
+        }
+
         for (const info of infos) {
           // 官方规范: 收到服务端 Type 3 ACK 窗口协商 -> 回复 Type 1 ACK_SYNC
           if (info.type === ClinkMsgType.MSG_SET_ACK && info.data && info.data.length >= 4) {

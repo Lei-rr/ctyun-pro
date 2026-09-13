@@ -321,7 +321,8 @@ export class KeepaliveService {
           },
           onRefreshInfo: async () => {
             try {
-              const newInfo = await client.connectDesktop(d);
+              // 关键自愈：强制要求官方签发全新凭据 (forceFresh=true)
+              const newInfo = await client.connectDesktop(d, 0, true);
               if (newInfo && newInfo.clinkLvsOutHost) {
                 d.desktopInfo = newInfo;
                 return newInfo;
