@@ -441,7 +441,7 @@ export class HangTask {
                   heartbeatTimer = setInterval(() => {
                     if (ws && ws.readyState === WebSocket.OPEN) {
                       try {
-                        const hbBuf = Protocol.buildMessage(7); // Type 7 心跳包
+                        const hbBuf = Protocol.buildHeartbeat(); // 官方规范: Type 7 客户端 30s 活跃心跳
                         ws.send(hbBuf);
                         logger.addLog('info', `[${logPrefix}] 发送客户端活跃心跳 (30s 心跳保活)`);
                       } catch {}

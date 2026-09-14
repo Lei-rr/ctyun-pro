@@ -158,8 +158,8 @@ export class KeepAliveWorker {
   private sendClientHeartbeat(): void {
     if (!this.isRunning || this.isPaused || !this.currentWs || this.currentWs.readyState !== WebSocket.OPEN) return;
     try {
-      // CLINK_MSGC_HEARTBEAT = 7 (type: uint16=7, size: uint32=0)
-      const hbBuf = Protocol.buildMessage(7);
+      // 官方规范: 客户端 30s 周期性活跃心跳报文 (Type 7)
+      const hbBuf = Protocol.buildHeartbeat();
       this.currentWs.send(hbBuf);
       this.log('info', '发送客户端活跃心跳 (30s 心跳保活)');
       this.options.onHeartbeat?.();
