@@ -324,17 +324,13 @@ export class KeepaliveService {
             this.onStateChange?.();
           },
           onRefreshInfo: async () => {
-            try {
-              // 关键自愈：强制要求官方签发全新凭据 (forceFresh=true)
-              const newInfo = await client.connectDesktop(d, 0, true);
-              if (newInfo && newInfo.clinkLvsOutHost) {
-                d.desktopInfo = newInfo;
-                return newInfo;
-              }
-            } catch (err: any) {
-              // 换票异常由 worker 自适应退避
+            // 关键自愈：强制要求官方签发全新凭据 (forceFresh=true)
+            const newInfo = await client.connectDesktop(d, 0, true);
+            if (newInfo && newInfo.clinkLvsOutHost) {
+              d.desktopInfo = newInfo;
+              return newInfo;
             }
-            return null;
+            throw new Error('调度中心未返回有效网关凭据');
           },
         });
 

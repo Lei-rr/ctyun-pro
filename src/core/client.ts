@@ -593,9 +593,10 @@ export class CtYunClient {
       if (json.code === 0 && json.data?.desktopInfo?.clinkLvsOutHost) {
         return json.data.desktopInfo;
       }
-    } catch {}
-
-    throw new Error('获取连接信息失败');
+      throw new Error(json.msg || `官方接口返回异常 (Code ${json.code})`);
+    } catch (e: any) {
+      throw new Error(e.message || '获取连接信息失败');
+    }
   }
 
   /**

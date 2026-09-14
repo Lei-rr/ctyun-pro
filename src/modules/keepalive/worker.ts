@@ -248,9 +248,17 @@ export class KeepAliveWorker {
           this.options.desktopInfo = newInfo;
           this.needsFreshTicket = false;
           this.log('info', '已成功换取全新长连接凭据');
+        } else {
+          throw new Error('调度中心未返回有效网关凭据');
         }
       } catch (e: any) {
         this.log('warn', `换取长连接凭据提示: ${e.message}`);
+        this.isReconnecting = false;
+        const retryDelay = Math.min(5000 * Math.max(1, this.consecutiveFailures), 30000);
+        this.reconnectTimer = setTimeout(() => {
+          this.connect();
+        }, retryDelay);
+        return;
       }
     }
 
@@ -307,11 +315,11 @@ export class KeepAliveWorker {
           // 运行中正常网络断开：重置握手完成标记
           this.isHandshakeComplete = false;
           this.consecutiveFailures = 0;
+          this.needsFreshTicket = true;
 
           if (isZombieWakeup) {
             // 收到 zombie：官方会话挂起/回收，立即于 1 秒内发起连接敲门以唤醒官方服务冷启动
             retryDelay = 1000;
-            this.needsFreshTicket = true;
             this.log('info', `网关轻量线程挂起 (${code})，1秒内发起唤醒连接以触发官方服务冷启动...`);
           } else {
             this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
@@ -319,17 +327,21 @@ export class KeepAliveWorker {
         } else {
           // 未完成握手即断开（如网关 1005 关闭或拒接）：累计握手失败计数
           this.consecutiveFailures++;
+          // 握手失败/被拒接，下次必须强制申请全新 Ticket！天翼云 Ticket 为单次消费凭据，不可复用！
+          this.needsFreshTicket = true;
 
           if (isConnectionRefused) {
-            // connection refused 说明第 1 次敲门已成功触发官方服务拉起，端口正在初始化
-            // 采用 2.5 秒精准重试退避，复用已有凭据迅速完成接入
-            retryDelay = 2500;
-            this.needsFreshTicket = false;
-            this.log('info', `云电脑服务正在拉起就绪中，2.5秒后自动接入长连接 (连续重试 ${this.consecutiveFailures} 次)...`);
+            // connection refused 说明云电脑服务正在冷启动中 (端口 7003 尚未就绪)
+            // 采用平滑阶梯退避 (3s -> 5s -> 10s)，每次重新申请全新 Ticket 接入
+            if (this.consecutiveFailures <= 2) {
+              retryDelay = 3000;
+            } else if (this.consecutiveFailures <= 4) {
+              retryDelay = 5000;
+            } else {
+              retryDelay = 10000;
+            }
+            this.log('info', `云电脑服务正在拉起就绪中，${retryDelay / 1000}秒后申请全新凭据接入长连接 (连续重试 ${this.consecutiveFailures} 次)...`);
           } else {
-            // 标记下次重连必须换取新鲜 Ticket
-            this.needsFreshTicket = true;
-
             // 阶梯指数退避：5s -> 10s -> 20s -> 30s，最高 60s
             if (this.consecutiveFailures === 1) {
               retryDelay = 5000;
