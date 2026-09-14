@@ -51,7 +51,7 @@ export class Logger {
       count: 1,
     };
     this.logs.push(item);
-    if (this.logs.length > 200) {
+    if (this.logs.length > 1000) {
       this.logs.shift();
     }
     for (const listener of this.listeners) {

@@ -4,15 +4,7 @@ import https from 'node:https';
 import { URL } from 'node:url';
 import type { ProfileManager } from './profile-manager.js';
 
-// 官方 HTML 入口与静态资源全局缓存 (带容量上限与过期控制)
-let cachedIndexHtml: string | null = null;
-let lastIndexHtmlFetch = 0;
-const HTML_CACHE_TTL = 3600 * 1000; // 1 小时
-
-// 内存静态资源缓存限制
-const MAX_CACHE_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
-let currentCacheSizeBytes = 0;
-const ctyunStaticCache = new Map<string, { buffer: Buffer; contentType: string; size: number; timestamp: number }>();
+// 官方入口与静态资源全量实时透传代理（不设本地/内存缓存，保障官方前端升级后版本强一致）
 
 /**
  * 基于 Node.js 原生 https 发起 IPv4 请求（规避容器与云厂商环境 IPv6 路由不可达导致 fetch failed / ETIMEDOUT）
@@ -54,14 +46,9 @@ function requestBufferIpv4(urlStr: string, headers: Record<string, string> = {})
 }
 
 /**
- * 获取天翼云官方 PC 客户端入口 HTML 骨架
+ * 获取天翼云官方 PC 客户端入口 HTML 骨架（全量实时拉取，不设本地 HTML 缓存）
  */
 async function getCtyunIndexHtml(): Promise<string> {
-  const now = Date.now();
-  if (cachedIndexHtml && now - lastIndexHtmlFetch < HTML_CACHE_TTL) {
-    return cachedIndexHtml;
-  }
-
   const res = await requestBufferIpv4('https://pc.ctyun.cn/');
   if (res.status >= 400) {
     throw new Error(`拉取天翼云入口网页失败: HTTP ${res.status}`);
@@ -70,24 +57,13 @@ async function getCtyunIndexHtml(): Promise<string> {
   let text = res.buffer.toString('utf-8');
   // 彻底移除官方 serviceWorker 注册逻辑，杜绝非同源与非标准 scope 导致的 SecurityError
   text = text.replace(/navigator\.serviceWorker\.register\([^)]+\)/g, 'Promise.resolve()');
-  cachedIndexHtml = text;
-  lastIndexHtmlFetch = now;
   return text;
 }
 
 /**
- * 代理静态资源并执行内存安全缓存
+ * 代理静态资源并执行全量实时透传（无本地/内存缓存，保障官方前端升级后实时对齐）
  */
 async function proxyStaticAsset(reply: FastifyReply, targetUrl: string): Promise<void> {
-  const cached = ctyunStaticCache.get(targetUrl);
-  if (cached) {
-    reply
-      .header('Content-Type', cached.contentType)
-      .header('Cache-Control', 'public, max-age=86400')
-      .send(cached.buffer);
-    return;
-  }
-
   try {
     const upstream = await requestBufferIpv4(targetUrl, {
       Referer: 'https://pc.ctyun.cn/',
@@ -98,32 +74,10 @@ async function proxyStaticAsset(reply: FastifyReply, targetUrl: string): Promise
       return;
     }
 
-    const contentType = upstream.contentType;
-    const buffer = upstream.buffer;
-
-    // LRU 淘汰：若超出容量循环清理旧资源
-    while (currentCacheSizeBytes + buffer.length > MAX_CACHE_SIZE_BYTES && ctyunStaticCache.size > 0) {
-      const oldestKey = ctyunStaticCache.keys().next().value;
-      if (!oldestKey) break;
-      const item = ctyunStaticCache.get(oldestKey);
-      if (item) currentCacheSizeBytes -= item.size;
-      ctyunStaticCache.delete(oldestKey);
-    }
-
-    if (buffer.length < 10 * 1024 * 1024) {
-      ctyunStaticCache.set(targetUrl, {
-        buffer,
-        contentType,
-        size: buffer.length,
-        timestamp: Date.now(),
-      });
-      currentCacheSizeBytes += buffer.length;
-    }
-
     reply
-      .header('Content-Type', contentType)
-      .header('Cache-Control', 'public, max-age=86400')
-      .send(buffer);
+      .header('Content-Type', upstream.contentType)
+      .header('Cache-Control', 'no-cache, no-store, must-revalidate')
+      .send(upstream.buffer);
   } catch (err: any) {
     reply.code(502).send(`Gateway Proxy Error: ${err.message}`);
   }

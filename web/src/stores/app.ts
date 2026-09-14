@@ -245,7 +245,7 @@ export const useAppStore = defineStore('app', () => {
             keepAliveSeconds.value = msg.data.keepAliveSeconds || 60;
             if (msg.data.webhookUrl !== undefined) webhookUrl.value = msg.data.webhookUrl || '';
           } else if (msg.type === 'init_logs') {
-            logs.value = (msg.logs || []).slice(-200);
+            logs.value = (msg.logs || []).slice(-1000);
           } else if (msg.type === 'log') {
             const incoming: LogItem = msg.log;
             // 智能折叠：在当前末尾连续心跳波次（Block）内寻找同款心跳折叠，遇到业务日志立即打断
@@ -275,8 +275,8 @@ export const useAppStore = defineStore('app', () => {
 
             if (!found) {
               logs.value.push(incoming);
-              if (logs.value.length > 200) {
-                logs.value.splice(0, logs.value.length - 200);
+              if (logs.value.length > 1000) {
+                logs.value.splice(0, logs.value.length - 1000);
               }
             }
           }

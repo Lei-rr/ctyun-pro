@@ -43,7 +43,7 @@ onMounted(() => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'init') {
-           store.logs = (data.logs || []).slice(-200);
+           store.logs = (data.logs || []).slice(-1000);
         } else if (data.type === 'log') {
           const incoming = data.log;
           // 智能折叠：在当前末尾连续心跳波次（Block）内寻找同款心跳折叠，遇到业务日志立即打断
@@ -73,7 +73,7 @@ onMounted(() => {
 
           if (!found) {
             store.logs.push(incoming);
-            if (store.logs.length > 200) store.logs.splice(0, store.logs.length - 200);
+            if (store.logs.length > 1000) store.logs.splice(0, store.logs.length - 1000);
           }
         }
         scrollToBottom();
@@ -100,7 +100,7 @@ onUnmounted(() => {
           实时日志
         </span>
         <Badge variant="secondary" class="h-5 px-1.5 text-[10px] font-mono shrink-0 ml-1">
-           {{ store.logs.length }} / 200 条
+           {{ store.logs.length }} / 1000 条
         </Badge>
       </div>
 
