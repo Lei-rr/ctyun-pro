@@ -307,7 +307,6 @@ export class KeepAliveWorker {
       let retryDelay = isConflict ? 300000 : 5000;
 
       if (!isConflict) {
-        const isZombieWakeup = this.lastGatewayError.includes('zombie');
         const isConnectionRefused =
           this.lastGatewayError.includes('connection refused') || this.lastGatewayError.includes('failed to connect');
 
@@ -316,14 +315,7 @@ export class KeepAliveWorker {
           this.isHandshakeComplete = false;
           this.consecutiveFailures = 0;
           this.needsFreshTicket = true;
-
-          if (isZombieWakeup) {
-            // 收到 zombie：官方会话挂起/回收，立即于 1 秒内发起连接敲门以唤醒官方服务冷启动
-            retryDelay = 1000;
-            this.log('info', `网关轻量线程挂起 (${code})，1秒内发起唤醒连接以触发官方服务冷启动...`);
-          } else {
-            this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
-          }
+          this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
         } else {
           // 未完成握手即断开（如网关 1005 关闭或拒接）：累计握手失败计数
           this.consecutiveFailures++;
@@ -491,7 +483,7 @@ export class KeepAliveWorker {
             this.isHandshakeComplete = true;
           }
 
-          // 收到 Type 103 主通道握手挑战 -> 仅响应 Type 118 用户身份（后台静默保活）
+          // 收到 Type 103 主通道握手挑战 -> 回复 118 身份 + 112 凭据认领 + 104 信道挂接 (对齐官方 Web 客户端)
           if (info.type === ClinkMsgType.MSG_MAIN_INIT) {
             const byUserName = Protocol.buildClientUserName(
               this.options.loginInfo.userName,
@@ -500,6 +492,38 @@ export class KeepAliveWorker {
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(byUserName);
             }
+
+            // 发送 Type 112 会话认领包 (CLINK_MSGC_MAIN_CLIENT_LOGIN_INFO)
+            // 声明为桌面合法拥有者并激活在席 Session，彻底根除网关因空占位触发的 light thread 僵尸回收
+            try {
+              const msg112 = Protocol.buildMainClientLoginInfo(
+                dId,
+                desktopInfo.token || '',
+                '60',
+                this.options.deviceCode || '',
+                this.options.loginInfo.userName || '',
+              );
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(msg112);
+              }
+            } catch {}
+
+            // 主动查询 Clink 版本 (Type 116)
+            setTimeout(() => {
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                  ws.send(Protocol.buildGetClinkVersion());
+                } catch {}
+              }
+            }, 500);
+
+            // 发送 Type 104 通道挂接就绪包 (CLINK_MSGC_MAIN_ATTACH_CHANNELS)
+            try {
+              const msg104 = Protocol.buildAttachChannels();
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(msg104);
+              }
+            } catch {}
           }
 
           // 监听官方客户端状态通知 (Type 119 离线 / 120 挤占锁定 / 137 主通道结束)
