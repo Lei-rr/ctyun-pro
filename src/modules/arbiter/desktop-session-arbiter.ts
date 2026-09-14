@@ -170,12 +170,11 @@ export class DesktopSessionArbiter extends EventEmitter {
       timer,
     });
 
-    if (!isAlreadyYielding) {
-      this.logger?.addLog(
-        'warn',
-        `${prefix} 检测到外部官方客户端接入，系统主动避让 ${duration} 分钟 (至 ${timeStr})，暂停长连接与自动化任务`,
-      );
-    }
+    // 日志文案采用统一纯文本，不拼接具体动态时间戳，保障系统日志智能聚合折叠 (x2, x3)
+    this.logger?.addLog(
+      'warn',
+      `${prefix} 检测到外部客户端接入，系统主动避让 ${duration} 分钟，暂停长连接与任务`,
+    );
 
     this.emit('yield:triggered', { desktopId: key, until, reason });
 
@@ -218,51 +217,15 @@ export class DesktopSessionArbiter extends EventEmitter {
   }
 
   /**
-   * 避让周期到期时的前置真实状态探测与智能续期处理
-   * 严格遵循“先探测真实状态再决定是否解除避让”原则，绝不盲目清空避让锁抢占
+   * 避让周期到期时的试探性交接处理
+   * 遵循老大指令：不管官方接口滞留的 25 状态，避让到期直接发起试探连接恢复保活。
+   * 若外部客户端仍在活跃操作，连接时服务端自会下发 4001 / 119，重新避让 5 分钟。
    */
   private async handleYieldTimeout(key: string): Promise<void> {
     const existing = this.externalYields.get(key);
     if (!existing) return;
 
-    const { displayName } = this.resolveDesktop(key);
-    const prefix = this.formatPrefix(displayName, key);
-
-    if (this.stateChecker) {
-      try {
-        const check = await this.stateChecker(key);
-        // 若探测到外部官方客户端仍在使用中 (如 useStatus: 25)，绝对不抢占，自动顺延避让
-        if (check && check.occupied) {
-          const extendMinutes = 3;
-          const newUntil = Date.now() + extendMinutes * 60 * 1000;
-          const timeStr = new Date(newUntil).toLocaleTimeString('zh-CN', {
-            timeZone: 'Asia/Shanghai',
-            hour12: false,
-          });
-
-          const timer = setTimeout(() => {
-            this.handleYieldTimeout(key).catch(() => {});
-          }, extendMinutes * 60 * 1000);
-          if (timer.unref) timer.unref();
-
-          this.externalYields.set(key, {
-            ...existing,
-            until: newUntil,
-            timer,
-          });
-
-          this.logger?.addLog(
-            'warn',
-            `${prefix} 探测到外部官方客户端仍在使用中 (状态: ${check.useStatus || '25'})，避让状态自动顺延 ${extendMinutes} 分钟 (至 ${timeStr})`,
-          );
-          return;
-        }
-      } catch (err: any) {
-        this.logger?.addLog('warn', `${prefix} 避让到期前置探测提示: ${err.message}`);
-      }
-    }
-
-    // 探测确认已退出占用或恢复空闲，正式解除避让
+    // 直接解除避让，发出 yield:cleared 事件，通知 Worker 发起试探性重连
     this.clearYield(key);
   }
 
