@@ -224,14 +224,20 @@ export class KeepaliveService {
         continue;
       }
 
-      // 开机检测与开机指令
+      // 开机/唤醒检测与自愈指令
       const isRunning = d.useStatusText === '运行中' || d.useStatusText === '离线运行';
       if (!isRunning) {
-        this.logger.addLog('warn', `[${dPrefix}] 当前状态: [${d.useStatusText}]，正在下发自动开机指令...`);
+        const isSleep = (d.useStatusText || '').includes('休眠') || (d.useStatusText || '').includes('睡眠');
+        const autoOp: 'on' | 'awake' = isSleep ? 'awake' : 'on';
+        const actionText = isSleep ? '唤醒' : '开机';
+        this.logger.addLog('warn', `[${dPrefix}] 当前状态: [${d.useStatusText}]，正在下发自动${actionText}指令...`);
         try {
-          await client.operateDesktop(d.desktopId, 'on');
+          await client.operateDesktop(d.desktopId, autoOp);
         } catch (e: any) {
-          this.logger.addLog('warn', `[${dPrefix}] 自动开机提示: ${e.message}`);
+          try {
+            await client.operateDesktop(d.desktopId, isSleep ? 'on' : 'awake');
+          } catch {}
+          this.logger.addLog('warn', `[${dPrefix}] 自动${actionText}提示: ${e.message}`);
         }
 
         let ready = false;

@@ -17,15 +17,7 @@ import {
   Power,
   RotateCw,
   ExternalLink,
-  ChevronDown,
 } from 'lucide-vue-next';
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-} from '@/shared/ui/dropdown-menu';
 import { Button } from '@/shared/ui/button';
 import { Badge } from '@/shared/ui/badge';
 import AccountRenameDialog from '@/components/dialogs/AccountRenameDialog.vue';
@@ -78,7 +70,7 @@ const powerTarget = ref<PowerTarget | null>(null);
 function openPowerConfirm(
   accountName: string,
   desktopCode: string,
-  action: 'on' | 'awake' | 'shutdown' | 'reset' | 'force_off' | 'force_reboot',
+  action: 'on' | 'shutdown' | 'reset',
   desktopName?: string,
 ) {
   powerTarget.value = {
@@ -476,19 +468,18 @@ onUnmounted(() => {
                           />
                           <ExternalLink v-else class="size-3.5" />
                         </Button>
-                        <!-- 关机/休眠状态：显示开机/唤醒及高级菜单 -->
-                        <template v-if="!(desktop.useStatusText === '运行中' && desktop.status === 'connected')">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            class="size-7 text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10 cursor-pointer"
-                            :title="(desktop.useStatusText || '').includes('休眠') || (desktop.useStatusText || '').includes('睡眠') ? '唤醒' : '开机'"
-                            @click="openPowerConfirm(account.name, desktop.desktopCode, (desktop.useStatusText || '').includes('休眠') || (desktop.useStatusText || '').includes('睡眠') ? 'awake' : 'on', desktop.desktopName || desktop.desktopCode)"
-                          >
-                            <Power class="size-3.5" />
-                          </Button>
-                        </template>
-                        <!-- 运行中状态：并列显示 重启 与 关机，且提供精细化强制控制下拉菜单 -->
+                        <!-- 关机状态：显示开机图标 -->
+                        <Button
+                          v-if="!(desktop.useStatusText === '运行中' && desktop.status === 'connected')"
+                          variant="ghost"
+                          size="icon"
+                          class="size-7 text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10 cursor-pointer"
+                          title="开机"
+                          @click="openPowerConfirm(account.name, desktop.desktopCode, 'on', desktop.desktopName || desktop.desktopCode)"
+                        >
+                          <Power class="size-3.5" />
+                        </Button>
+                        <!-- 运行中状态：并列显示 重启 与 关机 图标 -->
                         <template v-else>
                           <Button
                             variant="ghost"
@@ -509,60 +500,6 @@ onUnmounted(() => {
                             <Power class="size-3.5" />
                           </Button>
                         </template>
-
-                        <!-- 精细化电源控制下拉菜单 (强制断电/强制重启/强制唤醒) -->
-                        <DropdownMenu>
-                          <DropdownMenuTrigger as-child>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              class="size-7 text-muted-foreground hover:text-foreground cursor-pointer px-0"
-                              title="精细化电源控制"
-                            >
-                              <ChevronDown class="size-3 opacity-70" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" class="w-36 text-xs">
-                            <DropdownMenuItem
-                              @select="openPowerConfirm(account.name, desktop.desktopCode, 'awake', desktop.desktopName || desktop.desktopCode)"
-                              class="cursor-pointer gap-2"
-                            >
-                              <span>休眠唤醒</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              @select="openPowerConfirm(account.name, desktop.desktopCode, 'on', desktop.desktopName || desktop.desktopCode)"
-                              class="cursor-pointer gap-2"
-                            >
-                              <span>正常开机</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              @select="openPowerConfirm(account.name, desktop.desktopCode, 'reset', desktop.desktopName || desktop.desktopCode)"
-                              class="cursor-pointer gap-2"
-                            >
-                              <span>正常重启</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              @select="openPowerConfirm(account.name, desktop.desktopCode, 'force_reboot', desktop.desktopName || desktop.desktopCode)"
-                              class="cursor-pointer gap-2 text-amber-600 focus:text-amber-600 dark:text-amber-400"
-                            >
-                              <span>强制重启</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              @select="openPowerConfirm(account.name, desktop.desktopCode, 'shutdown', desktop.desktopName || desktop.desktopCode)"
-                              class="cursor-pointer gap-2"
-                            >
-                              <span>正常关机</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              @select="openPowerConfirm(account.name, desktop.desktopCode, 'force_off', desktop.desktopName || desktop.desktopCode)"
-                              class="cursor-pointer gap-2 text-destructive focus:text-destructive"
-                            >
-                              <span>强制断电关机</span>
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -677,18 +614,17 @@ onUnmounted(() => {
                     />
                     <ExternalLink v-else class="size-3.5" />
                   </Button>
-                  <!-- 关机/休眠状态：显示开机/唤醒及高级菜单 -->
-                  <template v-if="!(desktop.useStatusText === '运行中' && desktop.status === 'connected')">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      class="size-7 text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10 cursor-pointer"
-                      :title="(desktop.useStatusText || '').includes('休眠') || (desktop.useStatusText || '').includes('睡眠') ? '唤醒' : '开机'"
-                      @click="openPowerConfirm(account.name, desktop.desktopCode, (desktop.useStatusText || '').includes('休眠') || (desktop.useStatusText || '').includes('睡眠') ? 'awake' : 'on', desktop.desktopName || desktop.desktopCode)"
-                    >
-                      <Power class="size-3.5" />
-                    </Button>
-                  </template>
+                  <!-- 关机状态：显示开机图标 -->
+                  <Button
+                    v-if="!(desktop.useStatusText === '运行中' && desktop.status === 'connected')"
+                    variant="ghost"
+                    size="icon"
+                    class="size-7 text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10 cursor-pointer"
+                    title="开机"
+                    @click="openPowerConfirm(account.name, desktop.desktopCode, 'on', desktop.desktopName || desktop.desktopCode)"
+                  >
+                    <Power class="size-3.5" />
+                  </Button>
                   <!-- 运行中状态：并列显示 重启 与 关机 图标 -->
                   <template v-else>
                     <Button
@@ -710,60 +646,6 @@ onUnmounted(() => {
                       <Power class="size-3.5" />
                     </Button>
                   </template>
-
-                  <!-- 手机端精细化电源控制下拉菜单 -->
-                  <DropdownMenu>
-                    <DropdownMenuTrigger as-child>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        class="size-7 text-muted-foreground hover:text-foreground cursor-pointer px-0"
-                        title="精细化电源控制"
-                      >
-                        <ChevronDown class="size-3 opacity-70" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" class="w-36 text-xs">
-                      <DropdownMenuItem
-                        @select="openPowerConfirm(account.name, desktop.desktopCode, 'awake', desktop.desktopName || desktop.desktopCode)"
-                        class="cursor-pointer gap-2"
-                      >
-                        <span>休眠唤醒</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        @select="openPowerConfirm(account.name, desktop.desktopCode, 'on', desktop.desktopName || desktop.desktopCode)"
-                        class="cursor-pointer gap-2"
-                      >
-                        <span>正常开机</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        @select="openPowerConfirm(account.name, desktop.desktopCode, 'reset', desktop.desktopName || desktop.desktopCode)"
-                        class="cursor-pointer gap-2"
-                      >
-                        <span>正常重启</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        @select="openPowerConfirm(account.name, desktop.desktopCode, 'force_reboot', desktop.desktopName || desktop.desktopCode)"
-                        class="cursor-pointer gap-2 text-amber-600 focus:text-amber-600 dark:text-amber-400"
-                      >
-                        <span>强制重启</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        @select="openPowerConfirm(account.name, desktop.desktopCode, 'shutdown', desktop.desktopName || desktop.desktopCode)"
-                        class="cursor-pointer gap-2"
-                      >
-                        <span>正常关机</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        @select="openPowerConfirm(account.name, desktop.desktopCode, 'force_off', desktop.desktopName || desktop.desktopCode)"
-                        class="cursor-pointer gap-2 text-destructive focus:text-destructive"
-                      >
-                        <span>强制断电关机</span>
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
                 </div>
               </div>
 

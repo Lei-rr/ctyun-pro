@@ -157,14 +157,20 @@ export class HangTask {
       dId;
     const logPrefix = dName ? `${accountName} - ${dName}` : accountName;
 
-    // 2. 核验是否需要开机
+    // 2. 核验是否需要开机或唤醒
     const isRunning = targetDesktop.useStatusText === '运行中' || targetDesktop.useStatusText === '离线运行';
     if (!isRunning) {
-      logger.addLog('warn', `[${logPrefix}] 云电脑当前为 [${targetDesktop.useStatusText}]，正在下发开机指令...`);
+      const isSleep = (targetDesktop.useStatusText || '').includes('休眠') || (targetDesktop.useStatusText || '').includes('睡眠');
+      const autoOp: 'on' | 'awake' = isSleep ? 'awake' : 'on';
+      const actionText = isSleep ? '唤醒' : '开机';
+      logger.addLog('warn', `[${logPrefix}] 云电脑当前为 [${targetDesktop.useStatusText}]，正在下发${actionText}指令...`);
       try {
-        await client.operateDesktop(dId, 'on');
+        await client.operateDesktop(dId, autoOp);
       } catch (e: any) {
-        logger.addLog('warn', `[${logPrefix}] 下发开机指令提示: ${e.message}`);
+        try {
+          await client.operateDesktop(dId, isSleep ? 'on' : 'awake');
+        } catch {}
+        logger.addLog('warn', `[${logPrefix}] 下发${actionText}指令提示: ${e.message}`);
       }
 
       // 等待开机就绪（20s 一次轮询，最长 5 分钟共 15 次）
