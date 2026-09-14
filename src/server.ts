@@ -272,7 +272,7 @@ export async function createServer() {
     const success = await sendWebhookNotification(
       targetUrl,
       'CTYUN-PRO - Webhook 通知测试',
-      `恭喜！您的 Webhook 消息通知配置成功！\n\n• 测试结果: 成功连通\n• 发送时间: ${nowStr}\n• 监控范围: 智能挂机达标、Token过期告警、每日运行战报已接入。`,
+      `Webhook 消息通知已成功连通。\n\n• 测试结果: 通信正常\n• 发送时间: ${nowStr}\n• 推送规则: 严格精简推送，仅在凭证失效、兑换成功、重试熔断及每日早报 (09:00) 时通知，杜绝日常琐碎流水刷屏。`,
     );
 
     if (success) {

@@ -13,7 +13,6 @@ import {
   Sparkles,
   ChevronDown,
   Settings2,
-  Shield,
 } from 'lucide-vue-next';
 import { Button } from '@/shared/ui/button';
 import { Badge } from '@/shared/ui/badge';
@@ -188,20 +187,14 @@ onUnmounted(() => {
               {{ appVersion }}
             </Badge>
           </div>
-          <div class="flex items-center gap-4">
+          <div class="flex items-center gap-3">
             <span class="flex items-center gap-1.5">
               <span
                 class="size-2 rounded-full inline-block"
                 :class="store.isWsConnected ? 'bg-emerald-500' : 'bg-destructive'"
               ></span>
-              <span class="font-mono text-[11px]">{{ store.isWsConnected ? '实时协同长连已就绪' : '长连重试中...' }}</span>
+              <span class="font-mono text-[11px]">{{ store.isWsConnected ? '长连接正常' : '长连接重试中...' }}</span>
             </span>
-            <AppTooltip content="基于原生 WebSocket 保持云电脑前后台长连保活">
-              <span class="flex items-center gap-1 cursor-help hover:text-foreground">
-                <Shield class="size-3.5 text-primary" />
-                安全保活
-              </span>
-            </AppTooltip>
           </div>
         </div>
       </footer>

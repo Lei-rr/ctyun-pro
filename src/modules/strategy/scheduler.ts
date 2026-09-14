@@ -119,15 +119,6 @@ export class TaskScheduler {
               this.profileManager.saveToDisk();
               this.logger.addLog('success', `[${name}] 每日任务已执行: ${res.message}`);
 
-              // Webhook 通知
-              if (this.profileManager.webhookUrl) {
-                sendWebhookNotification(
-                  this.profileManager.webhookUrl,
-                  `天翼云电脑 - [${name}] 每日任务完成`,
-                  `执行时间: ${targetTime}\n任务详情: ${res.message}`,
-                ).catch(() => {});
-              }
-
               // 若开启了使用1小时挂机任务，自动连带触发智能补足时长挂机
               if (tConf.keepAliveHang !== false) {
                 this.profileManager.manualHang(name).catch(() => {});
@@ -387,11 +378,12 @@ export class TaskScheduler {
                 ? `[${name}] 自动兑换跳过: 积分不足`
                 : `[${name}] 自动兑换跳过: 触发安全风控保护`;
               this.logger.addLog('error', failTitle);
-              if (this.profileManager.webhookUrl) {
+              // 积分不足属于预期内正常积累状态，不发送 Webhook 骚扰；触发安全风控时推送安全告警
+              if (isRiskLimited && this.profileManager.webhookUrl) {
                 sendWebhookNotification(
                   this.profileManager.webhookUrl,
-                  `天翼云电脑 - [${name}] 自动兑换未达成`,
-                  `策略触发: ${reason}\n原因: ${lastRedeemMsg}`,
+                  `天翼云电脑 - [${name}] 自动兑换触发风控保护`,
+                  `策略触发: ${reason}\n状态: 已熔断当日兑换以保护账号\n官方原因: ${lastRedeemMsg}`,
                 ).catch(() => {});
               }
             } else {

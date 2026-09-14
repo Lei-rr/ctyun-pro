@@ -75,21 +75,7 @@ const store = useAppStore();
 
         <div v-if="store.policyRedeemEnabled" class="pt-3 space-y-3 border-t border-border/40">
           <div class="space-y-1.5">
-            <div class="flex items-center justify-between">
-              <label class="text-xs font-medium text-foreground">目标商品</label>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                class="h-6 px-2 text-[11px] gap-1 text-muted-foreground hover:text-foreground cursor-pointer"
-                :disabled="store.policyRewardsLoading"
-                @click="store.refreshPolicyRewards()"
-                title="从天翼云官方商城同步最新商品目录"
-              >
-                <RefreshCw class="size-3" :class="{ 'animate-spin': store.policyRewardsLoading }" />
-                <span>刷新商品</span>
-              </Button>
-            </div>
+            <label class="text-xs font-medium text-foreground">目标商品</label>
             <div class="flex items-center gap-2">
               <select
                 v-model="store.policyTargetProdId"

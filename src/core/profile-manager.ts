@@ -1230,17 +1230,6 @@ export class ProfileManager {
           finalPoints = sum.generalPoints + sum.phonePoints;
         } catch {}
 
-        // Webhook 推送挂机结果通知
-        if (this.webhookUrl && hangResult) {
-          const title = hangResult.success
-            ? (hangResult.isCompleted
-                ? `天翼云电脑 - [${accountName}] 智能挂机已达标`
-                : `天翼云电脑 - [${accountName}] 智能挂机完成`)
-            : `天翼云电脑 - [${accountName}] 智能挂机异常`;
-          const content = `账号: ${accountName}\n挂机结果: ${hangResult.message}\n最新总积分: ${finalPoints || '已刷新'}\n完成时间: ${getCstDateTimeString()}`;
-          sendWebhookNotification(this.webhookUrl, title, content).catch(() => {});
-        }
-
         this.notifyStatusChange();
       } catch (err: any) {
         this.logger.addLog('warn', `[${accountName}] 挂机收尾处理提示: ${err.message}`);

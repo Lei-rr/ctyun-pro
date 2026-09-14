@@ -109,13 +109,16 @@ async function saveSystemConfig() {
       </div>
 
       <div class="space-y-1.5">
-        <label class="text-xs font-medium text-foreground">Webhook 推送地址 (支持 Server酱 / Bark / PushPlus / 企微 / 飞书 / 钉钉)</label>
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-medium text-foreground">Webhook 推送地址</label>
+          <span class="text-[11px] text-muted-foreground">精简告警 + 09:00 早报</span>
+        </div>
         <div class="flex gap-2">
           <Input
             type="text"
             v-model="sysWebhookUrl"
-            placeholder="https://..."
-            class="h-9 flex-1"
+            placeholder="支持 Server酱 / Bark / PushPlus / 企微 / 飞书 / 钉钉"
+            class="h-9 flex-1 text-xs"
           />
           <Button
             type="button"
@@ -128,6 +131,7 @@ async function saveSystemConfig() {
             {{ testWebhookLoading ? '测试中...' : '测试' }}
           </Button>
         </div>
+        <p class="text-[11px] text-muted-foreground/80">仅在凭证失效、兑换成功、重试熔断及每日早报时推送，杜绝刷屏。</p>
       </div>
 
       <div class="pt-2 flex gap-2.5">
