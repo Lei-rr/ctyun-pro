@@ -314,9 +314,9 @@ export function registerDesktopProxyRoutes(
     if (u.startsWith(proxyBase)) return u;
     if (u.startsWith('https://') || u.startsWith('http://')) {
       if (u.includes('.ctyun.cn') || u.includes('-deskmgr.ctyun.cn')) {
-        // 排除官方 CDN 静态分块 (由本地专有缓存通道分发，不走 API 代理)
+        // 官方 CDN 静态分块直接透传官方 CDN
         if (u.includes('deskcdn.ctyun.cn/pccdnstatic/')) {
-          return '/ctyun-static/pccdnstatic/' + u.split('deskcdn.ctyun.cn/pccdnstatic/')[1];
+          return '/pccdnstatic/' + u.split('deskcdn.ctyun.cn/pccdnstatic/')[1];
         }
         return proxyBase + encodeURIComponent(u);
       }
@@ -460,10 +460,10 @@ export function registerDesktopProxyRoutes(
 `;
 
       html = html.replace('<head>', `<head><title>天翼量子AI云电脑 - CTYUN-PRO</title>${injectScript}`);
-      html = html.replace(/src="static\//g, 'src="/ctyun-static/static/');
-      html = html.replace(/src="\.\/static\//g, 'src="/ctyun-static/static/');
-      html = html.replace(/href="\.\/static\//g, 'href="/ctyun-static/static/');
-      html = html.replace(/href="\.\/manifest\.json"/g, 'href="/ctyun-static/manifest.json"');
+      html = html.replace(/src="static\//g, 'src="/static/');
+      html = html.replace(/src="\.\/static\//g, 'src="/static/');
+      html = html.replace(/href="\.\/static\//g, 'href="/static/');
+      html = html.replace(/href="\.\/manifest\.json"/g, 'href="/manifest.json"');
 
       reply
         .type('text/html; charset=utf-8')
@@ -524,14 +524,23 @@ export function registerDesktopProxyRoutes(
     await proxyStaticAsset(reply, targetUrl);
   });
 
-  // 5. 代理天翼云静态资源 (/ctyun-static/*) 与官方 CDN 资源
-  fastify.get('/ctyun-static/*', async (request: FastifyRequest, reply: FastifyReply) => {
+  // 5. 代理天翼云静态资源 (/static/*, /manifest.json, /pccdnstatic/*)
+  fastify.get('/static/*', async (request: FastifyRequest, reply: FastifyReply) => {
     const rawUrl = request.raw.url || '';
-    const relPath = rawUrl.replace(/^\/ctyun-static\//, '').replace(/^\/+/, '');
-    // 优先从官方主站拉取，若包含 pccdnstatic/ 则从官方专用 CDN 拉取
-    const targetUrl = relPath.startsWith('pccdnstatic/')
-      ? `https://deskcdn.ctyun.cn/${relPath}`
-      : `https://pc.ctyun.cn/${relPath}`;
+    const relPath = rawUrl.replace(/^\/+/, '');
+    const targetUrl = `https://pc.ctyun.cn/${relPath}`;
+    await proxyStaticAsset(reply, targetUrl);
+  });
+
+  fastify.get('/manifest.json', async (request: FastifyRequest, reply: FastifyReply) => {
+    const targetUrl = 'https://pc.ctyun.cn/manifest.json';
+    await proxyStaticAsset(reply, targetUrl);
+  });
+
+  fastify.get('/pccdnstatic/*', async (request: FastifyRequest, reply: FastifyReply) => {
+    const rawUrl = request.raw.url || '';
+    const relPath = rawUrl.replace(/^\/+/, '');
+    const targetUrl = `https://deskcdn.ctyun.cn/${relPath}`;
     await proxyStaticAsset(reply, targetUrl);
   });
 
