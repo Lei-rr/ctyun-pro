@@ -183,7 +183,7 @@ onUnmounted(() => {
       <footer class="mt-auto border-t border-border/40 py-6 text-xs text-muted-foreground">
         <div class="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-3 px-4 sm:flex-row sm:px-6 lg:px-8">
           <div class="flex items-center gap-2">
-            <span>天翼云电脑智能助手</span>
+            <span class="font-medium">CTYUN-PRO</span>
             <Badge variant="outline" class="h-4 px-1 text-[10px] border-border/60">
               {{ appVersion }}
             </Badge>
