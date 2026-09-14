@@ -7,7 +7,7 @@ import { AppDialog } from '@/shared/ui/dialog';
 export interface PowerTarget {
   accountName: string;
   desktopCode: string;
-  action: 'on' | 'shutdown' | 'reset';
+  action: 'on' | 'awake' | 'shutdown' | 'reset' | 'force_off' | 'force_reboot';
   desktopName?: string;
 }
 
@@ -43,7 +43,13 @@ async function confirmOperate() {
   <AppDialog
     :open="open"
     @update:open="emit('update:open', $event)"
-    :title="target?.action === 'on' ? '确认开机' : target?.action === 'reset' ? '确认重启' : '确认关机'"
+    :title="
+      target?.action === 'on' ? '确认开机' :
+      target?.action === 'awake' ? '确认唤醒' :
+      target?.action === 'reset' ? '确认重启' :
+      target?.action === 'force_reboot' ? '确认强制重启' :
+      target?.action === 'force_off' ? '确认强制关机' : '确认关机'
+    "
     description="您正在对云电脑进行电源管理操作，请确认："
     content-class="sm:max-w-sm"
   >
@@ -62,19 +68,31 @@ async function confirmOperate() {
           <span
             class="font-semibold"
             :class="{
-              'text-emerald-600 dark:text-emerald-400': target.action === 'on',
-              'text-amber-600 dark:text-amber-400': target.action === 'reset',
-              'text-destructive': target.action === 'shutdown',
+              'text-emerald-600 dark:text-emerald-400': target.action === 'on' || target.action === 'awake',
+              'text-amber-600 dark:text-amber-400': target.action === 'reset' || target.action === 'force_reboot',
+              'text-destructive': target.action === 'shutdown' || target.action === 'force_off',
             }"
           >
-            {{ target.action === 'on' ? '开机' : target.action === 'reset' ? '重启云电脑' : '强制关机' }}
+            {{
+              target.action === 'on' ? '开机' :
+              target.action === 'awake' ? '休眠唤醒' :
+              target.action === 'reset' ? '软重启' :
+              target.action === 'force_reboot' ? '强制重启 (硬重置)' :
+              target.action === 'force_off' ? '强制断电关机' : '正常关机'
+            }}
           </span>
         </div>
       </div>
 
       <p class="text-xs text-muted-foreground">
-        <template v-if="target.action === 'on'">
-          开机指令下发后，系统将自动轮询实例状态并在开机就绪后自动接入保活。
+        <template v-if="target.action === 'on' || target.action === 'awake'">
+          指令下发后，系统将自动轮询实例状态并在云电脑就绪后自动接入保活。
+        </template>
+        <template v-else-if="target.action === 'force_off'">
+          强制关机将直接切断云电脑电源，相当于拔掉电源线，可能导致未保存的数据丢失。仅建议在系统卡死无响应时使用。
+        </template>
+        <template v-else-if="target.action === 'force_reboot'">
+          强制重启将直接硬件复位虚拟机，可能导致未保存的数据丢失。仅建议在系统卡死无响应时使用。
         </template>
         <template v-else-if="target.action === 'reset'">
           重启可能导致正在运行的保活或任务断开，系统将在重启就绪后自动重新连接。
@@ -97,7 +115,7 @@ async function confirmOperate() {
         </Button>
         <Button
           type="button"
-          :variant="target?.action === 'shutdown' ? 'destructive' : 'default'"
+          :variant="(target?.action === 'shutdown' || target?.action === 'force_off') ? 'destructive' : 'default'"
           :disabled="loading"
           class="flex-1 h-9 shadow-xs cursor-pointer"
           @click="confirmOperate"

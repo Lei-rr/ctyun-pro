@@ -717,18 +717,26 @@ export class ProfileManager {
           return;
         }
 
-        const list = await client.getDesktopList();
-        const current = list.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
         const state = this.accountStates.get(accountName);
         const target = state?.desktops.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
 
-        if (current && target) {
+        // 优先使用官方轻量级毫秒级接口 getDesktopState 查询最新真实运行状态 (避免全量列表延迟)
+        const stateInfo = await client.getDesktopState(desktopId, target?.objType ?? 0);
+        let realStatusText = stateInfo?.useStatusText;
+
+        if (!realStatusText) {
+          const list = await client.getDesktopList();
+          const current = list.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
+          realStatusText = current?.useStatusText;
+        }
+
+        if (realStatusText && target) {
           const dName = target.desktopName || (target as any).computerName || (target as any).name || desktopId;
           const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
-          target.useStatusText = current.useStatusText;
+          target.useStatusText = realStatusText;
 
           if (operation === 'on' || operation === 'reset') {
-            if (current.useStatusText === '运行中') {
+            if (realStatusText === '运行中') {
               clearInterval(timer);
               this.powerTrackingTimers.delete(trackingKey);
               target.status = 'connecting';
@@ -741,7 +749,7 @@ export class ProfileManager {
               return;
             }
           } else if (operation === 'shutdown') {
-            if (current.useStatusText === '已关机' || current.useStatusText === '关机') {
+            if (realStatusText === '已关机' || realStatusText === '关机') {
               clearInterval(timer);
               this.powerTrackingTimers.delete(trackingKey);
               target.status = 'stopped';

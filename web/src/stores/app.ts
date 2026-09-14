@@ -1146,7 +1146,7 @@ export const useAppStore = defineStore('app', () => {
     operateDesktopPower: async (
       accountName: string,
       desktopCode: string,
-      operation: 'on' | 'shutdown' | 'reset',
+      operation: 'on' | 'awake' | 'shutdown' | 'reset' | 'force_off' | 'force_reboot',
     ) => {
       try {
         const res = await fetch(`/api/desktops/${encodeURIComponent(desktopCode)}/power`, {
