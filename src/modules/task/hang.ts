@@ -1,8 +1,9 @@
 import WebSocket from 'ws';
-import { Protocol } from '../core/protocol.js';
-import type { CtYunClient, Desktop, DesktopInfo } from '../core/client.js';
-import type { Logger } from '../core/logger.js';
+import { Protocol, ClinkMsgType } from '../../core/protocol.js';
+import type { CtYunClient, Desktop, DesktopInfo } from '../../core/client.js';
+import type { Logger } from '../../core/logger.js';
 import { SignTask, isHangTaskName } from './sign.js';
+import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
 
 export interface HangTaskSession {
   accountName: string;
@@ -61,8 +62,13 @@ export class HangTask {
       const elapsed = Math.max(0, Math.floor((Date.now() - s.connectedAt) / 1000));
       cur = Math.min(s.totalProgress || 3600, cur + elapsed);
     }
+    const total = s.totalProgress || 3600;
+    // 只要推演达到或超过 3600s，立即对外部调用隐藏，杜绝前端卡片状态异常残留
+    if (cur >= total || s.status !== 'running') {
+      return null;
+    }
     const message = s.connectedAt
-      ? `纯协议挂机中 (${cur}/${s.totalProgress || 3600}秒)`
+      ? `纯协议挂机中 (${cur}/${total}秒)`
       : s.message || '协议准备中';
 
     return {
@@ -90,10 +96,10 @@ export class HangTask {
   public static async stopHang(accountName: string): Promise<void> {
     const s = activeHangSessions.get(accountName);
     if (s) {
+      activeHangSessions.delete(accountName);
       try {
         await s.stop();
       } catch {}
-      activeHangSessions.delete(accountName);
     }
   }
 
@@ -108,6 +114,7 @@ export class HangTask {
     options: {
       onlyLoginTask?: boolean;
       desktopId?: string;
+      desktopCode?: string;
       onProgress?: (cur: number, total: number) => void;
     } = {},
   ): Promise<{ success: boolean; message: string; isCompleted?: boolean }> {
@@ -124,8 +131,11 @@ export class HangTask {
     let targetDesktop: Desktop | undefined;
     try {
       const desktops = await client.getDesktopList();
-      if (options.desktopId) {
-        targetDesktop = desktops.find((d) => String(d.desktopId) === String(options.desktopId));
+      const targetIdentifier = options.desktopCode || options.desktopId;
+      if (targetIdentifier) {
+        targetDesktop = desktops.find(
+          (d) => String(d.desktopCode) === String(targetIdentifier) || String(d.desktopId) === String(targetIdentifier)
+        );
       }
       if (!targetDesktop) {
         targetDesktop = desktops.find((d) => d.useStatusText === '运行中' || d.useStatusText === '离线运行') || desktops[0];
@@ -147,23 +157,29 @@ export class HangTask {
       dId;
     const logPrefix = dName ? `${accountName} - ${dName}` : accountName;
 
-    // 2. 核验是否需要开机
+    // 2. 核验是否需要开机或唤醒
     const isRunning = targetDesktop.useStatusText === '运行中' || targetDesktop.useStatusText === '离线运行';
     if (!isRunning) {
-      logger.addLog('warn', `[${logPrefix}] 云电脑当前为 [${targetDesktop.useStatusText}]，正在下发开机指令...`);
+      const isSleep = (targetDesktop.useStatusText || '').includes('休眠') || (targetDesktop.useStatusText || '').includes('睡眠');
+      const autoOp: 'on' | 'awake' = isSleep ? 'awake' : 'on';
+      const actionText = isSleep ? '唤醒' : '开机';
+      logger.addLog('warn', `[${logPrefix}] 云电脑当前为 [${targetDesktop.useStatusText}]，正在下发${actionText}指令...`);
       try {
-        await client.operateDesktop(dId, 'on');
+        await client.operateDesktop(dId, autoOp);
       } catch (e: any) {
-        logger.addLog('warn', `[${logPrefix}] 下发开机指令提示: ${e.message}`);
+        try {
+          await client.operateDesktop(dId, isSleep ? 'on' : 'awake');
+        } catch {}
+        logger.addLog('warn', `[${logPrefix}] 下发${actionText}指令提示: ${e.message}`);
       }
 
-      // 等待开机就绪（最多等待 3 分钟）
+      // 等待开机就绪（20s 一次轮询，最长 5 分钟共 15 次）
       let ready = false;
-      for (let i = 0; i < 36; i++) {
-        await new Promise((r) => setTimeout(r, 5000));
+      for (let i = 0; i < 15; i++) {
+        await new Promise((r) => setTimeout(r, 20000));
         try {
           const list = await client.getDesktopList();
-          const cur = list.find((d) => String(d.desktopId) === dId);
+          const cur = list.find((d) => String(d.desktopId) === dId || String(d.desktopCode) === String(targetDesktop.desktopCode));
           if (cur && (cur.useStatusText === '运行中' || cur.useStatusText === '离线运行')) {
             targetDesktop.useStatusText = cur.useStatusText;
             ready = true;
@@ -214,16 +230,22 @@ export class HangTask {
       return { success: false, message: '获取云电脑网关参数异常' };
     }
 
-    // 5. 纯协议握手长连接
-    const hostParts = desktopInfo.clinkLvsOutHost.split(':');
-    const wsUrl = `wss://${desktopInfo.clinkLvsOutHost}/clinkProxy/${dId}/MAIN`;
+    // 5. 纯协议握手长连接：向仲裁器申请 TASK 独占租约，杜绝 1005 竞态互踢
+    const arbiter = DesktopSessionArbiter.getInstance();
+    arbiter.setLogger(logger);
 
-    logger.addLog(
-      'info',
-      options.onlyLoginTask
-        ? `[${logPrefix}] 纯协议连接云电脑完成登录任务 (${desktopInfo.clinkLvsOutHost})...`
-        : `[${logPrefix}] 纯协议启动挂机：当前累计 ${currentProgress}/${totalProgress}秒，连接网关中...`,
-    );
+    const arbKey = targetDesktop.desktopCode || dId;
+    const yieldStatus = arbiter.getYieldStatus(arbKey);
+    if (yieldStatus.yielding) {
+      logger.addLog(
+        'info',
+        `[${logPrefix}] 桌面处于外部官方客户端主动避让期 (剩余 ${yieldStatus.remainingSeconds}秒，原因: ${yieldStatus.reason})，挂机任务主动礼让`,
+      );
+      return {
+        success: true,
+        message: `检测到官方客户端接入中，任务主动礼让避让 (${yieldStatus.remainingSeconds}s)`,
+      };
+    }
 
     let ws: WebSocket | null = null;
     let heartbeatTimer: NodeJS.Timeout | null = null;
@@ -252,7 +274,32 @@ export class HangTask {
         } catch {}
         ws = null;
       }
+      await arbiter.releaseLease(arbKey, 'hang', accountName);
     };
+
+    const acquired = await arbiter.acquireLease(
+      arbKey,
+      'hang',
+      accountName,
+      async () => {
+        logger.addLog('info', `[${logPrefix}] 收到高优先级独占让位信号，挂机会话主动释放`);
+        await cleanup();
+      },
+    );
+
+    if (!acquired) {
+      return { success: false, message: '无法获取桌面连接独占锁，当前桌面正在被使用或正在直连' };
+    }
+
+    const hostParts = desktopInfo.clinkLvsOutHost.split(':');
+    const wsUrl = `wss://${desktopInfo.clinkLvsOutHost}/clinkProxy/${dId}/MAIN`;
+
+    logger.addLog(
+      'info',
+      options.onlyLoginTask
+        ? `[${logPrefix}] 纯协议连接云电脑完成登录任务 (${desktopInfo.clinkLvsOutHost})...`
+        : `[${logPrefix}] 纯协议启动挂机：当前累计 ${currentProgress}/${totalProgress}秒，连接网关中...`,
+    );
 
     const session: HangTaskSession = {
       accountName,
@@ -331,18 +378,32 @@ export class HangTask {
           try {
             const infos = Protocol.parseSendInfo(buffer);
             for (const info of infos) {
-              // 收到服务端 Type 103 用户认证挑战
-              if (info.type === 103) {
+              // 官方规范: 收到服务端 Type 3 ACK 窗口协商 -> 回复 Type 1 ACK_SYNC
+              if (info.type === ClinkMsgType.MSG_SET_ACK && info.data && info.data.length >= 4) {
+                const generation = info.data.readUInt32LE(0);
+                const ackSync = Protocol.buildAckSync(generation);
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                  ws.send(ackSync);
+                }
+              }
+
+              // 官方规范: 收到服务端 Type 4 Ping 探测 -> 立即回复 Type 3 Pong
+              if (info.type === ClinkMsgType.MSG_PING) {
+                const pong = Protocol.buildPong();
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                  ws.send(pong);
+                }
+              }
+
+              // 收到服务端 Type 103 用户认证挑战 (CLINK_MSG_MAIN_INIT)
+              if (info.type === ClinkMsgType.MSG_MAIN_INIT) {
                 logger.addLog('info', `[${logPrefix}] 收到云电脑 103 握手认证，正在回传用户凭证与通道认领包...`);
 
                 // 1. 回传 Type 118 用户身份包
-                const userPayload = JSON.stringify({
-                  type: 1,
-                  userName: client.loginInfo!.userName,
-                  userInfo: '',
-                  userId: client.loginInfo!.userId,
-                });
-                const msg118 = Protocol.buildSendInfoBuffer(118, Buffer.from(userPayload, 'utf-8'), true);
+                const msg118 = Protocol.buildClientUserName(
+                  client.loginInfo!.userName,
+                  client.loginInfo!.userId,
+                );
                 ws.send(msg118);
 
                 // 2. 发送 Type 112 会话认领包 (CLINK_MSGC_MAIN_CLIENT_LOGIN_INFO)
@@ -356,8 +417,17 @@ export class HangTask {
                 );
                 ws.send(msg112);
 
+                // 2.1 对齐官方 Web: 主动查询 Clink 版本 (Type 116)
+                setTimeout(() => {
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    try {
+                      ws.send(Protocol.buildGetClinkVersion());
+                    } catch {}
+                  }
+                }, 500);
+
                 // 3. 发送 Type 104 通道挂接就绪包 (CLINK_MSGC_MAIN_ATTACH_CHANNELS)
-                const msg104 = Protocol.buildMessage(104);
+                const msg104 = Protocol.buildAttachChannels();
                 ws.send(msg104);
 
                 logger.addLog('success', `[${logPrefix}] 桌面会话认领与通道挂接完成，在线状态已激活！`);
@@ -365,7 +435,8 @@ export class HangTask {
 
                 // 若本次只做「登录AI云电脑」任务，握手完成后等待 3 秒确保服务端确认即可优雅退出
                 if (options.onlyLoginTask) {
-                  setTimeout(() => {
+                  setTimeout(async () => {
+                    await cleanup();
                     resolve({ success: true, message: '已完成纯协议桌面登录激活 (+100积分)' });
                   }, 3000);
                   return;
@@ -376,7 +447,7 @@ export class HangTask {
                   heartbeatTimer = setInterval(() => {
                     if (ws && ws.readyState === WebSocket.OPEN) {
                       try {
-                        const hbBuf = Protocol.buildMessage(7); // Type 7 心跳包
+                        const hbBuf = Protocol.buildHeartbeat(); // 官方规范: Type 7 客户端 30s 活跃心跳
                         ws.send(hbBuf);
                         logger.addLog('info', `[${logPrefix}] 发送客户端活跃心跳 (30s 心跳保活)`);
                       } catch {}
@@ -402,12 +473,14 @@ export class HangTask {
                         progressUpdateTimer = null;
                       }
 
+                      // 立即从全局会话中移除并回调清空 hangStatus，毫秒级广播复位，杜绝前端卡片状态异常残留
+                      activeHangSessions.delete(accountName);
+                      options.onProgress?.(totalProgress, totalProgress);
+
                       // 达到 3600 秒时间后，在主动断开长连前缓冲 2 秒，确保官方离线结算时物理时长绝对达标（防秒级截断），而业务与判定基准始终是 3600s
                       logger.addLog('info', `[${logPrefix}] 挂机时长已达到目标 (${totalProgress}/${totalProgress}秒)，缓冲 2 秒后主动断开长连触发官方离线结算...`);
                       await new Promise((r) => setTimeout(r, 2000));
 
-                      // 立即从全局会话中移除并清理，确保外部读取立即为已完成
-                      activeHangSessions.delete(accountName);
                       await cleanup();
 
                       // 离线断开后，等待 3 秒调用官方接口核验积分与时长
@@ -451,7 +524,10 @@ export class HangTask {
 
               // C. 互踢避让与抢占保护：收到 Type 119/120/137 服务端离线通知或多端抢占通知
               if (info.type === 119 || info.type === 120 || info.type === 137) {
-                logger.addLog('info', `[${logPrefix}] 收到服务端会话通知 (Type ${info.type})，用户客户端已接入，纯协议通道主动让位...`);
+                logger.addLog('warn', `[${logPrefix}] 收到服务端会话通知 (Type ${info.type})，检测到外部官方客户端接入，系统主动避让 5 分钟`);
+                await arbiter.yieldToExternal(arbKey, 5, `服务端通知外部客户端接入 (Type ${info.type})`);
+                activeHangSessions.delete(accountName);
+                options.onProgress?.(session.currentProgress, totalProgress);
                 resolve({ success: true, message: '检测到官方客户端接入，纯协议通道主动避让' });
                 return;
               }
@@ -462,9 +538,21 @@ export class HangTask {
         ws.on('close', async (code, reason) => {
           const reasonStr = reason?.toString() || '';
           if (isTerminated) return;
+
+          // 核心合规：断开时毫秒级清空 hangStatus 广播复位，杜绝前端卡片状态异常残留
+          activeHangSessions.delete(accountName);
+          options.onProgress?.(session.currentProgress, totalProgress);
+
           if (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) {
-            logger.addLog('warn', `[${logPrefix}] 网关通知桌面被真实客户端接入，纯协议任务主动让位`);
+            logger.addLog('warn', `[${logPrefix}] 网关通知桌面被真实客户端接入 (Code 4001)，系统主动避让 5 分钟`);
+            await arbiter.yieldToExternal(arbKey, 5, '网关通知真实客户端接入 (Code 4001)');
             resolve({ success: true, message: '客户端主动接入，任务让位' });
+            return;
+          }
+
+          if (options.onlyLoginTask) {
+            await cleanup();
+            resolve({ success: true, message: '纯协议桌面登录连接已断开' });
             return;
           }
 

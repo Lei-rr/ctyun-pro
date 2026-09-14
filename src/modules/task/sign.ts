@@ -1,5 +1,5 @@
-import type { CtYunClient } from '../core/client.js';
-import { safeFetch } from '../core/utils.js';
+import type { CtYunClient } from '../../core/client.js';
+import { safeFetch } from '../../core/utils.js';
 
 export type TaskType = 'hang' | 'login' | 'chat' | 'other';
 
@@ -159,7 +159,13 @@ export class SignTask {
       if (pointRes.status === 200) {
         const pointJson = (await pointRes.json()) as { code: number; data?: any[] };
         if (pointJson.code === 0 && Array.isArray(pointJson.data)) {
-          const gen = pointJson.data.find((p) => p.pointType === 1);
+          // 官方数据中可能包含两项：一项是 willOutDate: true 即将过期的子积分（如100分），一项为真实总积分（如900分）
+          // 优先精准提取非即将过期（!p.willOutDate && p.pointType === 1）的主账户可用总积分项；若都无标识则取数值最大项！
+          const gen =
+            pointJson.data.find((p) => !p.willOutDate && p.pointType === 1) ||
+            pointJson.data
+              .filter((p) => p.pointType === 1)
+              .reduce((max, cur) => ((cur.points || 0) > (max.points || 0) ? cur : max), pointJson.data[0]);
           const phone = pointJson.data.find((p) => p.pointType === 500);
           const exp = pointJson.data.find((p) => p.willOutDate);
           if (gen) generalPoints = Number(gen.points || 0);

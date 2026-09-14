@@ -4,15 +4,7 @@ import https from 'node:https';
 import { URL } from 'node:url';
 import type { ProfileManager } from './profile-manager.js';
 
-// 官方 HTML 入口与静态资源全局缓存 (带容量上限与过期控制)
-let cachedIndexHtml: string | null = null;
-let lastIndexHtmlFetch = 0;
-const HTML_CACHE_TTL = 3600 * 1000; // 1 小时
-
-// 内存静态资源缓存限制
-const MAX_CACHE_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
-let currentCacheSizeBytes = 0;
-const ctyunStaticCache = new Map<string, { buffer: Buffer; contentType: string; size: number; timestamp: number }>();
+// 官方入口与静态资源全量实时透传代理（不设本地/内存缓存，保障官方前端升级后版本强一致）
 
 /**
  * 基于 Node.js 原生 https 发起 IPv4 请求（规避容器与云厂商环境 IPv6 路由不可达导致 fetch failed / ETIMEDOUT）
@@ -54,14 +46,9 @@ function requestBufferIpv4(urlStr: string, headers: Record<string, string> = {})
 }
 
 /**
- * 获取天翼云官方 PC 客户端入口 HTML 骨架
+ * 获取天翼云官方 PC 客户端入口 HTML 骨架（全量实时拉取，不设本地 HTML 缓存）
  */
 async function getCtyunIndexHtml(): Promise<string> {
-  const now = Date.now();
-  if (cachedIndexHtml && now - lastIndexHtmlFetch < HTML_CACHE_TTL) {
-    return cachedIndexHtml;
-  }
-
   const res = await requestBufferIpv4('https://pc.ctyun.cn/');
   if (res.status >= 400) {
     throw new Error(`拉取天翼云入口网页失败: HTTP ${res.status}`);
@@ -70,24 +57,13 @@ async function getCtyunIndexHtml(): Promise<string> {
   let text = res.buffer.toString('utf-8');
   // 彻底移除官方 serviceWorker 注册逻辑，杜绝非同源与非标准 scope 导致的 SecurityError
   text = text.replace(/navigator\.serviceWorker\.register\([^)]+\)/g, 'Promise.resolve()');
-  cachedIndexHtml = text;
-  lastIndexHtmlFetch = now;
   return text;
 }
 
 /**
- * 代理静态资源并执行内存安全缓存
+ * 代理静态资源并执行全量实时透传（无本地/内存缓存，保障官方前端升级后实时对齐）
  */
 async function proxyStaticAsset(reply: FastifyReply, targetUrl: string): Promise<void> {
-  const cached = ctyunStaticCache.get(targetUrl);
-  if (cached) {
-    reply
-      .header('Content-Type', cached.contentType)
-      .header('Cache-Control', 'public, max-age=86400')
-      .send(cached.buffer);
-    return;
-  }
-
   try {
     const upstream = await requestBufferIpv4(targetUrl, {
       Referer: 'https://pc.ctyun.cn/',
@@ -98,32 +74,10 @@ async function proxyStaticAsset(reply: FastifyReply, targetUrl: string): Promise
       return;
     }
 
-    const contentType = upstream.contentType;
-    const buffer = upstream.buffer;
-
-    // LRU 淘汰：若超出容量循环清理旧资源
-    while (currentCacheSizeBytes + buffer.length > MAX_CACHE_SIZE_BYTES && ctyunStaticCache.size > 0) {
-      const oldestKey = ctyunStaticCache.keys().next().value;
-      if (!oldestKey) break;
-      const item = ctyunStaticCache.get(oldestKey);
-      if (item) currentCacheSizeBytes -= item.size;
-      ctyunStaticCache.delete(oldestKey);
-    }
-
-    if (buffer.length < 10 * 1024 * 1024) {
-      ctyunStaticCache.set(targetUrl, {
-        buffer,
-        contentType,
-        size: buffer.length,
-        timestamp: Date.now(),
-      });
-      currentCacheSizeBytes += buffer.length;
-    }
-
     reply
-      .header('Content-Type', contentType)
-      .header('Cache-Control', 'public, max-age=86400')
-      .send(buffer);
+      .header('Content-Type', upstream.contentType)
+      .header('Cache-Control', 'no-cache, no-store, must-revalidate')
+      .send(upstream.buffer);
   } catch (err: any) {
     reply.code(502).send(`Gateway Proxy Error: ${err.message}`);
   }
@@ -141,8 +95,8 @@ export function registerDesktopProxyRoutes(
   const renderDesktopView = async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
 
-    const params = request.params as { id?: string };
-    const desktopCode = params?.id;
+    const params = request.params as { desktopCode?: string };
+    const desktopCode = (params?.desktopCode || '').trim();
     if (!desktopCode) {
       reply.code(400).type('text/html; charset=utf-8').send('<h3 style="font-family:sans-serif;padding:20px;">缺少云电脑设备编码 (desktopCode)</h3>');
       return;
@@ -150,7 +104,7 @@ export function registerDesktopProxyRoutes(
 
     try {
       // 1. 通过 desktopCode 查找对应的账号与桌面
-      const target = manager.findDesktopById(desktopCode);
+      const target = manager.findDesktopByCode(desktopCode);
       if (!target) {
         reply.code(404).type('text/html; charset=utf-8').send(`<h3 style="font-family:sans-serif;padding:20px;">未检测到可用云电脑 (设备编码: ${desktopCode})</h3>`);
         return;
@@ -340,9 +294,11 @@ export function registerDesktopProxyRoutes(
       }).catch(() => {});
     } catch (e) {}
   }
-  setInterval(sendWebHeartbeat, 15000);
+  // 页面进入或刷新时立即首发一次活跃心跳，主动续期并取消延迟让渡，彻底防止刷新期间被后台保活抢占踢下线
+  sendWebHeartbeat();
+  setInterval(sendWebHeartbeat, 5000);
 
-  // 页面关闭或卸载时通知后端立即恢复保活连接 (基于桌面唯一 desktopCode 寻址，免传 account)
+  // 页面关闭通知：由于用户刷新浏览器也会触发 beforeunload，故此处由后端提供防抖宽限期，避免刷新瞬时触发抢占
   window.addEventListener('beforeunload', function() {
     try {
       if (navigator.sendBeacon) {
@@ -358,9 +314,9 @@ export function registerDesktopProxyRoutes(
     if (u.startsWith(proxyBase)) return u;
     if (u.startsWith('https://') || u.startsWith('http://')) {
       if (u.includes('.ctyun.cn') || u.includes('-deskmgr.ctyun.cn')) {
-        // 排除官方 CDN 静态分块 (由本地专有缓存通道分发，不走 API 代理)
+        // 官方 CDN 静态分块直接透传官方 CDN
         if (u.includes('deskcdn.ctyun.cn/pccdnstatic/')) {
-          return '/ctyun-static/pccdnstatic/' + u.split('deskcdn.ctyun.cn/pccdnstatic/')[1];
+          return '/pccdnstatic/' + u.split('deskcdn.ctyun.cn/pccdnstatic/')[1];
         }
         return proxyBase + encodeURIComponent(u);
       }
@@ -504,10 +460,10 @@ export function registerDesktopProxyRoutes(
 `;
 
       html = html.replace('<head>', `<head><title>天翼量子AI云电脑 - CTYUN-PRO</title>${injectScript}`);
-      html = html.replace(/src="static\//g, 'src="/ctyun-static/static/');
-      html = html.replace(/src="\.\/static\//g, 'src="/ctyun-static/static/');
-      html = html.replace(/href="\.\/static\//g, 'href="/ctyun-static/static/');
-      html = html.replace(/href="\.\/manifest\.json"/g, 'href="/ctyun-static/manifest.json"');
+      html = html.replace(/src="static\//g, 'src="/static/');
+      html = html.replace(/src="\.\/static\//g, 'src="/static/');
+      html = html.replace(/href="\.\/static\//g, 'href="/static/');
+      html = html.replace(/href="\.\/manifest\.json"/g, 'href="/manifest.json"');
 
       reply
         .type('text/html; charset=utf-8')
@@ -518,22 +474,24 @@ export function registerDesktopProxyRoutes(
     }
   };
 
-  // 顶级标准 RESTful 直连: /desktop/:id
-  fastify.get('/desktop/:id', renderDesktopView);
+  // 顶级标准 RESTful 直连: /desktop/:desktopCode
+  fastify.get('/desktop/:desktopCode', renderDesktopView);
 
   // 2. 接收前台 Web 用户活跃心跳 (刷新避让时长 30s)
-  fastify.post('/api/desktops/:id/web-active', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post('/api/desktops/:desktopCode/web-active', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
-    const { id } = request.params as { id: string };
-    manager.touchWebUserActive('', id, 30);
+    const { desktopCode } = request.params as { desktopCode: string };
+    const targetCode = (desktopCode || '').trim();
+    manager.touchWebUserActive('', targetCode, 30);
     reply.send({ success: true });
   });
 
   // 3. 接收前台 Web 用户关闭通知 (立即清除避让标记，使后台长连接无缝复活)
-  fastify.post('/api/desktops/:id/web-close', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post('/api/desktops/:desktopCode/web-close', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
-    const { id } = request.params as { id: string };
-    manager.releaseWebUserActive('', id);
+    const { desktopCode } = request.params as { desktopCode: string };
+    const targetCode = (desktopCode || '').trim();
+    manager.releaseWebUserActive('', targetCode);
     reply.send({ success: true });
   });
 
@@ -566,14 +524,23 @@ export function registerDesktopProxyRoutes(
     await proxyStaticAsset(reply, targetUrl);
   });
 
-  // 5. 代理天翼云静态资源 (/ctyun-static/*) 与官方 CDN 资源
-  fastify.get('/ctyun-static/*', async (request: FastifyRequest, reply: FastifyReply) => {
+  // 5. 代理天翼云静态资源 (/static/*, /manifest.json, /pccdnstatic/*)
+  fastify.get('/static/*', async (request: FastifyRequest, reply: FastifyReply) => {
     const rawUrl = request.raw.url || '';
-    const relPath = rawUrl.replace(/^\/ctyun-static\//, '').replace(/^\/+/, '');
-    // 优先从官方主站拉取，若包含 pccdnstatic/ 则从官方专用 CDN 拉取
-    const targetUrl = relPath.startsWith('pccdnstatic/')
-      ? `https://deskcdn.ctyun.cn/${relPath}`
-      : `https://pc.ctyun.cn/${relPath}`;
+    const relPath = rawUrl.replace(/^\/+/, '');
+    const targetUrl = `https://pc.ctyun.cn/${relPath}`;
+    await proxyStaticAsset(reply, targetUrl);
+  });
+
+  fastify.get('/manifest.json', async (request: FastifyRequest, reply: FastifyReply) => {
+    const targetUrl = 'https://pc.ctyun.cn/manifest.json';
+    await proxyStaticAsset(reply, targetUrl);
+  });
+
+  fastify.get('/pccdnstatic/*', async (request: FastifyRequest, reply: FastifyReply) => {
+    const rawUrl = request.raw.url || '';
+    const relPath = rawUrl.replace(/^\/+/, '');
+    const targetUrl = `https://deskcdn.ctyun.cn/${relPath}`;
     await proxyStaticAsset(reply, targetUrl);
   });
 

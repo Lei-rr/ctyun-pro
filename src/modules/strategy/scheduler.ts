@@ -1,18 +1,18 @@
-import type { AccountConfig } from '../config.js';
-import type { Logger } from '../core/logger.js';
-import { TaskRunner } from './task-runner.js';
-import { RedeemTask } from './redeem.js';
-import { HangTask } from './hang.js';
-import { SignTask, isHangTaskName } from './sign.js';
-import { sendWebhookNotification } from '../core/utils.js';
-import type { ProfileManager } from '../core/profile-manager.js';
+import type { AccountConfig } from '../../config.js';
+import { getRandomScheduleTime } from '../../config.js';
+import type { Logger } from '../../core/logger.js';
+import { isHangTaskName } from '../task/index.js';
+import { RewardRedeemService } from '../reward/reward-service.js';
+import { sendWebhookNotification } from '../../core/utils.js';
+import type { ProfileManager } from '../../core/profile-manager.js';
+import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
 
 /**
  * 工业级精准时间点调度器
  * 负责各账号每日自动打卡与周期性兑换下单
  */
 export class TaskScheduler {
-  private accountManager: ProfileManager;
+  private profileManager: ProfileManager;
   private logger: Logger;
   private timer: NodeJS.Timeout | null = null;
   private lastCheckedMinute = '';
@@ -20,9 +20,10 @@ export class TaskScheduler {
   private lastMidnightResetDate = '';
   private lastHangWatchdogTime = new Map<string, number>();
   private taskRetryStats = new Map<string, { date: string; attempts: number; nextRetryTime: number }>();
+  private redeemRetryStats = new Map<string, { date: string; attempts: number; nextRetryTime: number }>();
 
   constructor(profileManager: ProfileManager, logger: Logger) {
-    this.accountManager = profileManager;
+    this.profileManager = profileManager;
     this.logger = logger;
   }
 
@@ -73,15 +74,15 @@ export class TaskScheduler {
 
     // 0. 跨天主动重置今日积分 (0 点清零，纯本地状态机重置，绝不发起多余网络拉取)
     if (this.lastMidnightResetDate && this.lastMidnightResetDate !== today) {
-      this.accountManager.resetTodayPointsAtMidnight();
+      this.profileManager.resetTodayPointsAtMidnight();
     }
     this.lastMidnightResetDate = today;
 
-    const accounts = this.accountManager.getAllAccounts();
+    const accounts = this.profileManager.getAllAccounts();
 
     for (const [name, acc] of accounts.entries()) {
       if (!acc.loginInfo) continue;
-      const client = this.accountManager.getClient(name);
+      const client = this.profileManager.getClient(name);
       if (!client || !client.loginInfo) continue;
 
       // 1. 每日自动任务调度 (严格检查 enabled 开关与定时命中)
@@ -89,7 +90,7 @@ export class TaskScheduler {
       if (!tConf || tConf.enabled === false) {
         // 用户未开启或关闭了每日任务总开关，绝不自动执行
       } else {
-        const targetTime = tConf.scheduleTime || '03:30';
+        const targetTime = tConf.scheduleTime || getRandomScheduleTime();
         const retryStat = this.taskRetryStats.get(name);
         const nextTime = tConf.retryDate === today ? (tConf.nextRetryTime || retryStat?.nextRetryTime || 0) : (retryStat?.nextRetryTime || 0);
         const isInCooldown = (tConf.retryDate === today || retryStat?.date === today) && Date.now() < nextTime;
@@ -99,15 +100,15 @@ export class TaskScheduler {
           // 先行锁定今日执行标记，防止抖动异步等待期间重复触发
           tConf.lastRunDate = today;
           acc.taskConfig = tConf;
-          this.accountManager.saveToDisk();
+          this.profileManager.saveToDisk();
 
           // 仿生随机抖动：引入 3~25 秒阶梯式动态延迟，彻底打散多账号并发特征，防范官方批量风控
           const jitterMs = Math.floor(Math.random() * 22000) + 3000;
           setTimeout(async () => {
             try {
               this.logger.addLog('info', `[${name}] 命中每日做任务定时 (${targetTime}，抖动延时 ${(jitterMs/1000).toFixed(1)}s)，正在按策略自动执行...`);
-              const dId = this.accountManager.getAccountState(name)?.desktops?.[0]?.desktopId;
-              const res = await TaskRunner.executeDailyTasks(client, dId, tConf, this.logger);
+              const dId = this.profileManager.getAccountState(name)?.desktops?.[0]?.desktopId;
+              const res = await this.profileManager.getTaskStrategyService().executeDailyTasks(client, dId, tConf, this.logger);
               acc.lastSignDate = today;
               tConf.lastRunDate = today;
               delete tConf.retryCount;
@@ -115,29 +116,20 @@ export class TaskScheduler {
               delete tConf.nextRetryTime;
               acc.taskConfig = tConf;
               this.taskRetryStats.delete(name);
-              this.accountManager.saveToDisk();
+              this.profileManager.saveToDisk();
               this.logger.addLog('success', `[${name}] 每日任务已执行: ${res.message}`);
-
-              // Webhook 通知
-              if (this.accountManager.webhookUrl) {
-                sendWebhookNotification(
-                  this.accountManager.webhookUrl,
-                  `天翼云电脑 - [${name}] 每日任务完成`,
-                  `执行时间: ${targetTime}\n任务详情: ${res.message}`,
-                ).catch(() => {});
-              }
 
               // 若开启了使用1小时挂机任务，自动连带触发智能补足时长挂机
               if (tConf.keepAliveHang !== false) {
-                this.accountManager.manualHang(name).catch(() => {});
+                this.profileManager.manualHang(name).catch(() => {});
               }
 
               // 任务完成后异步拉取官方最新积分并刷新看板
-              this.accountManager.getPointsAndTasks(name)
-                .then(() => this.accountManager.notifyStatusChange())
+              this.profileManager.getPointsAndTasks(name)
+                .then(() => this.profileManager.notifyStatusChange())
                 .catch(() => {});
 
-              this.accountManager.notifyStatusChange();
+              this.profileManager.notifyStatusChange();
             } catch (e: any) {
               const errMsg = e?.message || String(e);
               const isAuthError = /token|expire|登录过期|未登录|auth|401|403|凭证/i.test(errMsg);
@@ -149,12 +141,12 @@ export class TaskScheduler {
                 delete tConf.retryDate;
                 delete tConf.nextRetryTime;
                 acc.taskConfig = tConf;
-                this.accountManager.saveToDisk();
+                this.profileManager.saveToDisk();
                 this.taskRetryStats.delete(name);
                 this.logger.addLog('warn', `[${name}] 自动任务执行失败（登录凭证已过期/失效，已停止今日重试，请重新登录账号）: ${errMsg}`);
-                if (this.accountManager.webhookUrl) {
+                if (this.profileManager.webhookUrl) {
                   sendWebhookNotification(
-                    this.accountManager.webhookUrl,
+                    this.profileManager.webhookUrl,
                     `天翼云电脑 - [${name}] 登录凭证失效`,
                     `自动任务执行失败：登录凭证已过期或失效，已停止今日自动调度，请重新登录账号。\n错误详情: ${errMsg}`,
                   ).catch(() => {});
@@ -172,12 +164,12 @@ export class TaskScheduler {
                   tConf.retryCount = currentAttempts;
                   delete tConf.nextRetryTime;
                   acc.taskConfig = tConf;
-                  this.accountManager.saveToDisk();
+                  this.profileManager.saveToDisk();
                   this.taskRetryStats.delete(name);
                   this.logger.addLog('warn', `[${name}] 自动任务执行失败已达今日上限 (${MAX_ATTEMPTS}次)，停止今日自动任务: ${errMsg}`);
-                  if (this.accountManager.webhookUrl) {
+                  if (this.profileManager.webhookUrl) {
                     sendWebhookNotification(
-                      this.accountManager.webhookUrl,
+                      this.profileManager.webhookUrl,
                       `天翼云电脑 - [${name}] 自动任务重试达上限`,
                       `今日连续重试 ${MAX_ATTEMPTS} 次均失败，停止今日自动调度。\n最后错误: ${errMsg}`,
                     ).catch(() => {});
@@ -189,7 +181,7 @@ export class TaskScheduler {
                   tConf.nextRetryTime = nextRetryTime;
                   tConf.lastRunDate = '';
                   acc.taskConfig = tConf;
-                  this.accountManager.saveToDisk();
+                  this.profileManager.saveToDisk();
                   this.taskRetryStats.set(name, { date: today, attempts: currentAttempts, nextRetryTime });
                   this.logger.addLog(
                     'warn',
@@ -203,7 +195,7 @@ export class TaskScheduler {
           tConf.lastRunDate === today &&
           currentHHmm >= targetTime &&
           tConf.keepAliveHang !== false &&
-          !HangTask.isRunning(name)
+          !this.profileManager.getTaskStrategyService().isHangRunning(name)
         ) {
           // 2. 长时间网络故障/异常断线自愈兜底机制 (看门狗防漏挂)：
           // 仅在「总开关开启 + 挂机子开关开启 + 今日定时已触发过 + 当前无进行中的挂机会话」时，
@@ -212,11 +204,24 @@ export class TaskScheduler {
           const lastWatchdog = this.lastHangWatchdogTime.get(name) || 0;
           const WATCHDOG_COOLDOWN_MS = 10 * 60 * 1000;
           if (Date.now() - lastWatchdog >= WATCHDOG_COOLDOWN_MS) {
-            const cached = this.accountManager.getCachedTodayPoints(name);
+            const cached = this.profileManager.getCachedTodayPoints(name);
             const hangTask = cached?.summary?.tasks?.find(
               (t: any) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress),
             );
             if (hangTask && !hangTask.isCompleted && (hangTask.currentProgress || 0) < (hangTask.totalProgress || 3600)) {
+              // 检查该账号绑定的云电脑是否处于外部客户端主动避让期
+              const curAcc = this.profileManager.getAccount(name);
+              const arbiter = DesktopSessionArbiter.getInstance();
+              const yieldingDesktop = curAcc?.desktops?.find((d) => arbiter.getYieldStatus(d.desktopId).yielding);
+              if (yieldingDesktop) {
+                const yInfo = arbiter.getYieldStatus(yieldingDesktop.desktopId);
+                this.logger.addLog(
+                  'info',
+                  `[${name}] 桌面正处于外部官方客户端主动避让期 (剩余 ${yInfo.remainingSeconds}秒)，看门狗暂缓补挂自愈`,
+                );
+                continue;
+              }
+
               const cur = hangTask.currentProgress || 0;
               const tot = hangTask.totalProgress || 3600;
               this.lastHangWatchdogTime.set(name, Date.now());
@@ -224,7 +229,7 @@ export class TaskScheduler {
                 'info',
                 `[${name}] 智能调度检测到今日挂机时长未满额 (${cur}/${tot}秒)，自动触发差额续挂自愈 (冷却期 10m)...`,
               );
-              this.accountManager.manualHang(name).catch(() => {});
+              this.profileManager.manualHang(name).catch(() => {});
             }
           }
         }
@@ -232,7 +237,11 @@ export class TaskScheduler {
 
       // 2. 自动兑换策略精准调度 (到达或超过 07:00 且今日未执行时触发，防止容器重启错过整点)
       const rConf = acc.redeemConfig;
-      if (rConf && rConf.enabled && rConf.lastRedeemDate !== today && currentHHmm >= '07:00') {
+      const redeemRetry = this.redeemRetryStats.get(name);
+      const isRedeemInBackoff =
+        redeemRetry && redeemRetry.date === today && Date.now() < redeemRetry.nextRetryTime;
+
+      if (rConf && rConf.enabled && rConf.lastRedeemDate !== today && currentHHmm >= '07:00' && !isRedeemInBackoff) {
         let shouldRedeem = false;
         let reason = '';
 
@@ -255,7 +264,7 @@ export class TaskScheduler {
             reason = `命中指定兑换日期 (${today})`;
           }
         } else if (rConf.scheduleType === 'interval_days') {
-          const interval = rConf.intervalDays || 30;
+          const interval = rConf.intervalDays || 4;
           if (!rConf.lastRedeemDate) {
             shouldRedeem = true;
             reason = '首次执行间隔兑换';
@@ -272,17 +281,13 @@ export class TaskScheduler {
         }
 
         if (shouldRedeem) {
-          // 先行锁定今日执行标记，防止抖动等待与重试期间并发重入
-          rConf.lastRedeemDate = today;
-          this.accountManager.saveToDisk();
-
           // 仿生抖动：多账号自动兑换引入 1~12 秒离散延迟，避免多账号同一秒向商城并发下单
           const redeemJitterMs = Math.floor(Math.random() * 11000) + 1000;
           await new Promise((r) => setTimeout(r, redeemJitterMs));
 
           this.logger.addLog('info', `[${name}] ${reason} (仿生延迟 ${(redeemJitterMs/1000).toFixed(1)}s)，准备自动下单兑换...`);
           let targetDesktopId = rConf.targetDesktopId;
-          const state = this.accountManager.getAccountState(name);
+          const state = this.profileManager.getAccountState(name);
           if (!targetDesktopId) {
             targetDesktopId = state?.desktops?.[0]?.desktopId;
           } else {
@@ -292,6 +297,11 @@ export class TaskScheduler {
             );
             if (matched) {
               targetDesktopId = matched.desktopId;
+            } else {
+              const fallbackFound = this.profileManager.findDesktopByCode(targetDesktopId);
+              if (fallbackFound) {
+                targetDesktopId = fallbackFound.desktop.desktopId;
+              }
             }
           }
           if (!targetDesktopId) {
@@ -307,7 +317,7 @@ export class TaskScheduler {
                 this.logger.addLog('info', `[${name}] 正在进行第 ${attempt}/3 次自动兑换重试...`);
                 await new Promise((r) => setTimeout(r, 3000));
               }
-              const res = await RedeemTask.placeOrder(
+              const res = await RewardRedeemService.placeOrder(
                 client,
                 targetDesktopId,
                 rConf.targetProdId,
@@ -315,16 +325,17 @@ export class TaskScheduler {
                 rConf.prodType,
               );
               rConf.lastRedeemDate = today;
-              this.accountManager.saveToDisk();
+              this.profileManager.saveToDisk();
               this.logger.addLog('success', `[${name}] 自动兑换成功: ${res.message}`);
-              if (this.accountManager.webhookUrl) {
+              if (this.profileManager.webhookUrl) {
                 sendWebhookNotification(
-                  this.accountManager.webhookUrl,
+                  this.profileManager.webhookUrl,
                   `天翼云电脑 - [${name}] 自动兑换成功`,
                   `策略触发: ${reason}\n兑换结果: ${res.message}`,
                 ).catch(() => {});
               }
               redeemSuccess = true;
+              this.redeemRetryStats.delete(name);
               break;
             } catch (e: any) {
               lastRedeemMsg = e.message;
@@ -333,8 +344,18 @@ export class TaskScheduler {
                 lastRedeemMsg.includes('积分不足') ||
                 lastRedeemMsg.includes('点数不足') ||
                 lastRedeemMsg.includes('余额不足');
-              if (isInsufficientPoints) {
-                this.logger.addLog('warn', `[${name}] 自动兑换失败: ${lastRedeemMsg}，无需重试`);
+              // 若触发官方风控拦截、操作过于频繁等，立即熔断阻断重试，保护账号安全
+              const isRiskLimited =
+                lastRedeemMsg.includes('风控') ||
+                lastRedeemMsg.includes('频繁') ||
+                lastRedeemMsg.includes('异常') ||
+                lastRedeemMsg.includes('限制');
+              if (isInsufficientPoints || isRiskLimited) {
+                this.logger.addLog('warn', `[${name}] 自动兑换终止: ${lastRedeemMsg}，触发保护终止重试`);
+                // 积分不足或风控属于当日业务终态，锁定当日标记并清除重试状态
+                rConf.lastRedeemDate = today;
+                this.profileManager.saveToDisk();
+                this.redeemRetryStats.delete(name);
                 break;
               }
               this.logger.addLog('warn', `[${name}] 第 ${attempt} 次自动兑换未成功: ${e.message}`);
@@ -346,16 +367,61 @@ export class TaskScheduler {
               lastRedeemMsg.includes('积分不足') ||
               lastRedeemMsg.includes('点数不足') ||
               lastRedeemMsg.includes('余额不足');
-            const failTitle = isInsufficientPoints
-              ? `[${name}] 自动兑换跳过: 积分不足`
-              : `[${name}] 自动兑换失败（重试3次）: ${lastRedeemMsg}`;
-            this.logger.addLog('error', failTitle);
-            if (this.accountManager.webhookUrl) {
-              sendWebhookNotification(
-                this.accountManager.webhookUrl,
-                `天翼云电脑 - [${name}] 自动兑换未达成`,
-                `策略触发: ${reason}\n原因: ${lastRedeemMsg}`,
-              ).catch(() => {});
+            const isRiskLimited =
+              lastRedeemMsg.includes('风控') ||
+              lastRedeemMsg.includes('频繁') ||
+              lastRedeemMsg.includes('异常') ||
+              lastRedeemMsg.includes('限制');
+
+            if (isInsufficientPoints || isRiskLimited) {
+              const failTitle = isInsufficientPoints
+                ? `[${name}] 自动兑换跳过: 积分不足`
+                : `[${name}] 自动兑换跳过: 触发安全风控保护`;
+              this.logger.addLog('error', failTitle);
+              // 积分不足属于预期内正常积累状态，不发送 Webhook 骚扰；触发安全风控时推送安全告警
+              if (isRiskLimited && this.profileManager.webhookUrl) {
+                sendWebhookNotification(
+                  this.profileManager.webhookUrl,
+                  `天翼云电脑 - [${name}] 自动兑换触发风控保护`,
+                  `策略触发: ${reason}\n状态: 已熔断当日兑换以保护账号\n官方原因: ${lastRedeemMsg}`,
+                ).catch(() => {});
+              }
+            } else {
+              // 临时网络或服务异常：引入 15 分钟跨周期退避重试（当日上限 3 轮）
+              const memAttempts =
+                this.redeemRetryStats.get(name)?.date === today
+                  ? this.redeemRetryStats.get(name)?.attempts || 0
+                  : 0;
+              const currentAttempts = memAttempts + 1;
+              const MAX_REDEEM_ROUNDS = 3;
+
+              if (currentAttempts >= MAX_REDEEM_ROUNDS) {
+                this.redeemRetryStats.delete(name);
+                rConf.lastRedeemDate = today;
+                this.profileManager.saveToDisk();
+                this.logger.addLog(
+                  'error',
+                  `[${name}] 自动兑换退避重试已达上限 (${MAX_REDEEM_ROUNDS} 轮)，停止今日自动兑换调度: ${lastRedeemMsg}`,
+                );
+                if (this.profileManager.webhookUrl) {
+                  sendWebhookNotification(
+                    this.profileManager.webhookUrl,
+                    `天翼云电脑 - [${name}] 自动兑换失败达上限`,
+                    `策略触发: ${reason}\n今日连续重试 ${MAX_REDEEM_ROUNDS} 轮均遭遇异常，已停止今日调度。\n最后错误: ${lastRedeemMsg}`,
+                  ).catch(() => {});
+                }
+              } else {
+                const nextRetryTime = Date.now() + 15 * 60 * 1000;
+                this.redeemRetryStats.set(name, {
+                  date: today,
+                  attempts: currentAttempts,
+                  nextRetryTime,
+                });
+                this.logger.addLog(
+                  'warn',
+                  `[${name}] 自动兑换遭遇临时异常（第 ${currentAttempts}/${MAX_REDEEM_ROUNDS} 轮，将在 15 分钟后退避重试）: ${lastRedeemMsg}`,
+                );
+              }
             }
           }
         }
@@ -363,7 +429,7 @@ export class TaskScheduler {
     }
 
     // 3. 每日早报汇总推送 (Daily Digest，固定在每日 09:00 推送一条汇总通知)
-    if (this.accountManager.webhookUrl && this.lastDigestDate !== today && currentHHmm === '09:00') {
+    if (this.profileManager.webhookUrl && this.lastDigestDate !== today && currentHHmm === '09:00') {
       this.lastDigestDate = today;
       try {
         const reportLines: string[] = [];
@@ -371,13 +437,13 @@ export class TaskScheduler {
         let onlineCount = 0;
 
         for (const [name, acc] of accounts.entries()) {
-          const state = this.accountManager.getAccountState(name);
+          const state = this.profileManager.getAccountState(name);
           const isOnline = state?.status === 'online';
           if (isOnline) onlineCount++;
 
           let pointInfo = '';
           try {
-            const sum = await this.accountManager.getPointsAndTasks(name);
+            const sum = await this.profileManager.getPointsAndTasks(name);
             const total = (sum.generalPoints || 0) + (sum.phonePoints || 0);
             totalGeneral += total;
             const hangTask = sum.tasks.find((t) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress));
@@ -394,7 +460,7 @@ export class TaskScheduler {
 
         const title = `CTYUN-PRO - 每日运行早报 (${today})`;
         const content = `今日监控概览：\n• 在线账号: ${onlineCount}/${accounts.size}\n• 总积分池: ${totalGeneral} 积分\n• 报告时间: ${currentHHmm}\n\n账号明细：\n${reportLines.join('\n')}\n\n系统已全自动维持保活长连接中。`;
-        sendWebhookNotification(this.accountManager.webhookUrl, title, content).catch(() => {});
+        sendWebhookNotification(this.profileManager.webhookUrl, title, content).catch(() => {});
       } catch (err: any) {
         this.logger.addLog('warn', `每日早报推送异常: ${err.message}`);
       }

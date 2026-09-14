@@ -48,7 +48,6 @@ export interface AccountConfig {
   id?: string; // 全局唯一不可变 UUID (主键)
   name: string; // 账号别名/备注名 (允许重名)
   user: string; // 手机号或账号名
-  password?: string;
   deviceCode?: string;
   autoStart?: boolean;
   autoSign?: boolean; // 每日自动签到开关 (兼容旧配置)

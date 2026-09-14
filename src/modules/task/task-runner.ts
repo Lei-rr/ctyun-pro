@@ -1,10 +1,11 @@
-import { CtYunClient } from '../core/client.js';
+import { CtYunClient } from '../../core/client.js';
 import { AiChatTask } from './ai-chat.js';
 import { SignTask, type PointsSummary } from './sign.js';
 import { HangTask } from './hang.js';
-import { safeFetch } from '../core/utils.js';
-import type { TaskConfig } from '../config.js';
-import type { Logger } from '../core/logger.js';
+import { safeFetch } from '../../core/utils.js';
+import type { TaskConfig } from '../../config.js';
+import { Logger } from '../../core/logger.js';
+import { getCstHour } from '../../core/utils.js';
 
 /**
  * 每日任务统一调度执行器
@@ -30,7 +31,16 @@ export class TaskRunner {
     }
 
     try {
-      const dId = desktopId;
+      let dId = desktopId;
+      if (!dId) {
+        try {
+          const list = await client.getDesktopList();
+          const target = list.find((d) => d.useStatusText === '运行中' || d.useStatusText === '离线运行') || list[0];
+          if (target) {
+            dId = String(target.desktopId);
+          }
+        } catch {}
+      }
       if (!dId) {
         return { success: false, message: '未找到可用云电脑，无法激活桌面会话' };
       }
@@ -58,7 +68,7 @@ export class TaskRunner {
             ctgDeviceType: '60',
             ctgAppModel: 'PC',
             vmUuid: dId,
-            timeInterval: new Date().getHours(),
+            timeInterval: getCstHour(),
             host: 'pc.ctyun.cn',
             uploadTimeStamp: Date.now(),
           },
@@ -82,7 +92,7 @@ export class TaskRunner {
             ctgDeviceType: '60',
             ctgAppModel: 'PC',
             vmUuid: dId,
-            timeInterval: new Date().getHours(),
+            timeInterval: getCstHour(),
             host: 'pc.ctyun.cn',
             uploadTimeStamp: Date.now(),
           },

@@ -36,16 +36,14 @@ watch(
 onMounted(() => {
   scrollToBottom();
   // 若 WS 尚未连上，开启 SSE 兜底推流
+  // 优先直接使用同源 Cookie 鉴权建立 SSE 连接，避免在 URL 中暴露 token
   if (!store.isWsConnected) {
-    const url = store.adminToken
-      ? `/api/logs/stream?token=${encodeURIComponent(store.adminToken)}`
-      : '/api/logs/stream';
-    es = new EventSource(url);
+    es = new EventSource('/api/logs/stream');
     es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'init') {
-           store.logs = (data.logs || []).slice(-200);
+           store.logs = (data.logs || []).slice(-1000);
         } else if (data.type === 'log') {
           const incoming = data.log;
           // 智能折叠：在当前末尾连续心跳波次（Block）内寻找同款心跳折叠，遇到业务日志立即打断
@@ -63,8 +61,10 @@ onMounted(() => {
                 item.id === incoming.id ||
                 (item.message === incoming.message && item.level === incoming.level)
               ) {
-                item.count = incoming.count || (item.count || 1) + 1;
-                item.time = incoming.time;
+                const [matched] = store.logs.splice(i, 1);
+                matched.count = incoming.count || (matched.count || 1) + 1;
+                matched.time = incoming.time;
+                store.logs.push(matched);
                 found = true;
                 break;
               }
@@ -73,7 +73,7 @@ onMounted(() => {
 
           if (!found) {
             store.logs.push(incoming);
-            if (store.logs.length > 200) store.logs.splice(0, store.logs.length - 200);
+            if (store.logs.length > 1000) store.logs.splice(0, store.logs.length - 1000);
           }
         }
         scrollToBottom();
@@ -100,7 +100,7 @@ onUnmounted(() => {
           实时日志
         </span>
         <Badge variant="secondary" class="h-5 px-1.5 text-[10px] font-mono shrink-0 ml-1">
-           {{ store.logs.length }} / 200 条
+           {{ store.logs.length }} / 1000 条
         </Badge>
       </div>
 

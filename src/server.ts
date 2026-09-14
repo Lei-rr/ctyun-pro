@@ -12,10 +12,12 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { WebSocketServer, WebSocket } from 'ws';
 import QRCode from 'qrcode';
-import { Config } from './config.js';
-import { AccountManager } from './core/index.js';
+import { Config, DEFAULT_REDEEM_CONFIG } from './config.js';
+import { ProfileManager } from './core/index.js';
+import { DesktopSessionArbiter } from './modules/arbiter/index.js';
+import { StrategyService } from './modules/strategy/index.js';
 import { CtYunClient, type ChallengeData } from './core/client.js';
-import { safeWriteFileSync, sendWebhookNotification } from './core/utils.js';
+import { safeWriteFileSync, sendWebhookNotification, getCstDateTimeString } from './core/utils.js';
 import { EMBEDDED_WEB_FILES } from './embedded-web.js';
 import { registerDesktopProxyRoutes } from './core/desktop-proxy.js';
 
@@ -70,7 +72,7 @@ export async function createServer() {
     credentials: true,
   });
 
-  const manager = new AccountManager();
+  const manager = new ProfileManager();
   
   // 持久化 session 文件，避免容器重启后丢失已有登录状态
   const sessionFilePath = path.join(Config.dataDir, '.sessions.json');
@@ -118,8 +120,7 @@ export async function createServer() {
     return false;
   };
 
-  // 临时暂存各账号的登录 challenge 与短信流程 key
-  const challengeCache = new Map<string, ChallengeData>();
+  // 临时暂存各账号的短信流程 key
   const smsSessionCache = new Map<string, { captchaKey?: string; smsKey?: string }>();
 
   // 校验中间件 (如果设置了 adminPassword)
@@ -180,8 +181,25 @@ export async function createServer() {
     const token = `${ts}.${sig}`;
     sessions.add(token);
     saveSessions();
-    reply.header('Set-Cookie', `ctyun_admin_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=${30 * 24 * 3600}`);
+    reply.header('Set-Cookie', `ctyun_admin_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 3600}`);
     return { success: true, token };
+  });
+
+  // 0.2 注销登录 (作废服务端 Token 并清除客户端 Cookie)
+  fastify.post('/api/auth/logout', async (request, reply) => {
+    const token =
+      (request.headers['x-admin-token'] as string) ||
+      (request.headers.authorization ? (request.headers.authorization as string).replace(/^Bearer\s+/i, '') : '') ||
+      parseCookieToken(request.headers.cookie);
+    if (token && sessions.has(token)) {
+      sessions.delete(token);
+      saveSessions();
+    }
+    reply.header(
+      'Set-Cookie',
+      'ctyun_admin_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    );
+    return { success: true, msg: '已安全退出登录' };
   });
 
   fastify.post('/api/auth/password', async (request, reply) => {
@@ -205,7 +223,17 @@ export async function createServer() {
         webhookUrl: manager.webhookUrl,
         keepAliveSeconds: manager.keepAliveSeconds,
         accounts: manager.getAccountsSummary(),
+        leases: DesktopSessionArbiter.getInstance().getActiveLeases(),
       },
+    };
+  });
+
+  // 1.0 查询全局桌面租约状态 (仲裁器)
+  fastify.get('/api/arbiter/leases', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    return {
+      success: true,
+      data: DesktopSessionArbiter.getInstance().getActiveLeases(),
     };
   });
 
@@ -240,11 +268,11 @@ export async function createServer() {
       return reply.send({ success: false, msg: '请先填写 Webhook 推送地址' });
     }
 
-    const nowStr = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    const nowStr = getCstDateTimeString();
     const success = await sendWebhookNotification(
       targetUrl,
       'CTYUN-PRO - Webhook 通知测试',
-      `恭喜！您的 Webhook 消息通知配置成功！\n\n• 测试结果: 成功连通\n• 发送时间: ${nowStr}\n• 监控范围: 智能挂机达标、Token过期告警、每日运行战报已接入。`,
+      `Webhook 消息通知已成功连通。\n\n• 测试结果: 通信正常\n• 发送时间: ${nowStr}\n• 推送规则: 严格精简推送，仅在凭证失效、兑换成功、重试熔断及每日早报 (09:00) 时通知，杜绝日常琐碎流水刷屏。`,
     );
 
     if (success) {
@@ -270,6 +298,25 @@ export async function createServer() {
     return { success: true };
   });
 
+  // 2.4 导出安全配置备份
+  fastify.get('/api/config/export', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    return { success: true, data: manager.exportConfigSafe() };
+  });
+
+  // 2.5 导入配置备份
+  fastify.post('/api/config/import', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const body = request.body;
+      const res = manager.importConfigSafe(body);
+      manager.addLog('info', `配置导入成功，已恢复 ${res.importedAccounts} 个账号配置`);
+      return { success: true, msg: `配置恢复成功，已导入 ${res.importedAccounts} 个账号配置`, data: res };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: `配置导入失败: ${err.message}` });
+    }
+  });
+
   // ==========================================
   // 标准 RESTful 优雅 API 体系 (profiles & desktops)
   // 彻底废除历史老旧兼容垫片 (/api/account/*, /api/instances/*)
@@ -293,11 +340,17 @@ export async function createServer() {
     await manager.addOrUpdateAccount({
       name,
       user,
-      password: body.password || '',
       autoSign: body.autoSign !== false,
       autoStart: body.autoStart !== false,
-      taskConfig: body.taskConfig || { enabled: true, scheduleTime: '08:00', autoHang: true, autoAiChat: true },
-      redeemConfig: body.redeemConfig || { enabled: true, targetReward: '1G数据盘-4天', fallbackDays: 4 },
+      taskConfig: body.taskConfig || {
+        enabled: true,
+        scheduleTime: StrategyService.generateRandomSchedule(),
+        autoSign: true,
+        aiChat: true,
+        loginDesktop: true,
+        keepAliveHang: true,
+      },
+      redeemConfig: body.redeemConfig || { ...DEFAULT_REDEEM_CONFIG, enabled: true },
     });
     manager.addLog('info', `[${name}] 档案已创建`);
     return { success: true, msg: 'Profile 创建成功', data: manager.getAccountState(name) };
@@ -384,24 +437,34 @@ export async function createServer() {
       return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
     }
     manager.removeAccount(acc.name);
+    if (acc.name) {
+      smsSessionCache.delete(acc.name);
+    }
+    if (acc.id) {
+      smsSessionCache.delete(acc.id);
+    }
     return { success: true, msg: 'Profile 已成功注销' };
   });
 
   // 重命名 Profile 备注名
-  fastify.post('/api/profiles/:id/rename', async (request, reply) => {
+  const handleProfileRename = async (request: any, reply: any) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
-    const body = request.body as { name: string };
-    if (!body?.name?.trim()) {
+    const body = (request.body || {}) as { name?: string; newName?: string; oldName?: string };
+    const targetName = (body.newName || body.name || '').trim();
+    if (!targetName) {
       return reply.code(400).send({ success: false, msg: '名称不能为空' });
     }
     const acc = manager.getAccount(params.id);
     if (!acc) {
       return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
     }
-    manager.updateAccountName(acc.name, body.name.trim());
+    manager.updateAccountName(acc.name, targetName);
     return { success: true, msg: '重命名成功' };
-  });
+  };
+
+  fastify.post('/api/profiles/:id/rename', handleProfileRename);
+  fastify.put('/api/profiles/:id/rename', handleProfileRename);
 
   // 触发指定 Profile 的实例列表同步与本地落盘
   fastify.post('/api/profiles/:id/sync', async (request, reply) => {
@@ -419,16 +482,24 @@ export async function createServer() {
   fastify.get('/api/profiles/:id/captcha', async (request, reply) => {
     if (!verifyAuth(request, reply)) return;
     const params = request.params as { id: string };
+    const query = (request.query as any) || {};
     const acc = manager.getAccount(params.id);
-    const user = acc?.user || params.id;
+    const user = query.user || acc?.user || params.id;
     const client = manager.getClient(acc?.name || params.id);
     try {
+      // 严格对齐官方登录协议：单次拉取挑战与图片，直接透传给前端，服务端不设任何可能导致错位的内存缓存
       const challenge = await client.getChallengeData();
-      challengeCache.set(acc?.name || params.id, challenge);
-      challengeCache.set(user, challenge);
-      challengeCache.set('__latest__', challenge);
       const imgBuffer = await client.getLoginCaptcha(user);
-      return { success: true, data: { image: `data:image/jpeg;base64,${imgBuffer.toString('base64')}` } };
+      return {
+        success: true,
+        data: {
+          image: `data:image/jpeg;base64,${imgBuffer.toString('base64')}`,
+          challenge: {
+            challengeId: challenge.challengeId,
+            challengeCode: challenge.challengeCode,
+          },
+        },
+      };
     } catch (err: any) {
       return reply.code(500).send({ success: false, msg: err.message });
     }
@@ -442,35 +513,35 @@ export async function createServer() {
     const user = body.user || acc?.user || params.id;
     const name = acc?.name || body.name || params.id;
     const client = manager.getClient(name);
-    let challenge = challengeCache.get(name) || challengeCache.get(user) || challengeCache.get('__latest__');
-    if (!challenge) {
+
+    let challenge = body.challenge;
+    if (!challenge || !challenge.challengeId || !challenge.challengeCode) {
       try {
         challenge = await client.getChallengeData();
-        challengeCache.set(name, challenge);
       } catch {
         return reply.code(400).send({ success: false, msg: '请先刷新验证码' });
       }
     }
+
     try {
       manager.addLog('info', `[${name}] 正在验证登录...`);
       const loginInfo = await client.login(user, body.password || '', challenge, (body.captchaCode || '').trim());
       await manager.addOrUpdateAccount({
         name,
         user,
-        password: body.password || '',
         deviceCode: client.getDeviceCode(),
         loginInfo,
         autoStart: true,
       });
       if (!loginInfo.bondedDevice) {
         manager.addLog('warn', `[${name}] 设备未绑定，需要短信验证码确认`);
-        return { success: true, needSms: true, msg: '登录成功，但当前设备未绑���，需要输入短信验证码' };
+        return { success: true, needSms: true, msg: '登录成功，但当前设备未绑定，需要输入短信验证码' };
       }
       manager.addLog('success', `[${name}] 登录成功！正在启动云电脑保活...`);
       manager.startAccount(name).catch((e) => manager.addLog('error', `[${name}] 启动保活失败: ${e.message}`));
       return { success: true, needSms: false, msg: '登录成功并已启动保活', data: manager.getAccountState(name) };
     } catch (err: any) {
-      manager.addLog('error', `[${name}] 登录失败: ${err.message}`);
+      manager.addLog('error', `[${name}] 登录验证失败: ${err.message}`);
       return reply.code(400).send({ success: false, msg: err.message });
     }
   });
@@ -534,6 +605,7 @@ export async function createServer() {
     const cachedSmsKey = smsSessionCache.get(name)?.smsKey || '';
     try {
       await client.bindDevice(body.smsCode.trim(), cachedSmsKey);
+      smsSessionCache.delete(name);
       if (acc && client.loginInfo) {
         acc.loginInfo = client.loginInfo;
       }
@@ -688,7 +760,8 @@ export async function createServer() {
     const acc = manager.getAccount(params.id);
     if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
     try {
-      const msg = await manager.manualRedeem(acc.name, body.prodId, body.costPoints, body.prodType, body.desktopId);
+      const desktopTarget = body.desktopCode || body.desktopId;
+      const msg = await manager.manualRedeem(acc.name, body.prodId, body.costPoints, body.prodType, desktopTarget);
       return { success: true, msg };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });
@@ -727,23 +800,24 @@ export async function createServer() {
   });
 
   // 指定 Desktop 详情
-  fastify.get('/api/desktops/:id', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/api/desktops/:desktopCode', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
-    const params = request.params as { id: string };
-    const instances = manager.getAllInstancesSummary();
-    const inst = instances.find(i => i.desktopCode === params.id || i.id === params.id);
-    if (!inst) {
+    const params = request.params as { desktopCode: string };
+    const res = manager.findDesktopByCode(params.desktopCode);
+    if (!res) {
       return reply.code(404).send({ success: false, msg: '云电脑未找到' });
     }
+    const instances = manager.getAllInstancesSummary();
+    const inst = instances.find(i => i.desktopCode === res.desktop.desktopCode) || res.desktop;
     return { success: true, data: inst };
   });
 
-  // 指定 Desktop 免密直接访问官方 Web 桌面（直连地址生成）
-  fastify.get('/api/desktops/:id/direct-url', async (request: FastifyRequest, reply: FastifyReply) => {
+  // 指定 Desktop 免密直接访问官方 Web 桌面（同源直连地址生成）
+  fastify.get('/api/desktops/:desktopCode/direct-url', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     try {
-      const params = request.params as { id: string };
-      const res = await manager.getDesktopDirectUrlByDesktopId(params.id);
+      const params = request.params as { desktopCode: string };
+      const res = await manager.getDesktopDirectUrlByDesktopCode(params.desktopCode);
       return { success: true, data: res };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });
@@ -751,30 +825,113 @@ export async function createServer() {
   });
 
   // 指定 Desktop 电源操作 (开机/关机/重启)
-  fastify.post('/api/desktops/:id/power', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post('/api/desktops/:desktopCode/power', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     try {
-      const params = request.params as { id: string };
-      const body = request.body as { action: 'on' | 'off' | 'reboot' | 'start' | 'stop' | 'restart' };
-      const instances = manager.getAllInstancesSummary();
-      const inst = instances.find(i => i.desktopCode === params.id || i.id === params.id);
-      if (!inst) {
+      const params = request.params as { desktopCode: string };
+      const body = request.body as {
+        action:
+          | 'on'
+          | 'off'
+          | 'shutdown'
+          | 'reboot'
+          | 'start'
+          | 'stop'
+          | 'restart'
+          | 'reset'
+          | 'awake'
+          | 'wake'
+          | 'force_off'
+          | 'force_reboot';
+      };
+      const res = manager.findDesktopByCode(params.desktopCode);
+      if (!res) {
         return reply.code(404).send({ success: false, msg: '云电脑未找到' });
       }
-      let op: 'on' | 'shutdown' | 'reset' = 'on';
-      if (body.action === 'off' || body.action === 'stop') op = 'shutdown';
-      else if (body.action === 'reboot' || body.action === 'restart') op = 'reset';
+      let op: 'on' | 'awake' | 'shutdown' | 'reset' | 'force_off' | 'force_reboot' = 'on';
+      if (body.action === 'shutdown' || body.action === 'off' || body.action === 'stop') op = 'shutdown';
+      else if (body.action === 'force_off') op = 'force_off';
+      else if (body.action === 'reset' || body.action === 'reboot' || body.action === 'restart') op = 'reset';
+      else if (body.action === 'force_reboot') op = 'force_reboot';
+      else if (body.action === 'awake' || body.action === 'wake') op = 'awake';
 
-      const msg = await manager.operateDesktop(inst.profileName, inst.desktopCode, op);
+      const msg = await manager.operateDesktop(res.accountName, params.desktopCode, op);
       return { success: true, msg };
     } catch (err: any) {
       return reply.code(400).send({ success: false, msg: err.message });
     }
   });
 
-  // 9. SSE 实时日志推流 (带 token 验证)
+  // 指定 Desktop 挂机操作 (启动/停止)
+  fastify.post('/api/desktops/:desktopCode/hang', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const params = request.params as { desktopCode: string };
+      const body = (request.body as { action?: 'start' | 'stop' }) || {};
+      const res = manager.findDesktopByCode(params.desktopCode);
+      if (!res) {
+        return reply.code(404).send({ success: false, msg: '云电脑未找到' });
+      }
+
+      if (body.action === 'stop') {
+        await manager.stopHang(res.accountName);
+        return { success: true, msg: '已成功中止挂机任务，并恢复保活长连接' };
+      } else {
+        const msg = await manager.manualHang(res.accountName);
+        return { success: true, msg };
+      }
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // 指定 Desktop 积分商品兑换操作 (支持绑定当前 Desktop 进行兑换)
+  fastify.post('/api/desktops/:desktopCode/redeem', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const params = request.params as { desktopCode: string };
+      const body = (request.body as { prodId?: number; costPoints?: number; prodType?: string }) || {};
+      const res = manager.findDesktopByCode(params.desktopCode);
+      if (!res) {
+        return reply.code(404).send({ success: false, msg: '云电脑未找到' });
+      }
+
+      const msg = await manager.manualRedeem(
+        res.accountName,
+        body.prodId,
+        body.costPoints,
+        body.prodType,
+        params.desktopCode
+      );
+      return { success: true, msg };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  });
+
+  // 指定 Desktop 重命名/修改官方昵称操作 (对齐官方 modifyDesktopNickName)
+  const handleDesktopRename = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!verifyAuth(request, reply)) return;
+    try {
+      const params = request.params as { desktopCode: string };
+      const body = (request.body as { desktopName?: string; newName?: string; nickName?: string }) || {};
+      const newName = (body.desktopName || body.newName || body.nickName || '').trim();
+      if (!newName) {
+        return reply.code(400).send({ success: false, msg: '云电脑名称不能为空' });
+      }
+      await manager.renameDesktop(params.desktopCode, newName);
+      return { success: true, msg: '修改成功' };
+    } catch (err: any) {
+      return reply.code(400).send({ success: false, msg: err.message });
+    }
+  };
+  fastify.post('/api/desktops/:desktopCode/rename', handleDesktopRename);
+  fastify.put('/api/desktops/:desktopCode/rename', handleDesktopRename);
+
+  // 9. SSE 实时日志推流 (带 token 验证，兼容同源 Cookie 鉴权)
   fastify.get('/api/logs/stream', (request: any, reply) => {
-    const token = request.query?.token;
+    const cookieToken = parseCookieToken(request.headers?.cookie);
+    const token = (request.query?.token as string) || cookieToken;
     if (manager.adminPassword && (!token || !isValidToken(token))) {
       return reply.code(401).send('Unauthorized');
     }
@@ -804,6 +961,12 @@ export async function createServer() {
       closed = true;
       unsubscribe();
     });
+  });
+
+  // 9.0 获取历史日志快照
+  fastify.get('/api/logs', async (request, reply) => {
+    if (!verifyAuth(request, reply)) return;
+    return { success: true, data: manager.getRecentLogs() };
   });
 
   // 9.1 清空服务端日志
@@ -913,7 +1076,21 @@ export async function createServer() {
       }
     });
 
+    const pingTimer = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.ping();
+        } catch {}
+      }
+    }, 30000);
+
     ws.on('close', () => {
+      clearInterval(pingTimer);
+      unSubStatus();
+      unSubLogs();
+    });
+    ws.on('error', () => {
+      clearInterval(pingTimer);
       unSubStatus();
       unSubLogs();
     });
@@ -923,7 +1100,7 @@ export async function createServer() {
   fastify.server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url || '', `http://${request.headers.host || 'localhost'}`);
     if (url.pathname === '/ws') {
-      const token = url.searchParams.get('token');
+      const token = url.searchParams.get('token') || parseCookieToken(request.headers.cookie);
       if (manager.adminPassword && (!token || !isValidToken(token))) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
@@ -938,6 +1115,16 @@ export async function createServer() {
   (fastify as any).manager = manager;
   // 注册天翼云官方反代与免密直通视窗模块
   registerDesktopProxyRoutes(fastify, manager, verifyAuth);
+
+  // 优雅停机钩子：Fastify 停机时安全关闭 WebSocket Server 实例
+  fastify.addHook('onClose', async () => {
+    wss.clients.forEach((client) => {
+      try {
+        client.terminate();
+      } catch {}
+    });
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+  });
 
   return fastify;
 }

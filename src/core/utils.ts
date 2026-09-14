@@ -41,7 +41,7 @@ export function requestIpv4(
     body?: string;
     timeoutMs?: number;
   } = {},
-): Promise<{ status: number; headers: Record<string, any>; json: () => Promise<any> }> {
+): Promise<{ status: number; headers: Record<string, any>; text: () => Promise<string>; json: () => Promise<any> }> {
   return new Promise((resolve, reject) => {
     const url = new URL(urlStr);
     const timeoutMs = options.timeoutMs || 60000;
@@ -63,6 +63,7 @@ export function requestIpv4(
           resolve({
             status: res.statusCode || 200,
             headers: res.headers,
+            text: () => Promise.resolve(data),
             json: () => {
               try {
                 return Promise.resolve(JSON.parse(data));
@@ -205,16 +206,39 @@ export async function sendWebhookNotification(
       return true;
     }
 
-    // 6. 默认通用 JSON POST Webhook
+    // 6. Telegram Bot 推送
+    if (url.includes('api.telegram.org') || url.includes('/sendMessage')) {
+      let chatId = '';
+      try {
+        const u = new URL(url);
+        chatId = u.searchParams.get('chat_id') || '';
+      } catch {}
+
+      if (chatId) {
+        await safeFetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `*${title}*\n\n${content}`,
+            parse_mode: 'Markdown',
+          }),
+          timeoutMs: 8000,
+        });
+        return true;
+      }
+    }
+
+    // 7. 默认通用 JSON POST Webhook
     await safeFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        event: 'ctyun_alert',
         title,
-        message: content,
         content,
         timestamp: Date.now(),
-        time: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
+        time: getCstDateTimeString(),
       }),
       timeoutMs: 8000,
     });
@@ -223,6 +247,15 @@ export async function sendWebhookNotification(
     console.error(`[Webhook] 推送失败 (${url}):`, err.message);
     return false;
   }
+}
+
+export function getCstHour(date: Date = new Date()): number {
+  const hourStr = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour: 'numeric',
+    hour12: false,
+  }).format(date);
+  return parseInt(hourStr, 10);
 }
 
 /**
@@ -237,4 +270,23 @@ export function getCstDateString(date: Date = new Date()): string {
   })
     .format(date)
     .replace(/\//g, '-');
+}
+
+/**
+ * 获取东八区北京时间标准时间字符串 (YYYY-MM-DD HH:mm:ss)
+ */
+export function getCstDateTimeString(date: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const get = (type: string) => parts.find((p) => p.type === type)?.value || '00';
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`;
 }

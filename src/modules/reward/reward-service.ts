@@ -1,6 +1,6 @@
-import type { CtYunClient } from '../core/client.js';
-import { safeFetch } from '../core/utils.js';
-import { SignTask } from './sign.js';
+import type { CtYunClient } from '../../core/client.js';
+import { safeFetch } from '../../core/utils.js';
+import { SignTask } from '../task/sign.js';
 
 export interface RewardItem {
   prodId: number;
@@ -89,17 +89,21 @@ export function sortRewards(items: RewardItem[]): RewardItem[] {
 }
 
 /**
- * 天翼云积分商城独立兑换任务处理器
- * 支持动态商品目录查询与真实 PaaS/CRM 下单
+ * 积分商城与自动兑换业务服务 (Reward & Redeem Service)
+ *
+ * 铁律规范：
+ * 1. 严格本地强比对：积分不足直接本地拦截阻断，严禁向官方下单接口发送无效请求；
+ * 2. 硬件绑定强校验：升配包与扩容盘必须校验绑定的有效 desktopId；
+ * 3. 兑换全流程审计闭环并记录日志。
  */
-export class RedeemTask {
+export class RewardRedeemService {
   private static readonly DESK_URL = 'https://desk.ctyun.cn';
 
   /**
-   * 查询官方当前在售积分商品
+   * 查询官方在线在售积分商品
    */
   public static async getAvailableRewards(client: CtYunClient): Promise<RewardItem[]> {
-    const url = `${RedeemTask.DESK_URL}/selforder/api/selforder/prod/get?prodId=17000000&prodCode=POINTS`;
+    const url = `${RewardRedeemService.DESK_URL}/selforder/api/selforder/prod/get?prodId=17000000&prodCode=POINTS`;
     const rewards: RewardItem[] = [];
 
     try {
@@ -115,7 +119,9 @@ export class RedeemTask {
                   prodName: String(sku.prodName || '').trim(),
                   costPoints: Number(sku.costPoints || 0),
                   prodType: String(sku.prodType || 'pointstplupgrade').trim(),
-                  description: String(sku.description || series.description || '').replace(/<[^>]+>/g, '').trim(),
+                  description: String(sku.description || series.description || '')
+                    .replace(/<[^>]+>/g, '')
+                    .trim(),
                 });
               }
             }
@@ -128,14 +134,14 @@ export class RedeemTask {
   }
 
   /**
-   * 自动反查商品规格信息（优先官方在线商城，降级本地预设库）
+   * 反查商品规格信息（在线优先，本地预设兜底）
    */
   public static async resolveReward(client?: CtYunClient, prodId?: number): Promise<RewardItem | undefined> {
     if (!prodId) return undefined;
     const numId = Number(prodId);
     if (client) {
       try {
-        const list = await RedeemTask.getAvailableRewards(client);
+        const list = await RewardRedeemService.getAvailableRewards(client);
         const match = list.find((i) => Number(i.prodId) === numId);
         if (match) return match;
       } catch {}
@@ -144,7 +150,7 @@ export class RedeemTask {
   }
 
   /**
-   * 提交兑换订单
+   * 提交兑换订单（含严格本地双重风控拦截）
    */
   public static async placeOrder(
     client: CtYunClient,
@@ -159,7 +165,7 @@ export class RedeemTask {
     let resolvedType = prodType ? String(prodType).trim() : '';
 
     if (!resolvedPoints || !resolvedType) {
-      const item = await RedeemTask.resolveReward(client, Number(prodId));
+      const item = await RewardRedeemService.resolveReward(client, Number(prodId));
       if (item) {
         resolvedPoints = resolvedPoints || item.costPoints;
         resolvedType = resolvedType || item.prodType;
@@ -170,7 +176,7 @@ export class RedeemTask {
       throw new Error(`未获取到商品 [${prodId}] 的规格参数(costPoints/prodType)，无法兑换`);
     }
 
-    // 1. 硬性积分前置校验：查询账号真实可用积分，若不足坚决不调用天翼云下单接口
+    // 1. 积分硬性前置强校验：查询账号真实可用积分
     try {
       const pointSummary = await SignTask.getPointsAndTasks(client);
       const currentPoints = Number(pointSummary.generalPoints || 0);
@@ -183,14 +189,38 @@ export class RedeemTask {
       if (err.message?.includes('[积分不足拦截]')) {
         throw err;
       }
-      // 若是网络异常或查询解析波动，但若明确获知积分不足则绝不下单
     }
 
     // 2. 硬件绑定类商品校验（如升配包 pointstplupgrade、数据盘 pointsdiskupgrade）
     const isHardwareBound = resolvedType === 'pointstplupgrade' || resolvedType === 'pointsdiskupgrade';
     const attrs: any[] = [];
-    const numDesktopId = Number(desktopId);
-    const isValidDesktopId = Boolean(desktopId && desktopId !== 'undefined' && desktopId !== 'null' && Number.isFinite(numDesktopId) && numDesktopId > 0);
+    let finalDesktopId = desktopId;
+    let numDesktopId = Number(finalDesktopId);
+    let isValidDesktopId = Boolean(
+      finalDesktopId &&
+        finalDesktopId !== 'undefined' &&
+        finalDesktopId !== 'null' &&
+        Number.isFinite(numDesktopId) &&
+        numDesktopId > 0,
+    );
+
+    if (!isValidDesktopId) {
+      // 容错反查兜底：若传入的是 desktopCode 或未指定桌面，自动拉取账号桌面列表进行匹配或取首台兜底
+      try {
+        const list = await client.getDesktopList();
+        const found = finalDesktopId
+          ? list.find(
+              (d: any) =>
+                d.desktopCode === finalDesktopId || String(d.desktopId) === String(finalDesktopId),
+            )
+          : list[0];
+        if (found?.desktopId && Number.isFinite(Number(found.desktopId))) {
+          finalDesktopId = found.desktopId;
+          numDesktopId = Number(finalDesktopId);
+          isValidDesktopId = true;
+        }
+      } catch {}
+    }
 
     if (isHardwareBound) {
       if (!isValidDesktopId) {
@@ -200,11 +230,10 @@ export class RedeemTask {
       }
       attrs.push({ attrKey: 'bindDesktopId', attrVal: numDesktopId });
     } else if (isValidDesktopId) {
-      // 非强绑定硬件但传了有效桌面ID，附带上
       attrs.push({ attrKey: 'bindDesktopId', attrVal: numDesktopId });
     }
 
-    const url = `${RedeemTask.DESK_URL}/selforder/api/selforder/paas/placeOrder`;
+    const url = `${RewardRedeemService.DESK_URL}/selforder/api/selforder/paas/placeOrder`;
     const payload = {
       busiChannel: '010',
       orderType: 1,
@@ -224,15 +253,24 @@ export class RedeemTask {
       method: 'POST',
       headers: {
         ...client.getHeaders(),
-        'Content-Type': 'application/json;charset=UTF-8',
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
     });
 
-    const json = (await res.json()) as { code: number; msg?: string };
-    if (json.code === 0) {
-      return { success: true, message: `兑换成功！消耗 ${resolvedPoints} 积分` };
+    if (res.status !== 200) {
+      throw new Error(`下单接口 HTTP 响应异常: ${res.status}`);
     }
-    throw new Error(json.msg || `兑换失败 (Code: ${json.code})`);
+
+    const resJson = (await res.json()) as { code: number; message?: string; msg?: string; data?: any };
+    if (resJson.code !== 0) {
+      const errDetail = resJson.message || resJson.msg || '未知错误';
+      throw new Error(`官方兑换失败: ${errDetail}`);
+    }
+
+    return {
+      success: true,
+      message: `兑换成功！订单号: ${resJson.data?.orderId || '已生成'}，消耗 ${resolvedPoints} 积分`,
+    };
   }
 }

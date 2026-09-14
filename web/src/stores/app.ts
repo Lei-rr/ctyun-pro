@@ -11,6 +11,11 @@ export interface Desktop {
   useStatusText: string;
   status: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
   lastHeartbeat?: string;
+  yieldStatus?: {
+    yielding: boolean;
+    remainingSeconds: number;
+    reason?: string;
+  };
 }
 
 export interface Account {
@@ -137,6 +142,16 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function adminLogout() {
+    const prevToken = adminToken.value;
+    try {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(prevToken ? { 'x-admin-token': prevToken } : {}),
+        },
+      }).catch(() => {});
+    } catch {}
     adminToken.value = '';
     localStorage.removeItem('ctyun_admin_token');
     try {
@@ -230,7 +245,7 @@ export const useAppStore = defineStore('app', () => {
             keepAliveSeconds.value = msg.data.keepAliveSeconds || 60;
             if (msg.data.webhookUrl !== undefined) webhookUrl.value = msg.data.webhookUrl || '';
           } else if (msg.type === 'init_logs') {
-            logs.value = (msg.logs || []).slice(-200);
+            logs.value = (msg.logs || []).slice(-1000);
           } else if (msg.type === 'log') {
             const incoming: LogItem = msg.log;
             // 智能折叠：在当前末尾连续心跳波次（Block）内寻找同款心跳折叠，遇到业务日志立即打断
@@ -248,8 +263,10 @@ export const useAppStore = defineStore('app', () => {
                   item.id === incoming.id ||
                   (item.message === incoming.message && item.level === incoming.level)
                 ) {
-                  item.count = incoming.count || (item.count || 1) + 1;
-                  item.time = incoming.time;
+                  const [matched] = logs.value.splice(i, 1);
+                  matched.count = incoming.count || (matched.count || 1) + 1;
+                  matched.time = incoming.time;
+                  logs.value.push(matched);
                   found = true;
                   break;
                 }
@@ -258,8 +275,8 @@ export const useAppStore = defineStore('app', () => {
 
             if (!found) {
               logs.value.push(incoming);
-              if (logs.value.length > 200) {
-                logs.value.splice(0, logs.value.length - 200);
+              if (logs.value.length > 1000) {
+                logs.value.splice(0, logs.value.length - 1000);
               }
             }
           }
@@ -402,6 +419,8 @@ export const useAppStore = defineStore('app', () => {
     }, 1500);
   }
 
+  const currentChallenge = ref<{ challengeId: string; challengeCode: string } | null>(null);
+
   function switchLoginMode(mode: 'qrcode' | 'password') {
     loginMode.value = mode;
     modalError.value = '';
@@ -431,6 +450,7 @@ export const useAppStore = defineStore('app', () => {
       lastFetchedPhone = '';
       captchaImgUrl.value = '';
       formCaptcha.value = '';
+      currentChallenge.value = null;
     }
   }
 
@@ -442,6 +462,7 @@ export const useAppStore = defineStore('app', () => {
     formPassword.value = '';
     formCaptcha.value = '';
     captchaImgUrl.value = '';
+    currentChallenge.value = null;
     modalError.value = '';
     lastFetchedPhone = '';
     smsSentSuccess.value = false;
@@ -459,6 +480,7 @@ export const useAppStore = defineStore('app', () => {
     const userPhone = (forceUser !== undefined ? forceUser : formUser.value).trim();
     if (!userPhone) {
       captchaImgUrl.value = '';
+      currentChallenge.value = null;
       return;
     }
     const name = formName.value.trim() || userPhone;
@@ -466,17 +488,20 @@ export const useAppStore = defineStore('app', () => {
     formCaptcha.value = ''; // 刷新验证码清空旧输入
     try {
       const res = await fetch(
-        `/api/profiles/${encodeURIComponent(name)}/captcha?_t=${Date.now()}`,
+        `/api/profiles/${encodeURIComponent(name)}/captcha?user=${encodeURIComponent(userPhone)}&_t=${Date.now()}`,
         { headers: getHeaders() },
       );
       const json = await res.json();
       if (json.success && json.data) {
         captchaImgUrl.value = json.data.image;
+        if (json.data.challenge) {
+          currentChallenge.value = json.data.challenge;
+        }
       }
     } catch {
       captchaImgUrl.value = `/api/profiles/${encodeURIComponent(
         name,
-      )}/captcha?_t=${Date.now()}`;
+      )}/captcha?user=${encodeURIComponent(userPhone)}&_t=${Date.now()}`;
     } finally {
       captchaLoading.value = false;
     }
@@ -500,6 +525,7 @@ export const useAppStore = defineStore('app', () => {
             user: formUser.value.trim(),
             password: formPassword.value,
             captchaCode: formCaptcha.value.trim(),
+            challenge: currentChallenge.value,
           }),
         });
         const data = await res.json();
@@ -1035,6 +1061,7 @@ export const useAppStore = defineStore('app', () => {
     formName,
     formPassword,
     formCaptcha,
+    currentChallenge,
     captchaImgUrl,
     modalLoading,
     captchaLoading,
@@ -1062,7 +1089,18 @@ export const useAppStore = defineStore('app', () => {
       const data = await res.json();
       if (!data.success) throw new Error(data.msg || '修改备注失败');
       toast.success(`账号备注已修改为 [${newName}]`);
-      fetchStatus();
+      await fetchStatus();
+    },
+    renameDesktop: async (desktopCode: string, newName: string) => {
+      const res = await fetch(`/api/desktops/${encodeURIComponent(desktopCode)}/rename`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ desktopName: newName }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.msg || '修改云电脑名称失败');
+      toast.success(`云电脑名称已修改为 [${newName}]`);
+      await fetchStatus();
     },
     fetchPointsAndTasks: async (accountUserOrName: string) => {
       const res = await fetch(`/api/profiles/${encodeURIComponent(accountUserOrName)}/points`, {
@@ -1176,9 +1214,9 @@ export const useAppStore = defineStore('app', () => {
         return false;
       }
     },
-    async getDesktopDirectUrl(instanceId: string): Promise<string | null> {
+    async getDesktopDirectUrl(desktopCode: string): Promise<string | null> {
       try {
-        const res = await fetch(`/api/desktops/${encodeURIComponent(instanceId)}/direct-url`, {
+        const res = await fetch(`/api/desktops/${encodeURIComponent(desktopCode)}/direct-url`, {
           headers: getHeaders(),
         });
         const json = await res.json();
