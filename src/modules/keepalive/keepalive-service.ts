@@ -54,9 +54,10 @@ export class KeepaliveService {
     if (list) {
       for (const w of list) {
         try {
-          const dId = (w as any).options?.desktop?.desktopId;
-          if (dId) {
-            this.arbiter.releaseLease(String(dId), 'keepalive', accountName).catch(() => {});
+          const d = (w as any).options?.desktop;
+          const targetKey = d?.desktopCode || String(d?.desktopId || '');
+          if (targetKey) {
+            this.arbiter.releaseLease(targetKey, 'keepalive', accountName).catch(() => {});
           }
           w.stop();
         } catch {}
@@ -77,7 +78,8 @@ export class KeepaliveService {
       const d = (w as any).options?.desktop;
       if (d && (d.desktopCode === desktopCodeOrId || String(d.desktopId) === String(desktopCodeOrId))) {
         try {
-          this.arbiter.releaseLease(String(d.desktopId), 'keepalive', accountName).catch(() => {});
+          const targetKey = d.desktopCode || String(d.desktopId);
+          this.arbiter.releaseLease(targetKey, 'keepalive', accountName).catch(() => {});
           w.stop();
         } catch {}
       } else {
@@ -126,9 +128,10 @@ export class KeepaliveService {
     for (const [acc, workers] of this.workers.entries()) {
       for (const w of workers) {
         try {
-          const dId = (w as any).options?.desktop?.desktopId;
-          if (dId) {
-            this.arbiter.releaseLease(String(dId), 'keepalive', acc).catch(() => {});
+          const d = (w as any).options?.desktop;
+          const targetKey = d?.desktopCode || String(d?.desktopId || '');
+          if (targetKey) {
+            this.arbiter.releaseLease(targetKey, 'keepalive', acc).catch(() => {});
           }
           w.stop();
         } catch {}
@@ -194,8 +197,9 @@ export class KeepaliveService {
       const dIdStr = String(d.desktopId);
 
       // 外部客户端避让或高优先级独占避让：若桌面正处于智能挂机、前台直连或外部避让中，保活通道暂缓建立
-      if (this.arbiter.isBusy(dIdStr) || (dCode && this.arbiter.isBusy(String(dCode)))) {
-        const yieldStatus = this.arbiter.getYieldStatus(dIdStr);
+      const primaryKey = d.desktopCode || dIdStr;
+      if (this.arbiter.isBusy(primaryKey)) {
+        const yieldStatus = this.arbiter.getYieldStatus(primaryKey);
         if (yieldStatus.yielding) {
           this.logger.addLog(
             'info',
@@ -277,7 +281,7 @@ export class KeepaliveService {
         // 向桌面仲裁器申请 keepalive 租约
         let workerInstance: KeepAliveWorker | null = null;
         const acquired = await this.arbiter.acquireLease(
-          dIdStr,
+          primaryKey,
           'keepalive',
           accountName,
           async () => {

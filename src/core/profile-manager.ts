@@ -68,6 +68,23 @@ export class ProfileManager {
 
     // 租约释放协同：当前台直连或挂机释放桌面租约时，自动唤醒保活通道无缝恢复
     const arbiter = DesktopSessionArbiter.getInstance();
+    arbiter.setLogger(this.logger);
+    arbiter.setResolver((identifier: string) => {
+      const matched = this.findDesktopByCode(identifier);
+      if (matched) {
+        const canonicalCode = matched.desktop.desktopCode || String(matched.desktop.desktopId);
+        const dName = matched.desktop.desktopName || (matched.desktop as any).computerName || (matched.desktop as any).name || canonicalCode;
+        const displayName = `${matched.accountName} - ${dName}`;
+        return {
+          canonicalCode,
+          displayName,
+          accountName: matched.accountName,
+          desktopName: dName,
+        };
+      }
+      return undefined;
+    });
+
     arbiter.on('lease:released', ({ purpose, ownerId }) => {
       if (purpose === 'web_direct' || purpose === 'hang') {
         const acc = this.accounts.get(ownerId);
@@ -147,26 +164,16 @@ export class ProfileManager {
     if (!matchedAccount) return;
     
     // 如果存在待延迟释放的计时器（例如用户刷新网页），立即取消该释放任务
-    const dId = matched?.desktop?.desktopId ? String(matched.desktop.desktopId) : '';
-    const lookupKey = dId || String(desktopCode);
-    if (this.webReleaseTimers.has(lookupKey)) {
-      clearTimeout(this.webReleaseTimers.get(lookupKey)!);
-      this.webReleaseTimers.delete(lookupKey);
-    }
-    if (desktopCode && this.webReleaseTimers.has(String(desktopCode))) {
-      clearTimeout(this.webReleaseTimers.get(String(desktopCode))!);
-      this.webReleaseTimers.delete(String(desktopCode));
+    const canonicalKey = matched?.desktop?.desktopCode || desktopCode;
+    if (this.webReleaseTimers.has(canonicalKey)) {
+      clearTimeout(this.webReleaseTimers.get(canonicalKey)!);
+      this.webReleaseTimers.delete(canonicalKey);
     }
 
     // 仲裁器注册 Web 直连高优先级租约（带 TTL 自动防死锁），驱逐所有后台长连接
     const arbiter = DesktopSessionArbiter.getInstance();
     const ttlMs = Math.max(30, Number(durationSec) || 60) * 1000;
-    if (dId) {
-      arbiter.acquireLease(dId, 'web_direct', matchedAccount, async () => {}, ttlMs).catch(() => {});
-    }
-    if (desktopCode && desktopCode !== dId) {
-      arbiter.acquireLease(desktopCode, 'web_direct', matchedAccount, async () => {}, ttlMs).catch(() => {});
-    }
+    arbiter.acquireLease(canonicalKey, 'web_direct', matchedAccount, async () => {}, ttlMs).catch(() => {});
 
     // 协同让位：若该账号正在执行后台纯协议挂机，立即主动中止挂机释放推流信道，彻底防止双端互踢冲突
     this.taskStrategyService.stopHang(matchedAccount).catch(() => {});
@@ -177,29 +184,22 @@ export class ProfileManager {
     const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopCode(desktopCode);
     if (!matchedAccount) return;
     
-    const dId = matched?.desktop?.desktopId ? String(matched.desktop.desktopId) : '';
-    const lookupKey = dId || String(desktopCode);
+    const canonicalKey = matched?.desktop?.desktopCode || desktopCode;
 
     // 清理可能存在的旧延迟释放任务
-    if (this.webReleaseTimers.has(lookupKey)) {
-      clearTimeout(this.webReleaseTimers.get(lookupKey)!);
-      this.webReleaseTimers.delete(lookupKey);
+    if (this.webReleaseTimers.has(canonicalKey)) {
+      clearTimeout(this.webReleaseTimers.get(canonicalKey)!);
+      this.webReleaseTimers.delete(canonicalKey);
     }
 
     // 引入延迟释放宽限期（Grace Period，默认 10 秒）：
     // 浏览器用户刷新网页时会触发 beforeunload 发送 web-close，但 1~2 秒后新页面就会加载并发送 web-active。
     // 若立即释放租约，后台保活 Worker 会瞬时唤醒发起连接导致天翼云 1005 踢线。
     const timer = setTimeout(() => {
-      this.webReleaseTimers.delete(lookupKey);
-      if (desktopCode) this.webReleaseTimers.delete(String(desktopCode));
+      this.webReleaseTimers.delete(canonicalKey);
 
       const arbiter = DesktopSessionArbiter.getInstance();
-      if (dId) {
-        arbiter.releaseLease(dId, 'web_direct', matchedAccount).catch(() => {});
-      }
-      if (desktopCode && desktopCode !== dId) {
-        arbiter.releaseLease(desktopCode, 'web_direct', matchedAccount).catch(() => {});
-      }
+      arbiter.releaseLease(canonicalKey, 'web_direct', matchedAccount).catch(() => {});
 
       // 关键恢复：前台直连关闭且宽限期到期后，自动恢复该账号下的保活 Worker 运行
       const acc = this.accounts.get(matchedAccount);
@@ -208,8 +208,7 @@ export class ProfileManager {
       }
     }, Math.max(1, delaySec) * 1000);
 
-    this.webReleaseTimers.set(lookupKey, timer);
-    if (desktopCode) this.webReleaseTimers.set(String(desktopCode), timer);
+    this.webReleaseTimers.set(canonicalKey, timer);
   }
 
   public isManualShutdown(desktopCode: string): boolean {
@@ -404,7 +403,7 @@ export class ProfileManager {
       const sanitized = this.sanitizeAccount(state);
       if (sanitized.desktops && Array.isArray(sanitized.desktops)) {
         sanitized.desktops = sanitized.desktops.map((d: any) => {
-          const yieldStatus = arbiter.getYieldStatus(String(d.desktopId));
+          const yieldStatus = arbiter.getYieldStatus(d.desktopCode || String(d.desktopId));
           return {
             ...d,
             yieldStatus: yieldStatus.yielding ? yieldStatus : undefined,
@@ -1096,11 +1095,13 @@ export class ProfileManager {
     // 外部官方客户端主动避让检查
     const arbiter = DesktopSessionArbiter.getInstance();
     const curState = this.accountStates.get(accountName);
-    const yieldingDesktop = curState?.desktops?.find((d) => arbiter.getYieldStatus(d.desktopId).yielding);
+    const yieldingDesktop = curState?.desktops?.find((d) => arbiter.getYieldStatus(d.desktopCode || d.desktopId).yielding);
     if (yieldingDesktop) {
-      const yInfo = arbiter.getYieldStatus(yieldingDesktop.desktopId);
+      const targetKey = yieldingDesktop.desktopCode || yieldingDesktop.desktopId;
+      const yInfo = arbiter.getYieldStatus(targetKey);
+      const dName = yieldingDesktop.desktopName || (yieldingDesktop as any).computerName || (yieldingDesktop as any).name || targetKey;
       const msg = `云电脑正处于外部官方客户端主动避让期 (剩余 ${yInfo.remainingSeconds}秒)，暂缓启动挂机`;
-      this.logger.addLog('warn', `[${accountName}] ${msg}`);
+      this.logger.addLog('warn', `[${accountName} - ${dName}] ${msg}`);
       return msg;
     }
 
