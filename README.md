@@ -170,3 +170,10 @@ curl -fsSL https://raw.githubusercontent.com/Lei-rr/ctyun-pro/main/install.sh | 
 ## 📄 开源许可证
 
 本项目基于 [MIT License](LICENSE) 开源发布。
+
+---
+
+## 鸣谢 / 参考项目
+
+本项目在功能与协议设计过程中参考了开源项目 [muyicn/ctyun-dashboard](https://github.com/muyicn/ctyun-dashboard)，特此致谢。
+
