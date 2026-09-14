@@ -122,6 +122,44 @@ export class KeepaliveService {
   }
 
   /**
+   * 恢复单台云电脑的保活 Worker 并安全重新申请仲裁租约与全新凭证
+   */
+  public async resumeWorkerForDesktop(accountName: string, desktopCodeOrId: string): Promise<boolean> {
+    const list = this.workers.get(accountName);
+    if (!list || list.length === 0) return false;
+
+    for (const w of list) {
+      const d = (w as any).options?.desktop;
+      const targetKey = d?.desktopCode || String(d?.desktopId || '');
+      if (targetKey === desktopCodeOrId || String(d?.desktopId) === desktopCodeOrId) {
+        const dName = d?.desktopName || (d as any)?.computerName || (d as any)?.name || targetKey;
+        const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
+
+        // 重新获取桌面长连接仲裁租约
+        const acquired = await this.arbiter.acquireLease(
+          targetKey,
+          'keepalive',
+          accountName,
+          async () => {
+            w.pause();
+          },
+        );
+
+        if (!acquired) {
+          this.logger.addLog('info', `[${dPrefix}] 外部避让已解除，但桌面有其他更高优先级业务占用，保活通道暂缓建立`);
+          return false;
+        }
+
+        this.logger.addLog('info', `[${dPrefix}] 外部避让已安全解除，正在申请全新凭据并唤醒恢复保活长连接...`);
+        (w as any).needsFreshTicket = true;
+        w.resume();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * 停止全部保活工作者
    */
   public stopAll(): void {
@@ -178,10 +216,37 @@ export class KeepaliveService {
   ): Promise<void> {
     if (!client.loginInfo) return;
 
-    // 检查是否所有 Worker 都在健康运行
+    // 检查是否所有 Worker 都在健康且活跃运行 (未被暂停且处于运行中)
     const existingWorkers = this.workers.get(accountName) || [];
-    if (existingWorkers.length > 0 && existingWorkers.every((w) => (w as any).isRunning)) {
+    const allActive =
+      existingWorkers.length === desktops.length &&
+      existingWorkers.length > 0 &&
+      existingWorkers.every((w) => (w as any).isRunning && !(w as any).isPaused);
+
+    if (allActive) {
       return;
+    }
+
+    // 若已有 Worker 仅处于 isPaused 状态，且仲裁器检测到该桌面已空闲/解除避让，优先唤醒自愈
+    if (existingWorkers.length === desktops.length && existingWorkers.length > 0) {
+      let anyRecovered = false;
+      for (const w of existingWorkers) {
+        if ((w as any).isPaused) {
+          const d = (w as any).options?.desktop;
+          const targetKey = d?.desktopCode || String(d?.desktopId || '');
+          if (targetKey && !this.arbiter.isBusy(targetKey)) {
+            await this.resumeWorkerForDesktop(accountName, targetKey);
+            anyRecovered = true;
+          }
+        }
+      }
+      // 若已有 worker 全部恢复正常，直接返回
+      if (
+        anyRecovered &&
+        existingWorkers.every((w) => (w as any).isRunning && !(w as any).isPaused)
+      ) {
+        return;
+      }
     }
 
     this.stopWorkers(accountName);

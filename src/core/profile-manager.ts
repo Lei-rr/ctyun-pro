@@ -85,6 +85,26 @@ export class ProfileManager {
       return undefined;
     });
 
+    // 注册真实状态探测器：在避让期满前，主动向天翼云官方发起轻量状态查询
+    arbiter.setStateChecker(async (identifier: string) => {
+      const matched = this.findDesktopByCode(identifier);
+      if (!matched) return null;
+      const client = this.clients.get(matched.accountName);
+      if (!client) return null;
+      try {
+        const state = await client.getDesktopState(matched.desktop.desktopId, matched.desktop.objType ?? 0);
+        if (!state) return null;
+        // 天翼云标准：useStatus 为 '25' 表示外部客户端连接使用中；'20' 为运行中空闲
+        const isOccupied = String(state.useStatus) === '25';
+        return {
+          occupied: isOccupied,
+          useStatus: state.useStatus,
+        };
+      } catch {
+        return null;
+      }
+    });
+
     arbiter.on('lease:released', ({ purpose, ownerId }) => {
       if (purpose === 'web_direct' || purpose === 'hang') {
         const acc = this.accounts.get(ownerId);
@@ -94,20 +114,20 @@ export class ProfileManager {
       }
     });
 
-    // 外部避让期结束协同：当外部客户端避让期自然过期或被主动清除时，唤醒保活通道尝试恢复
-    arbiter.on('yield:expired', ({ desktopId }) => {
+    // 外部避让期结束协同：当外部客户端避让期自然过期或被主动清除时，唤醒保活通道安全恢复
+    const onYieldEnded = async (desktopId: string) => {
       const matched = this.findDesktopByCode(desktopId);
       if (matched?.accountName) {
         const acc = this.accounts.get(matched.accountName);
         if (acc && acc.autoStart !== false) {
-          this.keepaliveService.resumeWorkers(matched.accountName);
+          await this.keepaliveService.resumeWorkerForDesktop(matched.accountName, desktopId);
         }
       }
       this.notifyStatusChange();
-    });
-    arbiter.on('yield:cleared', () => {
-      this.notifyStatusChange();
-    });
+    };
+
+    arbiter.on('yield:expired', ({ desktopId }) => onYieldEnded(desktopId));
+    arbiter.on('yield:cleared', ({ desktopId }) => onYieldEnded(desktopId));
     arbiter.on('yield:triggered', () => {
       this.notifyStatusChange();
     });

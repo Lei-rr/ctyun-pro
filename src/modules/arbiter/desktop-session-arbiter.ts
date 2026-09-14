@@ -42,6 +42,10 @@ export type DesktopInfoResolver = (desktopIdOrCode: string) => DesktopInfoResolu
  *    通过注入的 DesktopInfoResolver 自动将 desktopId 或 desktopCode 归一化为 [账号名 - 云电脑名]，
  *    彻底屏蔽生硬的数字 ID 与零散的 Code。
  */
+export type DesktopOccupiedChecker = (
+  identifier: string,
+) => Promise<{ occupied: boolean; useStatus?: string | number } | null>;
+
 export class DesktopSessionArbiter extends EventEmitter {
   private static instance: DesktopSessionArbiter | null = null;
   // canonicalCode (string) -> 当前活跃持约者
@@ -52,6 +56,7 @@ export class DesktopSessionArbiter extends EventEmitter {
   private leaseLocks: Map<string, Promise<any>> = new Map();
   private logger?: Logger;
   private resolver?: DesktopInfoResolver;
+  private stateChecker?: DesktopOccupiedChecker;
 
   private constructor() {
     super();
@@ -70,6 +75,10 @@ export class DesktopSessionArbiter extends EventEmitter {
 
   public setResolver(resolver: DesktopInfoResolver): void {
     this.resolver = resolver;
+  }
+
+  public setStateChecker(checker: DesktopOccupiedChecker): void {
+    this.stateChecker = checker;
   }
 
   /**
@@ -143,12 +152,13 @@ export class DesktopSessionArbiter extends EventEmitter {
     });
 
     const existing = this.externalYields.get(key);
+    const isAlreadyYielding = Boolean(existing && existing.until > now);
     if (existing?.timer) {
       clearTimeout(existing.timer);
     }
 
     const timer = setTimeout(() => {
-      this.clearYield(key);
+      this.handleYieldTimeout(key).catch(() => {});
     }, duration * 60 * 1000);
     if (timer.unref) timer.unref();
 
@@ -160,10 +170,12 @@ export class DesktopSessionArbiter extends EventEmitter {
       timer,
     });
 
-    this.logger?.addLog(
-      'warn',
-      `${prefix} 检测到外部官方客户端接入，系统主动避让 ${duration} 分钟 (至 ${timeStr})，暂停长连接与自动化任务`,
-    );
+    if (!isAlreadyYielding) {
+      this.logger?.addLog(
+        'warn',
+        `${prefix} 检测到外部官方客户端接入，系统主动避让 ${duration} 分钟 (至 ${timeStr})，暂停长连接与自动化任务`,
+      );
+    }
 
     this.emit('yield:triggered', { desktopId: key, until, reason });
 
@@ -203,6 +215,55 @@ export class DesktopSessionArbiter extends EventEmitter {
       remainingSeconds: Math.ceil((info.until - now) / 1000),
       reason: info.reason,
     };
+  }
+
+  /**
+   * 避让周期到期时的前置真实状态探测与智能续期处理
+   * 严格遵循“先探测真实状态再决定是否解除避让”原则，绝不盲目清空避让锁抢占
+   */
+  private async handleYieldTimeout(key: string): Promise<void> {
+    const existing = this.externalYields.get(key);
+    if (!existing) return;
+
+    const { displayName } = this.resolveDesktop(key);
+    const prefix = this.formatPrefix(displayName, key);
+
+    if (this.stateChecker) {
+      try {
+        const check = await this.stateChecker(key);
+        // 若探测到外部官方客户端仍在使用中 (如 useStatus: 25)，绝对不抢占，自动顺延避让
+        if (check && check.occupied) {
+          const extendMinutes = 3;
+          const newUntil = Date.now() + extendMinutes * 60 * 1000;
+          const timeStr = new Date(newUntil).toLocaleTimeString('zh-CN', {
+            timeZone: 'Asia/Shanghai',
+            hour12: false,
+          });
+
+          const timer = setTimeout(() => {
+            this.handleYieldTimeout(key).catch(() => {});
+          }, extendMinutes * 60 * 1000);
+          if (timer.unref) timer.unref();
+
+          this.externalYields.set(key, {
+            ...existing,
+            until: newUntil,
+            timer,
+          });
+
+          this.logger?.addLog(
+            'warn',
+            `${prefix} 探测到外部官方客户端仍在使用中 (状态: ${check.useStatus || '25'})，避让状态自动顺延 ${extendMinutes} 分钟 (至 ${timeStr})`,
+          );
+          return;
+        }
+      } catch (err: any) {
+        this.logger?.addLog('warn', `${prefix} 避让到期前置探测提示: ${err.message}`);
+      }
+    }
+
+    // 探测确认已退出占用或恢复空闲，正式解除避让
+    this.clearYield(key);
   }
 
   /**

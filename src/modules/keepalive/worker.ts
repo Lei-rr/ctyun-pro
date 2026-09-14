@@ -219,10 +219,6 @@ export class KeepAliveWorker {
     const dId = String(this.options.desktop.desktopId);
     const yieldStatus = DesktopSessionArbiter.getInstance().getYieldStatus(dId);
     if (yieldStatus.yielding) {
-      this.log(
-        'info',
-        `桌面处于外部官方客户端主动避让期 (剩余 ${yieldStatus.remainingSeconds}秒)，暂缓建立长连接`,
-      );
       this.isReconnecting = true;
       this.options.onStatusChange?.('reconnecting');
       this.reconnectTimer = setTimeout(() => {
@@ -290,8 +286,20 @@ export class KeepAliveWorker {
       
       const isConflict = code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict');
       if (isConflict) {
-        this.log('warn', `检测到云电脑已被外部官方客户端接入 (Code ${code})，系统主动避让 5 分钟，暂停长连接保活`);
+        if (this.heartbeatTimer) {
+          clearInterval(this.heartbeatTimer);
+          this.heartbeatTimer = null;
+        }
+        if (this.handshakeTimeout) {
+          clearTimeout(this.handshakeTimeout);
+          this.handshakeTimeout = null;
+        }
+        this.cleanupSocket();
+        this.isReconnecting = false;
+        this.needsFreshTicket = true;
+        // 外部客户端接入冲突：交由桌面仲裁器统一进行主动避让与前置状态探测，恢复时由事件驱动唤醒
         await DesktopSessionArbiter.getInstance().yieldToExternal(dId, 5, `网关通知外部客户端接入 (Code ${code})`);
+        return;
       }
 
       if (this.heartbeatTimer) {
@@ -304,55 +312,53 @@ export class KeepAliveWorker {
       }
       this.cleanupSocket();
 
-      let retryDelay = isConflict ? 300000 : 5000;
+      let retryDelay = 5000;
 
-      if (!isConflict) {
-        const isConnectionRefused =
-          this.lastGatewayError.includes('connection refused') || this.lastGatewayError.includes('failed to connect');
+      const isConnectionRefused =
+        this.lastGatewayError.includes('connection refused') || this.lastGatewayError.includes('failed to connect');
 
-        if (this.isHandshakeComplete) {
-          // 运行中正常网络断开：重置握手完成标记
-          this.isHandshakeComplete = false;
-          this.consecutiveFailures = 0;
-          this.needsFreshTicket = true;
-          this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
-        } else {
-          // 未完成握手即断开（如网关 1005 关闭或拒接）：累计握手失败计数
-          this.consecutiveFailures++;
-          // 握手失败/被拒接，下次必须强制申请全新 Ticket！天翼云 Ticket 为单次消费凭据，不可复用！
-          this.needsFreshTicket = true;
+      if (this.isHandshakeComplete) {
+        // 运行中正常网络断开：重置握手完成标记
+        this.isHandshakeComplete = false;
+        this.consecutiveFailures = 0;
+        this.needsFreshTicket = true;
+        this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
+      } else {
+        // 未完成握手即断开（如网关 1005 关闭或拒接）：累计握手失败计数
+        this.consecutiveFailures++;
+        // 握手失败/被拒接，下次必须强制申请全新 Ticket！天翼云 Ticket 为单次消费凭据，不可复用！
+        this.needsFreshTicket = true;
 
-          if (isConnectionRefused) {
-            // connection refused 说明云电脑服务正在冷启动中 (端口 7003 尚未就绪)
-            // 采用平滑阶梯退避 (3s -> 5s -> 10s)，每次重新申请全新 Ticket 接入
-            if (this.consecutiveFailures <= 2) {
-              retryDelay = 3000;
-            } else if (this.consecutiveFailures <= 4) {
-              retryDelay = 5000;
-            } else {
-              retryDelay = 10000;
-            }
-            this.log('info', `云电脑服务正在拉起就绪中，${retryDelay / 1000}秒后申请全新凭据接入长连接 (连续重试 ${this.consecutiveFailures} 次)...`);
+        if (isConnectionRefused) {
+          // connection refused 说明云电脑服务正在冷启动中 (端口 7003 尚未就绪)
+          // 采用平滑阶梯退避 (3s -> 5s -> 10s)，每次重新申请全新 Ticket 接入
+          if (this.consecutiveFailures <= 2) {
+            retryDelay = 3000;
+          } else if (this.consecutiveFailures <= 4) {
+            retryDelay = 5000;
           } else {
-            // 阶梯指数退避：5s -> 10s -> 20s -> 30s，最高 60s
-            if (this.consecutiveFailures === 1) {
-              retryDelay = 5000;
-            } else if (this.consecutiveFailures === 2) {
-              retryDelay = 10000;
-            } else if (this.consecutiveFailures === 3) {
-              retryDelay = 20000;
-            } else if (this.consecutiveFailures === 4) {
-              retryDelay = 30000;
-            } else {
-              retryDelay = 60000;
-            }
-
-            const retryDelaySec = Math.round(retryDelay / 1000);
-            this.log(
-              'warn',
-              `长连接握手未完成即断开 (${code}, ${reasonStr || '远程连接关闭'})，${retryDelaySec}秒后换取新凭据重试 (连续重试 ${this.consecutiveFailures} 次)...`,
-            );
+            retryDelay = 10000;
           }
+          this.log('info', `云电脑服务正在拉起就绪中，${retryDelay / 1000}秒后申请全新凭据接入长连接 (连续重试 ${this.consecutiveFailures} 次)...`);
+        } else {
+          // 阶梯指数退避：5s -> 10s -> 20s -> 30s，最高 60s
+          if (this.consecutiveFailures === 1) {
+            retryDelay = 5000;
+          } else if (this.consecutiveFailures === 2) {
+            retryDelay = 10000;
+          } else if (this.consecutiveFailures === 3) {
+            retryDelay = 20000;
+          } else if (this.consecutiveFailures === 4) {
+            retryDelay = 30000;
+          } else {
+            retryDelay = 60000;
+          }
+
+          const retryDelaySec = Math.round(retryDelay / 1000);
+          this.log(
+            'warn',
+            `长连接握手未完成即断开 (${code}, ${reasonStr || '远程连接关闭'})，${retryDelaySec}秒后换取新凭据重试 (连续重试 ${this.consecutiveFailures} 次)...`,
+          );
         }
       }
 
@@ -532,7 +538,6 @@ export class KeepAliveWorker {
             info.type === ClinkMsgType.MSG_MAIN_DESKTOP_LOCKED ||
             info.type === ClinkMsgType.MSG_END_MAIN
           ) {
-            this.log('warn', `收到服务端会话通知 (Type ${info.type})，检测到外部官方客户端接入，系统主动避让 5 分钟`);
             triggerReconnect(4001, `Type ${info.type} preempt`);
             return;
           }

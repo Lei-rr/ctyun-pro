@@ -524,7 +524,6 @@ export class HangTask {
 
               // C. 互踢避让与抢占保护：收到 Type 119/120/137 服务端离线通知或多端抢占通知
               if (info.type === 119 || info.type === 120 || info.type === 137) {
-                logger.addLog('warn', `[${logPrefix}] 收到服务端会话通知 (Type ${info.type})，检测到外部官方客户端接入，系统主动避让 5 分钟`);
                 await arbiter.yieldToExternal(arbKey, 5, `服务端通知外部客户端接入 (Type ${info.type})`);
                 activeHangSessions.delete(accountName);
                 options.onProgress?.(session.currentProgress, totalProgress);
@@ -544,7 +543,6 @@ export class HangTask {
           options.onProgress?.(session.currentProgress, totalProgress);
 
           if (code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict')) {
-            logger.addLog('warn', `[${logPrefix}] 网关通知桌面被真实客户端接入 (Code 4001)，系统主动避让 5 分钟`);
             await arbiter.yieldToExternal(arbKey, 5, '网关通知真实客户端接入 (Code 4001)');
             resolve({ success: true, message: '客户端主动接入，任务让位' });
             return;
