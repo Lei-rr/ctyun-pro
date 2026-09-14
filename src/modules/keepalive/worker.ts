@@ -36,6 +36,7 @@ export class KeepAliveWorker {
   private isHandshakeComplete = false;
   private consecutiveFailures = 0;
   private needsFreshTicket = false;
+  private lastGatewayError = '';
   private handshakeTimeout: NodeJS.Timeout | null = null;
   private yieldClearedHandler: ((data: { desktopId: string }) => void) | null = null;
 
@@ -91,6 +92,7 @@ export class KeepAliveWorker {
     this.isHandshakeComplete = false;
     this.consecutiveFailures = 0;
     this.needsFreshTicket = false;
+    this.lastGatewayError = '';
     this.unbindYieldCleared();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -113,6 +115,7 @@ export class KeepAliveWorker {
     this.isHandshakeComplete = false;
     this.consecutiveFailures = 0;
     this.needsFreshTicket = false;
+    this.lastGatewayError = '';
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -184,6 +187,7 @@ export class KeepAliveWorker {
       this.isHandshakeComplete = true;
       this.consecutiveFailures = 0;
       this.needsFreshTicket = false;
+      this.lastGatewayError = '';
       this.options.onStatusChange?.('connected');
       this.log('success', '云电脑保活会话建立成功');
 
@@ -295,35 +299,56 @@ export class KeepAliveWorker {
       let retryDelay = isConflict ? 300000 : 5000;
 
       if (!isConflict) {
+        const isZombieWakeup = this.lastGatewayError.includes('zombie');
+        const isConnectionRefused =
+          this.lastGatewayError.includes('connection refused') || this.lastGatewayError.includes('failed to connect');
+
         if (this.isHandshakeComplete) {
-          // 运行中正常网络断开：重置握手完成标记，首选 5 秒快速重连
+          // 运行中正常网络断开：重置握手完成标记
           this.isHandshakeComplete = false;
           this.consecutiveFailures = 0;
-          this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
+
+          if (isZombieWakeup) {
+            // 收到 zombie：官方会话挂起/回收，立即于 1 秒内发起连接敲门以唤醒官方服务冷启动
+            retryDelay = 1000;
+            this.needsFreshTicket = true;
+            this.log('info', `网关轻量线程挂起 (${code})，1秒内发起唤醒连接以触发官方服务冷启动...`);
+          } else {
+            this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
+          }
         } else {
           // 未完成握手即断开（如网关 1005 关闭或拒接）：累计握手失败计数
           this.consecutiveFailures++;
-          // 标记下次重连必须换取新鲜 Ticket
-          this.needsFreshTicket = true;
 
-          // 阶梯指数退避：5s -> 10s -> 20s -> 30s，最高 60s
-          if (this.consecutiveFailures === 1) {
-            retryDelay = 5000;
-          } else if (this.consecutiveFailures === 2) {
-            retryDelay = 10000;
-          } else if (this.consecutiveFailures === 3) {
-            retryDelay = 20000;
-          } else if (this.consecutiveFailures === 4) {
-            retryDelay = 30000;
+          if (isConnectionRefused) {
+            // connection refused 说明第 1 次敲门已成功触发官方服务拉起，端口正在初始化
+            // 采用 2.5 秒精准重试退避，复用已有凭据迅速完成接入
+            retryDelay = 2500;
+            this.needsFreshTicket = false;
+            this.log('info', `云电脑服务正在拉起就绪中，2.5秒后自动接入长连接 (连续重试 ${this.consecutiveFailures} 次)...`);
           } else {
-            retryDelay = 60000;
-          }
+            // 标记下次重连必须换取新鲜 Ticket
+            this.needsFreshTicket = true;
 
-          const retryDelaySec = Math.round(retryDelay / 1000);
-          this.log(
-            'warn',
-            `长连接握手未完成即断开 (${code}, ${reasonStr || '远程连接关闭'})，${retryDelaySec}秒后换取新凭据重试 (连续重试 ${this.consecutiveFailures} 次)...`,
-          );
+            // 阶梯指数退避：5s -> 10s -> 20s -> 30s，最高 60s
+            if (this.consecutiveFailures === 1) {
+              retryDelay = 5000;
+            } else if (this.consecutiveFailures === 2) {
+              retryDelay = 10000;
+            } else if (this.consecutiveFailures === 3) {
+              retryDelay = 20000;
+            } else if (this.consecutiveFailures === 4) {
+              retryDelay = 30000;
+            } else {
+              retryDelay = 60000;
+            }
+
+            const retryDelaySec = Math.round(retryDelay / 1000);
+            this.log(
+              'warn',
+              `长连接握手未完成即断开 (${code}, ${reasonStr || '远程连接关闭'})，${retryDelaySec}秒后换取新凭据重试 (连续重试 ${this.consecutiveFailures} 次)...`,
+            );
+          }
         }
       }
 
@@ -396,6 +421,7 @@ export class KeepAliveWorker {
           text.includes('cert') ||
           text.toLowerCase().includes('error')
         ) {
+          this.lastGatewayError = text.trim();
           this.log('warn', `网关拒绝连接: ${text.trim()}`);
           this.needsFreshTicket = true;
           return;
@@ -479,6 +505,9 @@ export class KeepAliveWorker {
     });
 
     ws.on('close', (code, reason) => triggerReconnect(code, reason));
-    ws.on('error', (err) => this.log('error', `网络异常: ${err.message}`));
+    ws.on('error', (err) => {
+      this.lastGatewayError = err.message || '';
+      this.log('error', `网络异常: ${err.message}`);
+    });
   }
 }
