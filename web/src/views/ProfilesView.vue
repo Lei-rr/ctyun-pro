@@ -189,6 +189,7 @@ function parseDesktopSpec(desktop: any): string {
 let yieldSecondTimer: any = null;
 
 onMounted(() => {
+  store.fetchStatus();
   yieldSecondTimer = setInterval(() => {
     for (const acc of store.accounts) {
       if (acc.desktops && Array.isArray(acc.desktops)) {

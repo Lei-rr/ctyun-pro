@@ -1153,5 +1153,15 @@ export const useAppStore = defineStore('app', () => {
         toast.info('日志显示已清空');
       }
     },
+    async init() {
+      await checkAuthStatus();
+      if (isAuthenticated.value) {
+        connectWebSocket();
+        await fetchStatus();
+      }
+    },
+    async fetchAccounts() {
+      await fetchStatus();
+    },
   };
 });
