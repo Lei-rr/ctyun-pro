@@ -153,7 +153,7 @@ function parseDesktopSpec(desktop: any): string {
   return spec;
 }
 
-// 避让秒级平滑自减计时器
+// 避让与看门狗秒级平滑自减计时器
 let yieldSecondTimer: any = null;
 
 onMounted(() => {
@@ -161,12 +161,21 @@ onMounted(() => {
     for (const acc of store.accounts) {
       if (acc.desktops && Array.isArray(acc.desktops)) {
         for (const dt of acc.desktops) {
+          // 1. 远程桌面主动避让倒计时
           if (dt.yieldStatus?.yielding) {
             if (dt.yieldStatus.remainingSeconds > 1) {
               dt.yieldStatus.remainingSeconds -= 1;
             } else {
               dt.yieldStatus.yielding = false;
               dt.yieldStatus.remainingSeconds = 0;
+            }
+          }
+          // 2. 官方客户端探针（看门狗）下次探测倒计时平滑推演
+          if (dt.watchdog?.active && dt.watchdog.nextProbeSec !== undefined) {
+            if (dt.watchdog.nextProbeSec > 1) {
+              dt.watchdog.nextProbeSec -= 1;
+            } else {
+              dt.watchdog.nextProbeSec = 0;
             }
           }
         }
