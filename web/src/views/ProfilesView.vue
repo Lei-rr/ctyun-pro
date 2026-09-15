@@ -288,15 +288,15 @@ onUnmounted(() => {
                     v-else-if="account.desktops && account.desktops.some(d => d.status === 'paused')"
                     class="size-1.5 rounded-full bg-amber-500 shrink-0"
                   ></span>
-                  <span>{{ account.desktops && account.desktops.some(d => d.status === 'paused') ? '暂停探测中' : (account.status === 'online' ? '保活中' : account.status === 'idle' ? '已停止' : account.status === 'error' ? '异常' : '需认证') }}</span>
-                  </Badge>
-                  <!-- 仅在账号处于保活中且开启 AI 对话任务时显示简约标签 -->
-                  <Badge v-if="account.status === 'online' && account.taskConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
-                    AI 对话
-                  </Badge>
-                  <Badge v-if="account.status === 'online' && account.redeemConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
-                  自动兑换
-                  </Badge>
+                  <span>{{ (account.desktops && account.desktops.some(d => d.status === 'paused')) ? '暂停探测中' : (account.status === 'online' ? '保活中' : account.status === 'idle' ? '已停止' : account.status === 'error' ? '异常' : '需认证') }}</span>
+                </Badge>
+                <!-- 仅在账号处于保活中且开启 AI 对话任务时显示简约标签 -->
+                <Badge v-if="account.status === 'online' && account.taskConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
+                  AI 对话
+                </Badge>
+                <Badge v-if="account.status === 'online' && account.redeemConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
+                  自动兑换 ({{ getRedeemScheduleText(account) }})
+                </Badge>
               </div>
               <div class="text-xs text-muted-foreground font-mono truncate">
                 设备指纹: {{ account.deviceCode }}

@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Clock,
   Play,
-  Square,
 } from 'lucide-vue-next';
 import { Button } from '@/shared/ui/button';
 import { Badge } from '@/shared/ui/badge';

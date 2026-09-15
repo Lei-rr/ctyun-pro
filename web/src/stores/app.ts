@@ -610,7 +610,7 @@ export const useAppStore = defineStore('app', () => {
       }
     }
 
-    async function accountAction(accountName: string, action: 'start' | 'pause' | 'stop' | 'delete') {
+    async function accountAction(accountName: string, action: 'start' | 'stop' | 'delete') {
       if (action === 'delete') {
         const confirmed = await confirmDelete(`账号 [${accountName}]`, '删除后将移除所有已配置的保活与云电脑实例信息。');
         if (!confirmed) return;
@@ -621,13 +621,6 @@ export const useAppStore = defineStore('app', () => {
       if (targetAcc) {
         if (action === 'start') {
           targetAcc.status = 'online';
-        } else if (action === 'pause') {
-          targetAcc.status = 'idle';
-          if (targetAcc.desktops) {
-            for (const d of targetAcc.desktops) {
-              d.status = 'paused';
-            }
-          }
         } else if (action === 'stop') {
           targetAcc.status = 'idle';
           if (targetAcc.desktops) {
@@ -651,12 +644,6 @@ export const useAppStore = defineStore('app', () => {
             headers: getHeaders(),
             body: '{}',
           });
-        } else if (action === 'pause') {
-          res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/pause`, {
-            method: 'POST',
-            headers: getHeaders(),
-            body: '{}',
-          });
         } else if (action === 'stop') {
           res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/stop`, {
             method: 'POST',
@@ -676,7 +663,6 @@ export const useAppStore = defineStore('app', () => {
         } else {
           if (action === 'delete') toast.success(`账号 [${accountName}] 已删除`);
           else if (action === 'start') toast.success(`账号 [${accountName}] 保活已启动`);
-          else if (action === 'pause') toast.info(`账号 [${accountName}] 保活已暂停 (看门狗探测休眠中)`);
           else toast.info(`账号 [${accountName}] 保活已彻底停止`);
         }
         fetchStatus();
@@ -877,25 +863,6 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  async function manualRunTasks(accountName: string) {
-    try {
-      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/run`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ accountName }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        toast.success(json.msg || '每日任务执行成功');
-      } else {
-        toast.error(json.msg || '任务执行失败');
-      }
-      fetchStatus();
-    } catch (e: any) {
-      toast.error(e.message || '任务请求异常');
-    }
-  }
-
   async function manualAiChatTask(accountName: string) {
     try {
       const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/chat`, {
@@ -912,25 +879,6 @@ export const useAppStore = defineStore('app', () => {
       fetchStatus();
     } catch (e: any) {
       toast.error(e.message || '请求异常');
-    }
-  }
-
-  async function manualSignIn(accountName: string) {
-    try {
-      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/sign`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ accountName }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        toast.success(json.msg || '签到打卡成功');
-      } else {
-        toast.error(json.msg || '签到失败');
-      }
-      fetchStatus();
-    } catch (e: any) {
-      toast.error(e.message || '签到请求异常');
     }
   }
 
@@ -1056,9 +1004,6 @@ export const useAppStore = defineStore('app', () => {
     showPolicyModal,
     policyAccount,
     policyTaskEnabled,
-    policyScheduleTime,
-    policyAutoSign,
-    policyAiChat,
     policyRedeemEnabled,
     policyScheduleType,
     policyMonthlyDay,
@@ -1073,9 +1018,7 @@ export const useAppStore = defineStore('app', () => {
     policyLoading,
     openPolicyModal,
     savePolicy,
-    manualRunTasks,
     manualAiChatTask,
-    manualSignIn,
     manualRedeem,
     operateDesktopPower: async (
       accountName: string,
