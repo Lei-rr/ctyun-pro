@@ -161,7 +161,6 @@ export const useAppStore = defineStore('app', () => {
 
   // 3. 业务数据状态
   const accounts = ref<Account[]>([]);
-  const keepAliveSeconds = ref(60);
   const webhookUrl = ref('');
   const logs = ref<LogItem[]>([]);
   const autoScroll = ref(true);
@@ -197,7 +196,6 @@ export const useAppStore = defineStore('app', () => {
       const json = await res.json();
       if (json.success) {
         accounts.value = json.data.accounts || [];
-        keepAliveSeconds.value = json.data.keepAliveSeconds || 60;
         webhookUrl.value = json.data.webhookUrl || '';
       }
     } catch (err) {
@@ -208,6 +206,44 @@ export const useAppStore = defineStore('app', () => {
   const isWsConnected = ref(false);
   let wsClient: WebSocket | null = null;
   let wsReconnectTimer: NodeJS.Timeout | null = null;
+
+  function initLogs(newLogs: LogItem[]) {
+    logs.value = (newLogs || []).slice(-1000);
+  }
+
+  // 智能折叠日志插入：在当前末尾连续心跳波次（Block）内寻找同款心跳折叠，遇到业务日志立即打断
+  function appendLog(incoming: LogItem) {
+    const isHeartbeat = incoming.message && incoming.message.includes('发送客户端活跃心跳');
+    let found = false;
+    if (isHeartbeat) {
+      for (let i = logs.value.length - 1; i >= 0; i--) {
+        const item = logs.value[i];
+        const itemIsHeartbeat = item.message && item.message.includes('发送客户端活跃心跳');
+        if (!itemIsHeartbeat) {
+          // 遇到业务/报警日志，停止回溯
+          break;
+        }
+        if (
+          item.id === incoming.id ||
+          (item.message === incoming.message && item.level === incoming.level)
+        ) {
+          const [matched] = logs.value.splice(i, 1);
+          matched.count = incoming.count || (matched.count || 1) + 1;
+          matched.time = incoming.time;
+          logs.value.push(matched);
+          found = true;
+          break;
+        }
+      }
+    }
+
+    if (!found) {
+      logs.value.push(incoming);
+      if (logs.value.length > 1000) {
+        logs.value.splice(0, logs.value.length - 1000);
+      }
+    }
+  }
 
   function connectWebSocket() {
     if (needAuth.value && !adminToken.value) return;
@@ -236,43 +272,11 @@ export const useAppStore = defineStore('app', () => {
           const msg = JSON.parse(event.data);
           if (msg.type === 'status') {
             accounts.value = msg.data.accounts || [];
-            keepAliveSeconds.value = msg.data.keepAliveSeconds || 60;
             if (msg.data.webhookUrl !== undefined) webhookUrl.value = msg.data.webhookUrl || '';
           } else if (msg.type === 'init_logs') {
-            logs.value = (msg.logs || []).slice(-1000);
+            initLogs(msg.logs);
           } else if (msg.type === 'log') {
-            const incoming: LogItem = msg.log;
-            // 智能折叠：在当前末尾连续心跳波次（Block）内寻找同款心跳折叠，遇到业务日志立即打断
-            const isHeartbeat = incoming.message && incoming.message.includes('发送客户端活跃心跳');
-            let found = false;
-            if (isHeartbeat) {
-              for (let i = logs.value.length - 1; i >= 0; i--) {
-                const item = logs.value[i];
-                const itemIsHeartbeat = item.message && item.message.includes('发送客户端活跃心跳');
-                if (!itemIsHeartbeat) {
-                  // 遇到业务/报警日志，停止回溯
-                  break;
-                }
-                if (
-                  item.id === incoming.id ||
-                  (item.message === incoming.message && item.level === incoming.level)
-                ) {
-                  const [matched] = logs.value.splice(i, 1);
-                  matched.count = incoming.count || (matched.count || 1) + 1;
-                  matched.time = incoming.time;
-                  logs.value.push(matched);
-                  found = true;
-                  break;
-                }
-              }
-            }
-
-            if (!found) {
-              logs.value.push(incoming);
-              if (logs.value.length > 1000) {
-                logs.value.splice(0, logs.value.length - 1000);
-              }
-            }
+            appendLog(msg.log);
           }
         } catch {}
       };
@@ -926,7 +930,6 @@ export const useAppStore = defineStore('app', () => {
     adminLogin,
     adminLogout,
     accounts,
-    keepAliveSeconds,
     webhookUrl,
     logs,
     autoScroll,
@@ -1109,6 +1112,8 @@ export const useAppStore = defineStore('app', () => {
       }
     },
     getHeaders,
+    initLogs,
+    appendLog,
     async clearLogs() {
       logs.value = [];
       try {
