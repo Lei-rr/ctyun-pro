@@ -106,148 +106,17 @@ export function safeWriteFileSync(filePath: string, content: string | Buffer): v
   }
 }
 
+import { NotifyService } from '../modules/notify/index.js';
+
 /**
- * 通用 Webhook 消息通知推送器 (支持 Server酱, Bark, 企业微信, 飞书, 钉钉, 自定义 Webhook)
+ * 兼容导出统一通知发送
  */
 export async function sendWebhookNotification(
   webhookUrl: string | undefined,
   title: string,
   content: string
 ): Promise<boolean> {
-  if (!webhookUrl || !webhookUrl.trim()) return false;
-  const url = webhookUrl.trim();
-
-  try {
-    // 1. Bark 推送格式
-    if (url.includes('day.app') || url.includes('/bark')) {
-      const barkUrl = url.endsWith('/') ? url : `${url}/`;
-      await safeFetch(`${barkUrl}${encodeURIComponent(title)}/${encodeURIComponent(content)}`, {
-        method: 'GET',
-        timeoutMs: 8000,
-      });
-      return true;
-    }
-
-    // 2. PushPlus (pushplus.plus)
-    if (url.includes('pushplus.plus')) {
-      await safeFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          content: content.replace(/\n/g, '<br/>'),
-          template: 'html',
-        }),
-        timeoutMs: 8000,
-      });
-      return true;
-    }
-
-    // 3. Server 酱 / pushdeer (支持 title / desp)
-    if (url.includes('serverchan') || url.includes('sctapi.ftqq.com') || url.includes('pushdeer')) {
-      await safeFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          desp: content,
-          text: title,
-        }),
-        timeoutMs: 8000,
-      });
-      return true;
-    }
-
-    // 3. 企业微信 Webhook
-    if (url.includes('qyapi.weixin.qq.com')) {
-      await safeFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          msgtype: 'text',
-          text: {
-            content: `【${title}】\n${content}`,
-          },
-        }),
-        timeoutMs: 8000,
-      });
-      return true;
-    }
-
-    // 4. 飞书机器人 Webhook
-    if (url.includes('open.feishu.cn')) {
-      await safeFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          msg_type: 'text',
-          content: {
-            text: `【${title}】\n${content}`,
-          },
-        }),
-        timeoutMs: 8000,
-      });
-      return true;
-    }
-
-    // 5. 钉钉机器人 Webhook
-    if (url.includes('oapi.dingtalk.com')) {
-      await safeFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          msgtype: 'text',
-          text: {
-            content: `【${title}】\n${content}`,
-          },
-        }),
-        timeoutMs: 8000,
-      });
-      return true;
-    }
-
-    // 6. Telegram Bot 推送
-    if (url.includes('api.telegram.org') || url.includes('/sendMessage')) {
-      let chatId = '';
-      try {
-        const u = new URL(url);
-        chatId = u.searchParams.get('chat_id') || '';
-      } catch {}
-
-      if (chatId) {
-        await safeFetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: `*${title}*\n\n${content}`,
-            parse_mode: 'Markdown',
-          }),
-          timeoutMs: 8000,
-        });
-        return true;
-      }
-    }
-
-    // 7. 默认通用 JSON POST Webhook
-    await safeFetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        event: 'ctyun_alert',
-        title,
-        content,
-        timestamp: Date.now(),
-        time: getCstDateTimeString(),
-      }),
-      timeoutMs: 8000,
-    });
-    return true;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[Webhook] 推送失败 (${url}):`, msg);
-    return false;
-  }
+  return NotifyService.sendNotification(webhookUrl, title, content);
 }
 
 export function getCstHour(date: Date = new Date()): number {
