@@ -1,0 +1,246 @@
+import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
+import crypto from 'node:crypto';
+import path from 'node:path';
+import fs from 'node:fs';
+import type { ProfileManager } from '../core/index.js';
+import { safeWriteFileSync } from '../core/utils.js';
+import { Config } from '../config.js';
+
+export interface AuthContext {
+  sessions: Set<string>;
+  saveSessions: () => void;
+  isValidToken: (token?: string) => boolean;
+  verifyAuth: (request: FastifyRequest, reply: FastifyReply) => boolean;
+  parseCookieToken: (cookieHeader?: string) => string;
+}
+
+// 安全时间比对辅助函数 (防止时序攻击 Timing Attack)
+export function timingSafeEqualString(a?: string, b?: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+// 登录防暴力破解内存速率限制器
+interface LoginRateLimitState {
+  failedAttempts: number;
+  lockedUntil: number;
+}
+const loginRateLimits = new Map<string, LoginRateLimitState>();
+
+export function checkLoginRateLimit(ip: string): { allowed: boolean; waitSeconds?: number } {
+  const now = Date.now();
+  const state = loginRateLimits.get(ip);
+  if (!state) return { allowed: true };
+
+  if (state.lockedUntil > now) {
+    return {
+      allowed: false,
+      waitSeconds: Math.ceil((state.lockedUntil - now) / 1000),
+    };
+  }
+
+  // 超过锁定时间，重置计数
+  if (state.lockedUntil > 0 && state.lockedUntil <= now) {
+    loginRateLimits.delete(ip);
+  }
+  return { allowed: true };
+}
+
+export function recordLoginAttempt(ip: string, success: boolean): void {
+  const now = Date.now();
+  if (success) {
+    loginRateLimits.delete(ip);
+    return;
+  }
+  const state = loginRateLimits.get(ip) || { failedAttempts: 0, lockedUntil: 0 };
+  state.failedAttempts += 1;
+  // 连续失败超过 5 次，锁定 60 秒
+  if (state.failedAttempts >= 5) {
+    state.lockedUntil = now + 60 * 1000;
+  }
+  loginRateLimits.set(ip, state);
+}
+
+export function createAuthContext(manager: ProfileManager): AuthContext {
+  const sessions = new Set<string>();
+  const sessionFile = path.resolve(Config.dataDir, 'sessions.json');
+
+  const saveSessions = () => {
+    try {
+      safeWriteFileSync(sessionFile, JSON.stringify(Array.from(sessions), null, 2));
+    } catch {}
+  };
+
+  // 清理超过 30 天的陈旧 Token，防止 sessions.json 无限膨胀
+  const MAX_TOKEN_AGE_MS = 30 * 24 * 3600 * 1000;
+  const purgeExpiredSessions = () => {
+    const now = Date.now();
+    let changed = false;
+    for (const s of Array.from(sessions)) {
+      const parts = s.split('.');
+      if (parts.length === 2) {
+        const ts = parseInt(parts[0], 10);
+        if (Number.isFinite(ts) && now - ts > MAX_TOKEN_AGE_MS) {
+          sessions.delete(s);
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      saveSessions();
+    }
+  };
+
+  try {
+    if (fs.existsSync(sessionFile)) {
+      const content = fs.readFileSync(sessionFile, 'utf-8');
+      if (content.trim()) {
+        const data = JSON.parse(content);
+        if (Array.isArray(data)) {
+          data.forEach((s) => sessions.add(s));
+        }
+        purgeExpiredSessions();
+      }
+    }
+  } catch {}
+
+  const isValidToken = (token?: string): boolean => {
+    if (!token) return false;
+    if (token === 'no-auth' && !manager.adminPassword) return true;
+    if (sessions.has(token)) return true;
+    if (!manager.adminPassword) return false;
+
+    const parts = token.split('.');
+    if (parts.length !== 2) return false;
+    const [ts, sig] = parts;
+    const expectedSig = crypto
+      .createHmac('sha256', manager.adminPassword)
+      .update(ts)
+      .digest('hex');
+    if (timingSafeEqualString(sig, expectedSig)) {
+      sessions.add(token);
+      saveSessions();
+      return true;
+    }
+    return false;
+  };
+
+  const parseCookieToken = (cookieHeader?: string): string => {
+    if (!cookieHeader) return '';
+    const match = cookieHeader.match(/ctyun_admin_token=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  };
+
+  const verifyAuth = (request: FastifyRequest, reply: FastifyReply): boolean => {
+    if (!manager.adminPassword) return true;
+    const headers = request.headers as Record<string, string | undefined>;
+    const token =
+      headers['x-admin-token'] ||
+      (headers.authorization ? headers.authorization.replace(/^Bearer\s+/i, '') : '') ||
+      parseCookieToken(headers.cookie);
+    if (!token || !isValidToken(token)) {
+      reply.code(401).send({ success: false, msg: '未授权或登录已过期' });
+      return false;
+    }
+    return true;
+  };
+
+  return {
+    sessions,
+    saveSessions,
+    isValidToken,
+    verifyAuth,
+    parseCookieToken,
+  };
+}
+
+export const authRoutes: FastifyPluginAsync<{
+  manager: ProfileManager;
+  authContext: AuthContext;
+}> = async (fastify, { manager, authContext }) => {
+  const { sessions, saveSessions, isValidToken, verifyAuth, parseCookieToken } = authContext;
+
+  // 0. 系统鉴权状态与登录接口
+  fastify.get('/api/auth/status', async (request: FastifyRequest) => {
+    const needAuth = Boolean(manager.adminPassword);
+    let authenticated = !needAuth;
+    if (needAuth) {
+      const headers = request.headers as Record<string, string | undefined>;
+      const token =
+        headers['x-admin-token'] ||
+        (headers.authorization ? headers.authorization.replace(/^Bearer\s+/i, '') : '');
+      authenticated = isValidToken(token);
+    }
+    return {
+      success: true,
+      data: {
+        needAuth,
+        authenticated,
+      },
+    };
+  });
+
+  fastify.post('/api/auth/login', async (request: FastifyRequest<{ Body: { password?: string } }>, reply: FastifyReply) => {
+    const ip = request.ip || 'unknown';
+    const rateCheck = checkLoginRateLimit(ip);
+    if (!rateCheck.allowed) {
+      return reply.code(429).send({
+        success: false,
+        msg: `尝试次数过多，请等待 ${rateCheck.waitSeconds} 秒后再试`,
+      });
+    }
+
+    const body = request.body || {};
+    if (!manager.adminPassword) {
+      recordLoginAttempt(ip, true);
+      return { success: true, token: 'no-auth' };
+    }
+    if (!body || !timingSafeEqualString(body.password, manager.adminPassword)) {
+      recordLoginAttempt(ip, false);
+      return reply.code(401).send({ success: false, msg: '管理密码错误' });
+    }
+    recordLoginAttempt(ip, true);
+    const ts = Date.now().toString();
+    const sig = crypto
+      .createHmac('sha256', manager.adminPassword)
+      .update(ts)
+      .digest('hex');
+    const token = `${ts}.${sig}`;
+    sessions.add(token);
+    saveSessions();
+    reply.header('Set-Cookie', `ctyun_admin_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 3600}`);
+    return { success: true, token };
+  });
+
+  // 0.2 注销登录 (作废服务端 Token 并清除客户端 Cookie)
+  fastify.post('/api/auth/logout', async (request: FastifyRequest, reply: FastifyReply) => {
+    const headers = request.headers as Record<string, string | undefined>;
+    const token =
+      headers['x-admin-token'] ||
+      (headers.authorization ? headers.authorization.replace(/^Bearer\s+/i, '') : '') ||
+      parseCookieToken(headers.cookie);
+    if (token && sessions.has(token)) {
+      sessions.delete(token);
+      saveSessions();
+    }
+    reply.header(
+      'Set-Cookie',
+      'ctyun_admin_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    );
+    return { success: true, msg: '已安全退出登录' };
+  });
+
+  fastify.post('/api/auth/password', async (request: FastifyRequest<{ Body: { newPassword?: string } }>, reply: FastifyReply) => {
+    if (!verifyAuth(request, reply)) return;
+    const body = request.body || {};
+    manager.adminPassword = body.newPassword ? body.newPassword.trim() : '';
+    manager.saveToDisk();
+    sessions.clear();
+    saveSessions();
+    manager.addLog('info', manager.adminPassword ? '已更新控制台管理密码' : '已取消控制台管理密码');
+    return { success: true };
+  });
+};

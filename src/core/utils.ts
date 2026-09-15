@@ -1,33 +1,46 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import https from 'node:https';
+import { globalApiGate } from './api-gate.js';
 
 /**
- * 带有超时保护的安全 fetch (默认 60s 超时，防止官方接口异常导致整个事件循环挂起)
+ * 带有超时保护与全局错峰并发门禁的安全 fetch
+ * 默认 60s 超时，并在底层受控于全局请求并发门禁 (防范多账号并发冲击天翼云官方 API)
  */
-export async function safeFetch(url: string | URL | Request, options: RequestInit & { timeoutMs?: number } = {}): Promise<Response> {
-  const { timeoutMs = 60000, ...fetchOpts } = options;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+export async function safeFetch(
+  url: string | URL | Request,
+  options: RequestInit & { timeoutMs?: number; skipGate?: boolean } = {},
+): Promise<Response> {
+  const { timeoutMs = 60000, skipGate = false, ...fetchOpts } = options;
 
-  // 若外部已提供 signal，进行联动
-  const onAbort = () => controller.abort();
-  if (fetchOpts.signal) {
-    fetchOpts.signal.addEventListener('abort', onAbort);
-  }
+  const executeFetch = async (): Promise<Response> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-  try {
-    const res = await fetch(url, {
-      ...fetchOpts,
-      signal: controller.signal,
-    });
-    return res;
-  } finally {
-    clearTimeout(timeoutId);
+    // 若外部已提供 signal，进行联动
+    const onAbort = () => controller.abort();
     if (fetchOpts.signal) {
-      fetchOpts.signal.removeEventListener('abort', onAbort);
+      fetchOpts.signal.addEventListener('abort', onAbort);
     }
+
+    try {
+      const res = await fetch(url, {
+        ...fetchOpts,
+        signal: controller.signal,
+      });
+      return res;
+    } finally {
+      clearTimeout(timeoutId);
+      if (fetchOpts.signal) {
+        fetchOpts.signal.removeEventListener('abort', onAbort);
+      }
+    }
+  };
+
+  if (skipGate) {
+    return executeFetch();
   }
+  return globalApiGate.schedule(executeFetch);
 }
 
 /**
@@ -86,7 +99,7 @@ export function requestIpv4(
 }
 
 /**
- * 原子化安全写入文件 (先写临时文件再 rename 替换，防止崩溃断电导致文件空洞损坏)
+ * 原子化安全写入文件 (先写临时文件再 rename 替换)
  */
 export function safeWriteFileSync(filePath: string, content: string | Buffer): void {
   const dir = path.dirname(filePath);
@@ -106,147 +119,17 @@ export function safeWriteFileSync(filePath: string, content: string | Buffer): v
   }
 }
 
+import { NotifyService } from '../modules/notify/index.js';
+
 /**
- * 通用 Webhook 消息通知推送器 (支持 Server酱, Bark, 企业微信, 飞书, 钉钉, 自定义 Webhook)
+ * 兼容导出统一通知发送
  */
 export async function sendWebhookNotification(
   webhookUrl: string | undefined,
   title: string,
   content: string
 ): Promise<boolean> {
-  if (!webhookUrl || !webhookUrl.trim()) return false;
-  const url = webhookUrl.trim();
-
-  try {
-    // 1. Bark 推送格式
-    if (url.includes('day.app') || url.includes('/bark')) {
-      const barkUrl = url.endsWith('/') ? url : `${url}/`;
-      await safeFetch(`${barkUrl}${encodeURIComponent(title)}/${encodeURIComponent(content)}`, {
-        method: 'GET',
-        timeoutMs: 8000,
-      });
-      return true;
-    }
-
-    // 2. PushPlus (pushplus.plus)
-    if (url.includes('pushplus.plus')) {
-      await safeFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          content: content.replace(/\n/g, '<br/>'),
-          template: 'html',
-        }),
-        timeoutMs: 8000,
-      });
-      return true;
-    }
-
-    // 3. Server 酱 / pushdeer (支持 title / desp)
-    if (url.includes('serverchan') || url.includes('sctapi.ftqq.com') || url.includes('pushdeer')) {
-      await safeFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          desp: content,
-          text: title,
-        }),
-        timeoutMs: 8000,
-      });
-      return true;
-    }
-
-    // 3. 企业微信 Webhook
-    if (url.includes('qyapi.weixin.qq.com')) {
-      await safeFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          msgtype: 'text',
-          text: {
-            content: `【${title}】\n${content}`,
-          },
-        }),
-        timeoutMs: 8000,
-      });
-      return true;
-    }
-
-    // 4. 飞书机器人 Webhook
-    if (url.includes('open.feishu.cn')) {
-      await safeFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          msg_type: 'text',
-          content: {
-            text: `【${title}】\n${content}`,
-          },
-        }),
-        timeoutMs: 8000,
-      });
-      return true;
-    }
-
-    // 5. 钉钉机器人 Webhook
-    if (url.includes('oapi.dingtalk.com')) {
-      await safeFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          msgtype: 'text',
-          text: {
-            content: `【${title}】\n${content}`,
-          },
-        }),
-        timeoutMs: 8000,
-      });
-      return true;
-    }
-
-    // 6. Telegram Bot 推送
-    if (url.includes('api.telegram.org') || url.includes('/sendMessage')) {
-      let chatId = '';
-      try {
-        const u = new URL(url);
-        chatId = u.searchParams.get('chat_id') || '';
-      } catch {}
-
-      if (chatId) {
-        await safeFetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: `*${title}*\n\n${content}`,
-            parse_mode: 'Markdown',
-          }),
-          timeoutMs: 8000,
-        });
-        return true;
-      }
-    }
-
-    // 7. 默认通用 JSON POST Webhook
-    await safeFetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        event: 'ctyun_alert',
-        title,
-        content,
-        timestamp: Date.now(),
-        time: getCstDateTimeString(),
-      }),
-      timeoutMs: 8000,
-    });
-    return true;
-  } catch (err: any) {
-    console.error(`[Webhook] 推送失败 (${url}):`, err.message);
-    return false;
-  }
+  return NotifyService.sendNotification(webhookUrl, title, content);
 }
 
 export function getCstHour(date: Date = new Date()): number {

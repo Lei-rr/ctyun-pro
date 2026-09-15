@@ -27,9 +27,3 @@ export const toast = {
   dismiss: (id?: string | number) => sonner.dismiss(id),
 }
 
-export type ToastItem = {
-  id: number | string
-  title: string
-  description?: string
-  variant?: 'default' | 'destructive' | 'success'
-}

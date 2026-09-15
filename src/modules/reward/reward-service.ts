@@ -1,6 +1,6 @@
 import type { CtYunClient } from '../../core/client.js';
 import { safeFetch } from '../../core/utils.js';
-import { SignTask } from '../task/sign.js';
+import { PointsTask } from '../tasks/points.js';
 
 export interface RewardItem {
   prodId: number;
@@ -178,15 +178,16 @@ export class RewardRedeemService {
 
     // 1. 积分硬性前置强校验：查询账号真实可用积分
     try {
-      const pointSummary = await SignTask.getPointsAndTasks(client);
+      const pointSummary = await PointsTask.getPointsAndTasks(client);
       const currentPoints = Number(pointSummary.generalPoints || 0);
       if (currentPoints < resolvedPoints) {
         throw new Error(
           `[积分不足拦截] 当前可用积分 ${currentPoints} 不足，兑换商品需要 ${resolvedPoints} 积分，已放弃下单`,
         );
       }
-    } catch (err: any) {
-      if (err.message?.includes('[积分不足拦截]')) {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('[积分不足拦截]')) {
         throw err;
       }
     }

@@ -1,11 +1,10 @@
 import type { AccountConfig } from '../../config.js';
 import { getRandomScheduleTime } from '../../config.js';
 import type { Logger } from '../../core/logger.js';
-import { isHangTaskName } from '../task/index.js';
+import { TaskRunner } from './task-runner.js';
 import { RewardRedeemService } from '../reward/reward-service.js';
 import { sendWebhookNotification } from '../../core/utils.js';
 import type { ProfileManager } from '../../core/profile-manager.js';
-import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
 
 /**
  * 工业级精准时间点调度器
@@ -18,7 +17,6 @@ export class TaskScheduler {
   private lastCheckedMinute = '';
   private lastDigestDate = '';
   private lastMidnightResetDate = '';
-  private lastHangWatchdogTime = new Map<string, number>();
   private taskRetryStats = new Map<string, { date: string; attempts: number; nextRetryTime: number }>();
   private redeemRetryStats = new Map<string, { date: string; attempts: number; nextRetryTime: number }>();
 
@@ -107,9 +105,7 @@ export class TaskScheduler {
           setTimeout(async () => {
             try {
               this.logger.addLog('info', `[${name}] 命中每日做任务定时 (${targetTime}，抖动延时 ${(jitterMs/1000).toFixed(1)}s)，正在按策略自动执行...`);
-              const dId = this.profileManager.getAccountState(name)?.desktops?.[0]?.desktopId;
-              const res = await this.profileManager.getTaskStrategyService().executeDailyTasks(client, dId, tConf, this.logger);
-              acc.lastSignDate = today;
+              const res = await TaskRunner.executeDailyTasks(client, tConf, this.logger);
               tConf.lastRunDate = today;
               delete tConf.retryCount;
               delete tConf.retryDate;
@@ -119,19 +115,14 @@ export class TaskScheduler {
               this.profileManager.saveToDisk();
               this.logger.addLog('success', `[${name}] 每日任务已执行: ${res.message}`);
 
-              // 若开启了使用1小时挂机任务，自动连带触发智能补足时长挂机
-              if (tConf.keepAliveHang !== false) {
-                this.profileManager.manualHang(name).catch(() => {});
-              }
-
               // 任务完成后异步拉取官方最新积分并刷新看板
               this.profileManager.getPointsAndTasks(name)
                 .then(() => this.profileManager.notifyStatusChange())
                 .catch(() => {});
 
               this.profileManager.notifyStatusChange();
-            } catch (e: any) {
-              const errMsg = e?.message || String(e);
+            } catch (e) {
+              const errMsg = e instanceof Error ? e.message : String(e);
               const isAuthError = /token|expire|登录过期|未登录|auth|401|403|凭证/i.test(errMsg);
 
               if (isAuthError) {
@@ -191,47 +182,6 @@ export class TaskScheduler {
               }
             }
           }, jitterMs);
-        } else if (
-          tConf.lastRunDate === today &&
-          currentHHmm >= targetTime &&
-          tConf.keepAliveHang !== false &&
-          !this.profileManager.getTaskStrategyService().isHangRunning(name)
-        ) {
-          // 2. 长时间网络故障/异常断线自愈兜底机制 (看门狗防漏挂)：
-          // 仅在「总开关开启 + 挂机子开关开启 + 今日定时已触发过 + 当前无进行中的挂机会话」时，
-          // 基于今日最新任务缓存检查官方时长是否已满 3600 秒。若因长时间断网未挂满，自动唤醒差额补挂
-          // 冷却退避机制：至少冷却 10 分钟 (600,000ms)，避免断网期间每 30 秒频繁拉起刷屏
-          const lastWatchdog = this.lastHangWatchdogTime.get(name) || 0;
-          const WATCHDOG_COOLDOWN_MS = 10 * 60 * 1000;
-          if (Date.now() - lastWatchdog >= WATCHDOG_COOLDOWN_MS) {
-            const cached = this.profileManager.getCachedTodayPoints(name);
-            const hangTask = cached?.summary?.tasks?.find(
-              (t: any) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress),
-            );
-            if (hangTask && !hangTask.isCompleted && (hangTask.currentProgress || 0) < (hangTask.totalProgress || 3600)) {
-              // 检查该账号绑定的云电脑是否处于外部客户端主动避让期
-              const curAcc = this.profileManager.getAccount(name);
-              const arbiter = DesktopSessionArbiter.getInstance();
-              const yieldingDesktop = curAcc?.desktops?.find((d) => arbiter.getYieldStatus(d.desktopId).yielding);
-              if (yieldingDesktop) {
-                const yInfo = arbiter.getYieldStatus(yieldingDesktop.desktopId);
-                this.logger.addLog(
-                  'info',
-                  `[${name}] 桌面正处于外部官方客户端主动避让期 (剩余 ${yInfo.remainingSeconds}秒)，看门狗暂缓补挂自愈`,
-                );
-                continue;
-              }
-
-              const cur = hangTask.currentProgress || 0;
-              const tot = hangTask.totalProgress || 3600;
-              this.lastHangWatchdogTime.set(name, Date.now());
-              this.logger.addLog(
-                'info',
-                `[${name}] 智能调度检测到今日挂机时长未满额 (${cur}/${tot}秒)，自动触发差额续挂自愈 (冷却期 10m)...`,
-              );
-              this.profileManager.manualHang(name).catch(() => {});
-            }
-          }
         }
       }
 
@@ -337,8 +287,8 @@ export class TaskScheduler {
               redeemSuccess = true;
               this.redeemRetryStats.delete(name);
               break;
-            } catch (e: any) {
-              lastRedeemMsg = e.message;
+            } catch (e) {
+              lastRedeemMsg = e instanceof Error ? e.message : String(e);
               // 若官方明确返回积分不足，重试无法解决，直接终止重试，避免刷屏与无谓请求
               const isInsufficientPoints =
                 lastRedeemMsg.includes('积分不足') ||
@@ -358,7 +308,7 @@ export class TaskScheduler {
                 this.redeemRetryStats.delete(name);
                 break;
               }
-              this.logger.addLog('warn', `[${name}] 第 ${attempt} 次自动兑换未成功: ${e.message}`);
+              this.logger.addLog('warn', `[${name}] 第 ${attempt} 次自动兑换未成功: ${lastRedeemMsg}`);
             }
           }
 
@@ -446,23 +396,22 @@ export class TaskScheduler {
             const sum = await this.profileManager.getPointsAndTasks(name);
             const total = (sum.generalPoints || 0) + (sum.phonePoints || 0);
             totalGeneral += total;
-            const hangTask = sum.tasks.find((t) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress));
-            const hangStatusText = hangTask?.isCompleted ? '已达标(100分)' : `${hangTask?.currentProgress || 0}秒`;
-            pointInfo = `总积分: ${total} | 挂机: ${hangStatusText}`;
+            pointInfo = `总积分: ${total}`;
           } catch {
             pointInfo = '积分查询暂缓';
           }
 
-          const signMark = acc.lastSignDate === today ? '已打卡' : '待执行';
+          const taskMark = acc.taskConfig?.lastRunDate === today ? '已完成' : '待执行';
           const statusText = isOnline ? '[在线]' : '[离线]';
-          reportLines.push(`${statusText} [${name}]: ${signMark} | ${pointInfo}`);
+          reportLines.push(`${statusText} [${name}]: 任务${taskMark} | ${pointInfo}`);
         }
 
         const title = `CTYUN-PRO - 每日运行早报 (${today})`;
         const content = `今日监控概览：\n• 在线账号: ${onlineCount}/${accounts.size}\n• 总积分池: ${totalGeneral} 积分\n• 报告时间: ${currentHHmm}\n\n账号明细：\n${reportLines.join('\n')}\n\n系统已全自动维持保活长连接中。`;
         sendWebhookNotification(this.profileManager.webhookUrl, title, content).catch(() => {});
-      } catch (err: any) {
-        this.logger.addLog('warn', `每日早报推送异常: ${err.message}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.addLog('warn', `每日早报推送异常: ${msg}`);
       }
     }
   }

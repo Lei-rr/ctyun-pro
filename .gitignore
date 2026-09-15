@@ -4,5 +4,6 @@ data/devices
 data/accounts.json
 .DS_Store
 *.log
+*.bak*
 CTYUN_CLINK_PROTOCOL_SPEC.md
 *.ai-doc.md

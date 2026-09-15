@@ -3,13 +3,18 @@ import crypto from 'node:crypto';
 import { Config, getRandomScheduleTime, DEFAULT_REDEEM_CONFIG, type AccountConfig, type TaskConfig, type RedeemConfig } from '../config.js';
 import { CtYunClient, type Desktop, type DesktopInfo, type LoginInfo } from './client.js';
 import { KeepaliveService, type ManagedDesktopState } from '../modules/keepalive/index.js';
+import { WatchdogService } from '../modules/watchdog/index.js';
 import { Logger, type LogItem } from './logger.js';
-import { TaskScheduler } from '../modules/strategy/index.js';
-import { isHangTaskName, TaskStrategyService, type PointsSummary } from '../modules/task/index.js';
+import { TaskScheduler, PointsTask, AiChatTask, type PointsSummary } from '../modules/tasks/index.js';
 import { RewardRedeemService, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../modules/reward/index.js';
-import { DesktopSessionArbiter } from '../modules/arbiter/desktop-session-arbiter.js';
-import { AccountService } from '../modules/account/index.js';
 import { safeWriteFileSync, sendWebhookNotification, getCstDateString, getCstDateTimeString } from './utils.js';
+import type { DesktopInstanceSummary } from '../types/index.js';
+
+// 核心常量规范定义
+const POWER_TRACKING_INTERVAL_MS = 20000;  // 电源操作后的轮询追踪周期: 20 秒
+const POWER_TRACKING_MAX_ROUNDS = 15;      // 电源状态轮询最大轮次 (15 * 20s = 5 分钟超时)
+const SAVE_CONFIG_DEBOUNCE_MS = 150;       // 配置落盘防抖延迟: 150 毫秒
+const WEB_RELEASE_DEFAULT_DELAY_SEC = 20;  // Web 直连释放后的默认宽限恢复时间: 20 秒 (给页面刷新和前台切换留足缓冲)
 
 export interface ManagedAccount {
   id: string; // 全局唯一不可变 UUID (主键)
@@ -19,32 +24,26 @@ export interface ManagedAccount {
   status: 'idle' | 'login_needed' | 'need_sms' | 'online' | 'error';
   lastError?: string;
   loginInfo?: LoginInfo;
-  autoSign?: boolean;
-  lastSignDate?: string;
-  taskConfig?: any;
-  redeemConfig?: any;
+  autoStart?: boolean;
+  taskConfig?: TaskConfig;
+  redeemConfig?: RedeemConfig;
   todayPoints?: number;
-  hangStatus?: {
-    running: boolean;
-    currentProgress?: number;
-    totalProgress?: number;
-    message?: string;
-  };
   desktops: ManagedDesktopState[];
 }
 
 /**
  * 账号与系统顶层业务管理者
- * 协调：账号认证存储、保活服务 (KeepaliveService)、定时调度器 (TaskScheduler)、任务编排服务 (TaskStrategyService)
+ * 协调：账号认证存储、保活服务 (KeepaliveService)、定时调度器 (TaskScheduler)
  */
 export class ProfileManager {
   private accounts: Map<string, AccountConfig> = new Map();
+  private saveDebounceTimer: NodeJS.Timeout | null = null;
   private clients: Map<string, CtYunClient> = new Map();
   private accountStates: Map<string, ManagedAccount> = new Map();
   private logger: Logger = new Logger();
   private keepaliveService: KeepaliveService;
+  private watchdogService: WatchdogService;
   private taskScheduler: TaskScheduler;
-  private taskStrategyService: TaskStrategyService;
   private statusListeners: Set<() => void> = new Set();
 
   public keepAliveSeconds = 60;
@@ -61,64 +60,26 @@ export class ProfileManager {
 
   constructor() {
     this.keepaliveService = new KeepaliveService(this.logger, () => this.notifyStatusChange());
+    this.watchdogService = new WatchdogService({
+      profileManager: this,
+      logger: this.logger,
+    });
     this.taskScheduler = new TaskScheduler(this, this.logger);
-    this.taskStrategyService = new TaskStrategyService(this.logger);
     this.loadFromDisk();
     this.taskScheduler.start();
 
-    // 租约释放协同：当前台直连或挂机释放桌面租约时，自动唤醒保活通道无缝恢复
-    const arbiter = DesktopSessionArbiter.getInstance();
-    arbiter.setLogger(this.logger);
-    arbiter.setResolver((identifier: string) => {
-      const matched = this.findDesktopByCode(identifier);
-      if (matched) {
-        const canonicalCode = matched.desktop.desktopCode || String(matched.desktop.desktopId);
-        const dName = matched.desktop.desktopName || (matched.desktop as any).computerName || (matched.desktop as any).name || canonicalCode;
-        const displayName = `${matched.accountName} - ${dName}`;
-        return {
-          canonicalCode,
-          displayName,
-          accountName: matched.accountName,
-          desktopName: dName,
-        };
-      }
-      return undefined;
+    // 监听保活服务派发的桌面进入 paused 事件，启动避让自愈看门狗
+    this.keepaliveService.on('desktop:paused', ({ accountName, desktopId }) => {
+      this.watchdogService.startWatchdog(accountName, desktopId);
     });
+  }
 
-    arbiter.on('lease:released', ({ purpose, ownerId }) => {
-      if (purpose === 'web_direct' || purpose === 'hang') {
-        const acc = this.accounts.get(ownerId);
-        if (acc && acc.autoStart !== false) {
-          this.keepaliveService.resumeWorkers(ownerId);
-        }
-      }
-    });
-
-    // 外部避让期结束协同：当外部客户端避让期自然过期或被主动清除时，唤醒保活通道尝试恢复
-    arbiter.on('yield:expired', ({ desktopId }) => {
-      const matched = this.findDesktopByCode(desktopId);
-      if (matched?.accountName) {
-        const acc = this.accounts.get(matched.accountName);
-        if (acc && acc.autoStart !== false) {
-          this.keepaliveService.resumeWorkers(matched.accountName);
-        }
-      }
-      this.notifyStatusChange();
-    });
-    arbiter.on('yield:cleared', () => {
-      this.notifyStatusChange();
-    });
-    arbiter.on('yield:triggered', () => {
-      this.notifyStatusChange();
-    });
+  public getWatchdogService(): WatchdogService {
+    return this.watchdogService;
   }
 
   public getKeepaliveService(): KeepaliveService {
     return this.keepaliveService;
-  }
-
-  public getTaskStrategyService(): TaskStrategyService {
-    return this.taskStrategyService;
   }
 
   public getAccountNameByDesktopCode(desktopCode: string): string | undefined {
@@ -128,7 +89,7 @@ export class ProfileManager {
       if (d) return name;
     }
     for (const [name, acc] of this.accounts.entries()) {
-      const d = (acc.desktops || []).find((item: any) => String(item.desktopCode) === codeStr || String(item.desktopId) === codeStr);
+      const d = (acc.desktops || []).find((item) => String(item.desktopCode) === codeStr || String(item.desktopId) === codeStr);
       if (d) return name;
     }
     return undefined;
@@ -148,7 +109,7 @@ export class ProfileManager {
     }
     // 兜底查 accounts 原生配置
     for (const [name, acc] of this.accounts.entries()) {
-      const d = (acc.desktops || []).find((item: any) => String(item.desktopCode) === codeStr || String(item.desktopId) === codeStr);
+      const d = (acc.desktops || []).find((item) => String(item.desktopCode) === codeStr || String(item.desktopId) === codeStr);
       if (d) {
         return { accountName: name, desktop: d as ManagedDesktopState };
       }
@@ -158,7 +119,7 @@ export class ProfileManager {
 
   private webReleaseTimers = new Map<string, NodeJS.Timeout>();
 
-  public touchWebUserActive(accountName: string, desktopCode: string, durationSec: number = 60): void {
+  public touchWebUserActive(accountName: string, desktopCode: string, _durationSec: number = 60): void {
     const matched = this.findDesktopByCode(desktopCode);
     const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopCode(desktopCode);
     if (!matchedAccount) return;
@@ -170,16 +131,16 @@ export class ProfileManager {
       this.webReleaseTimers.delete(canonicalKey);
     }
 
-    // 仲裁器注册 Web 直连高优先级租约（带 TTL 自动防死锁），驱逐所有后台长连接
-    const arbiter = DesktopSessionArbiter.getInstance();
-    const ttlMs = Math.max(30, Number(durationSec) || 60) * 1000;
-    arbiter.acquireLease(canonicalKey, 'web_direct', matchedAccount, async () => {}, ttlMs).catch(() => {});
-
-    // 协同让位：若该账号正在执行后台纯协议挂机，立即主动中止挂机释放推流信道，彻底防止双端互踢冲突
-    this.taskStrategyService.stopHang(matchedAccount).catch(() => {});
+    // 1. 立即暂停该单台云电脑的后台保活长连接，并清理看门狗（若存在）
+    this.keepaliveService.pauseWorkerForDesktop(matchedAccount, canonicalKey);
+    const matchedId = matched?.desktop?.desktopId || canonicalKey;
+    this.watchdogService.stopWatchdog(matchedAccount, String(matchedId));
+    if (matched?.desktop?.desktopCode) {
+      this.watchdogService.stopWatchdog(matchedAccount, String(matched.desktop.desktopCode));
+    }
   }
 
-  public releaseWebUserActive(accountName: string, desktopCode: string, delaySec: number = 10): void {
+  public releaseWebUserActive(accountName: string, desktopCode: string, delaySec: number = WEB_RELEASE_DEFAULT_DELAY_SEC): void {
     const matched = this.findDesktopByCode(desktopCode);
     const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopCode(desktopCode);
     if (!matchedAccount) return;
@@ -192,19 +153,16 @@ export class ProfileManager {
       this.webReleaseTimers.delete(canonicalKey);
     }
 
-    // 引入延迟释放宽限期（Grace Period，默认 10 秒）：
+    // 引入延迟释放宽限期（默认 20 秒）：
     // 浏览器用户刷新网页时会触发 beforeunload 发送 web-close，但 1~2 秒后新页面就会加载并发送 web-active。
-    // 若立即释放租约，后台保活 Worker 会瞬时唤醒发起连接导致天翼云 1005 踢线。
-    const timer = setTimeout(() => {
+    // 宽限期到期后，精准恢复该单台云电脑的保活 Worker
+    const timer = setTimeout(async () => {
       this.webReleaseTimers.delete(canonicalKey);
 
-      const arbiter = DesktopSessionArbiter.getInstance();
-      arbiter.releaseLease(canonicalKey, 'web_direct', matchedAccount).catch(() => {});
-
-      // 关键恢复：前台直连关闭且宽限期到期后，自动恢复该账号下的保活 Worker 运行
+      // 关键恢复：前台直连关闭且宽限期到期后，精准恢复单台云电脑保活 Worker 运行
       const acc = this.accounts.get(matchedAccount);
       if (acc && acc.autoStart !== false) {
-        this.keepaliveService.resumeWorkers(matchedAccount);
+        await this.keepaliveService.resumeWorkerForDesktop(matchedAccount, canonicalKey);
       }
     }, Math.max(1, delaySec) * 1000);
 
@@ -323,10 +281,45 @@ export class ProfileManager {
   }
 
   /**
+   * 凭证对外脱敏处理 (剔除 secretKey, password, clientKey 等高敏字段)
+   */
+  public sanitizeLoginInfo(info?: LoginInfo): LoginInfo | undefined {
+    if (!info) return undefined;
+    const clone = { ...info } as Record<string, unknown>;
+    delete clone.secretKey;
+    delete clone.clientKey;
+    delete clone.caCert;
+    delete clone.clientCert;
+    delete clone.password;
+    delete clone.rawPassword;
+    return clone as unknown as LoginInfo;
+  }
+
+  /**
    * 账号对外脱敏只读视图 (完全深拷贝隔离内部引用，杜绝污染与凭证泄露)
    */
-  public sanitizeAccount(accountOrState: any): any {
-    return AccountService.sanitizeAccount(accountOrState);
+  public sanitizeAccount(accountOrState: ManagedAccount | AccountConfig): ManagedAccount;
+  public sanitizeAccount(accountOrState?: ManagedAccount | AccountConfig): ManagedAccount | undefined;
+  public sanitizeAccount(accountOrState?: ManagedAccount | AccountConfig): ManagedAccount | undefined {
+    if (!accountOrState) return undefined;
+    let clone: Record<string, unknown>;
+    try {
+      clone = structuredClone(accountOrState) as unknown as Record<string, unknown>;
+    } catch {
+      clone = JSON.parse(JSON.stringify(accountOrState)) as unknown as Record<string, unknown>;
+    }
+    if ('password' in clone) delete clone.password;
+    if ('rawPassword' in clone) delete clone.rawPassword;
+    if (clone.loginInfo && typeof clone.loginInfo === 'object') {
+      const li = clone.loginInfo as Record<string, unknown>;
+      delete li.secretKey;
+      delete li.clientKey;
+      delete li.caCert;
+      delete li.clientCert;
+      if ('password' in li) delete li.password;
+      if ('rawPassword' in li) delete li.rawPassword;
+    }
+    return clone as unknown as ManagedAccount;
   }
 
   public getAccountState(keyOrId: string): ManagedAccount | undefined {
@@ -377,37 +370,40 @@ export class ProfileManager {
         }
         if (!acc.taskConfig) {
           acc.taskConfig = {
-            enabled: acc.autoSign ?? true,
-            autoSign: true,
-            loginDesktop: true,
+            enabled: true,
             aiChat: true,
-            keepAliveHang: true,
             scheduleTime: getRandomScheduleTime(),
           };
         } else if (!acc.taskConfig.scheduleTime) {
           acc.taskConfig.scheduleTime = getRandomScheduleTime();
         }
-        state.autoSign = acc.autoSign ?? false;
-        state.lastSignDate = acc.lastSignDate;
+        state.autoStart = acc.autoStart;
         state.taskConfig = acc.taskConfig;
         state.redeemConfig = acc.redeemConfig;
-        state.hangStatus = this.taskStrategyService.getHangInfo(name) || undefined;
         const pts = this.todayPointsCache.get(name);
         const todayStr = getCstDateString();
         // 严格自然日校验：仅在缓存日期与东八区当天一致时有效，跨天直接归零
         state.todayPoints = (pts && pts.date === todayStr) ? (pts.todayPoints ?? 0) : 0;
       }
     }
-    const arbiter = DesktopSessionArbiter.getInstance();
     return Array.from(this.accountStates.values()).map((state) => {
       const sanitized = this.sanitizeAccount(state);
-      if (sanitized.desktops && Array.isArray(sanitized.desktops)) {
-        sanitized.desktops = sanitized.desktops.map((d: any) => {
-          const yieldStatus = arbiter.getYieldStatus(d.desktopCode || String(d.desktopId));
-          return {
-            ...d,
-            yieldStatus: yieldStatus.yielding ? yieldStatus : undefined,
-          };
+      if (sanitized.desktops && sanitized.name) {
+        sanitized.desktops = sanitized.desktops.map((d) => {
+          const dKey = String(d.desktopCode || d.desktopId || '');
+          const info = this.watchdogService.getWatchdogInfo(sanitized.name, dKey);
+          if (info) {
+            return {
+              ...d,
+              watchdog: {
+                active: true,
+                currentIntervalSec: info.currentIntervalSec,
+                nextProbeSec: info.nextProbeSec,
+                failRounds: info.failRounds,
+              },
+            };
+          }
+          return d;
         });
       }
       return sanitized;
@@ -441,8 +437,8 @@ export class ProfileManager {
   /**
    * 获取全局一等公民实例列表 (合并所属 Profile 信息与实时保活状态)
    */
-  public getAllInstancesSummary(): any[] {
-    const list: any[] = [];
+  public getAllInstancesSummary(): DesktopInstanceSummary[] {
+    const list: DesktopInstanceSummary[] = [];
     for (const [name, acc] of this.accounts.entries()) {
       const state = this.accountStates.get(name);
       const desktops = state?.desktops?.length ? state.desktops : (acc.desktops || []);
@@ -451,12 +447,12 @@ export class ProfileManager {
         list.push({
           id: desktopCode,
           desktopCode,
-          desktopName: d.desktopName,
+          desktopName: d.desktopName || '',
           flavorName: d.flavorName || d.desktopName,
           imageName: d.imageName,
           useStatusText: d.useStatusText || '空闲',
           status: d.status || 'idle',
-          lastHeartbeat: d.lastHeartbeat,
+          lastHeartbeat: typeof d.lastHeartbeat === 'string' ? d.lastHeartbeat : undefined,
           profileId: acc.id || state?.id,
           profileName: acc.name,
           profileUser: acc.user,
@@ -476,6 +472,9 @@ export class ProfileManager {
       state.status = 'login_needed';
       throw new Error(`账号未登录，请在控制台输入验证码登录`);
     }
+
+    // 开启前清理该账号名下可能存在的休眠自愈看门狗定时器
+    this.watchdogService.stopWatchdogsForAccount(accountName);
 
     // 立即秒级更新状态并广播通知前端，避免用户等待外部网络 I/O
     acc.autoStart = true;
@@ -500,7 +499,11 @@ export class ProfileManager {
       acc.autoStart = false;
       this.saveToDisk();
     }
+    // 停止长连接
     this.keepaliveService.stopWorkers(accountName);
+    // 彻底停止：清除该账号名下所有看门狗定时器，彻底静默，绝不探测 HTTP 也绝不发起 WebSocket
+    this.watchdogService.stopWatchdogsForAccount(accountName);
+
     const state = this.accountStates.get(accountName);
     if (state) {
       state.status = 'idle';
@@ -508,20 +511,23 @@ export class ProfileManager {
         d.status = 'stopped';
       }
     }
-    this.logger.addLog('warn', `[${accountName}] 保活任务已手动停止`);
+    this.logger.addLog('warn', `[${accountName}] 保活任务已手动停止（彻底静默，无探针无长连）`);
     this.notifyStatusChange();
   }
 
   public async stopAll(): Promise<void> {
     this.taskScheduler.stop();
     this.keepaliveService.stopAll();
-    await this.taskStrategyService.destroyAllHang();
-    for (const [key, timer] of this.powerTrackingTimers.entries()) {
-      clearTimeout(timer);
+    this.watchdogService.stopAll();
+    for (const [, timer] of this.powerTrackingTimers.entries()) {
+      clearInterval(timer);
     }
     this.powerTrackingTimers.clear();
-    DesktopSessionArbiter.getInstance().clearAll();
-    this.saveToDisk();
+    for (const [, timer] of this.webReleaseTimers.entries()) {
+      clearTimeout(timer);
+    }
+    this.webReleaseTimers.clear();
+    this.saveToDisk(true);
   }
 
   public async operateDesktop(
@@ -558,8 +564,8 @@ export class ProfileManager {
     }
 
     try {
-      const targetObjType = desktop.objType ?? 0;
-      const dName = desktop.desktopName || (desktop as any).computerName || (desktop as any).name || canonicalDesktopCode;
+      const targetObjType = typeof desktop.objType === 'number' ? desktop.objType : 0;
+      const dName = desktop.desktopName || desktop.computerName || desktop.name || canonicalDesktopCode;
       const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
       
       let message = '';
@@ -573,17 +579,17 @@ export class ProfileManager {
 
         try {
           message = await client.operateDesktop(requestApiDesktopId, primaryOp, targetObjType);
-        } catch (firstErr: any) {
-          const firstErrMsg = firstErr.message || '';
+        } catch (firstErr) {
+          const firstErrMsg = firstErr instanceof Error ? firstErr.message : String(firstErr);
           if (firstErrMsg.includes('已运行') || firstErrMsg.includes('已经处于') || firstErrMsg.includes('已在运行')) {
             message = '云电脑已处于运行可用状态';
           } else {
             try {
               message = await client.operateDesktop(requestApiDesktopId, fallbackOp, targetObjType);
-            } catch (secondErr: any) {
+            } catch (secondErr) {
               // 若两路信令均失败，尝试通过 connectDesktop 接口触发官方云端的 goingRetry 机制拉起桌面
               try {
-                await client.connectDesktop(desktop, targetObjType);
+                await client.connectDesktop(desktop.desktopCode || desktop.desktopId, targetObjType);
                 message = '云电脑拉起请求已触发，正在建立连接...';
               } catch {
                 throw secondErr;
@@ -706,7 +712,7 @@ export class ProfileManager {
 
     const client = this.getClient(accountName);
     let attempts = 0;
-    const maxAttempts = 15; // 官方标准: 20s 一次轮询，最长 5 分钟 (15 次)
+    const maxAttempts = POWER_TRACKING_MAX_ROUNDS; // 官方标准: 20s 一次轮询，最长 5 分钟 (15 次)
 
     const timer = setInterval(async () => {
       attempts++;
@@ -721,7 +727,8 @@ export class ProfileManager {
         const target = state?.desktops.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
 
         // 优先使用官方轻量级毫秒级接口 getDesktopState 查询最新真实运行状态 (避免全量列表延迟)
-        const stateInfo = await client.getDesktopState(desktopId, target?.objType ?? 0);
+        const objType = typeof target?.objType === 'number' ? target.objType : 0;
+        const stateInfo = await client.getDesktopState(desktopId, objType);
         let realStatusText = stateInfo?.useStatusText;
 
         if (!realStatusText) {
@@ -731,7 +738,7 @@ export class ProfileManager {
         }
 
         if (realStatusText && target) {
-          const dName = target.desktopName || (target as any).computerName || (target as any).name || desktopId;
+          const dName = target.desktopName || target.computerName || target.name || desktopId;
           const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
           target.useStatusText = realStatusText;
 
@@ -760,15 +767,23 @@ export class ProfileManager {
           }
           this.notifyStatusChange();
         }
-      } catch {}
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.addLog('warn', `[${accountName}] 电源状态轮询跟踪网络异常: ${msg}`);
+      }
 
       if (attempts >= maxAttempts) {
         clearInterval(timer);
         this.powerTrackingTimers.delete(trackingKey);
+        const state = this.accountStates.get(accountName);
+        const target = state?.desktops.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
+        const dName = target?.desktopName || target?.computerName || target?.name || desktopId;
+        const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
+        this.logger.addLog('warn', `[${dPrefix}] 电源操作追踪已达 5 分钟上限，已结束实时追踪`);
         // 超时后执行一次全量刷新校准
         this.reloadDesktops(accountName).catch(() => {});
       }
-    }, 20000);
+    }, POWER_TRACKING_INTERVAL_MS);
 
     this.powerTrackingTimers.set(trackingKey, timer);
   }
@@ -789,7 +804,7 @@ export class ProfileManager {
     const client = this.clients.get(realOldName);
 
     this.keepaliveService.stopWorkers(realOldName);
-    this.taskStrategyService.renameHangSession(realOldName, trimmed);
+    this.watchdogService.stopWatchdogsForAccount(realOldName);
     this.accounts.delete(realOldName);
     this.accountStates.delete(realOldName);
     if (client) this.clients.delete(realOldName);
@@ -856,30 +871,30 @@ export class ProfileManager {
     const client = this.getClient(accountName);
     if (!acc || !state || !client.loginInfo) return;
 
-    this.logger.addLog('info', `[${accountName}] 正在查询云电脑列表...`);
     let list: Desktop[] = [];
     try {
       list = await client.getDesktopList();
-    } catch (err: any) {
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       state.status = 'error';
-      state.lastError = err.message;
-      this.logger.addLog('error', `[${accountName}] 拉取云电脑失败: ${err.message}`);
+      state.lastError = errMsg;
+      this.logger.addLog('error', `[${accountName}] 拉取云电脑失败: ${errMsg}`);
 
       // 检测是否为 Token 过期或未登录
-      const errMsg = (err.message || '').toLowerCase();
+      const lowerMsg = errMsg.toLowerCase();
       if (
-        errMsg.includes('登录') ||
-        errMsg.includes('token') ||
-        errMsg.includes('401') ||
-        errMsg.includes('过期') ||
-        errMsg.includes('失效') ||
-        errMsg.includes('重新登录')
+        lowerMsg.includes('登录') ||
+        lowerMsg.includes('token') ||
+        lowerMsg.includes('401') ||
+        lowerMsg.includes('过期') ||
+        lowerMsg.includes('失效') ||
+        lowerMsg.includes('重新登录')
       ) {
         state.status = 'login_needed';
         if (this.webhookUrl && !this.expiredNotifiedAccounts.has(accountName)) {
           this.expiredNotifiedAccounts.add(accountName);
           const title = `天翼云电脑 - [${accountName}] 登录态失效告警`;
-          const content = `账号: ${accountName}\n错误: ${err.message}\n状态: 登录凭证已失效或被踢出，已暂停自动任务。\n请尽快登录 Web 控制台重新扫码登录！`;
+          const content = `账号: ${accountName}\n错误: ${errMsg}\n状态: 登录凭证已失效或被踢出，已暂停自动任务。\n请尽快登录 Web 控制台重新扫码登录！`;
           sendWebhookNotification(this.webhookUrl, title, content).catch(() => {});
         }
       }
@@ -910,16 +925,17 @@ export class ProfileManager {
       }
 
       const old = oldDesktopsMap.get(d.desktopId);
-      return {
+      const resState: ManagedDesktopState = {
         desktopId: d.desktopId,
         desktopName: d.desktopName,
         desktopCode: d.desktopCode,
         useStatusText: d.useStatusText,
-        imageName: (d as any).imageName || '',
-        flavorName: (d as any).flavorName || (d as any).desktopName || '',
+        imageName: d.imageName || '',
+        flavorName: d.flavorName || d.desktopName || '',
         status: old?.status || 'idle',
-        lastHeartbeat: old?.lastHeartbeat,
+        lastHeartbeat: typeof old?.lastHeartbeat === 'string' ? old.lastHeartbeat : undefined,
       };
+      return resState;
     });
 
     // 【关键落盘缓存】：将云电脑列表快照持久化同步回写至 accounts.json
@@ -930,11 +946,12 @@ export class ProfileManager {
       useStatusText: d.useStatusText,
       imageName: d.imageName,
       flavorName: d.flavorName,
+      status: d.status,
       lastHeartbeat: d.lastHeartbeat,
     }));
     this.saveToDisk();
 
-    // 检查是否开启了保活长连接 (由 autoStart 控制，与挂机做任务完全解耦)
+    // 检查是否开启了保活长连接 (由 autoStart 控制)
     const isKeepAliveEnabled = acc.autoStart !== false;
     if (!isKeepAliveEnabled) {
       this.keepaliveService.stopWorkers(accountName);
@@ -961,10 +978,7 @@ export class ProfileManager {
     const id = config.id || existingAcc?.id || crypto.randomUUID();
     const taskConfig = config.taskConfig || existingAcc?.taskConfig || {
       enabled: true,
-      autoSign: true,
-      loginDesktop: true,
       aiChat: true,
-      keepAliveHang: true,
       scheduleTime: getRandomScheduleTime(),
     };
     if (!taskConfig.scheduleTime) {
@@ -972,8 +986,8 @@ export class ProfileManager {
     }
     const redeemConfig = config.redeemConfig || { ...DEFAULT_REDEEM_CONFIG };
     const fullAcc: AccountConfig = { ...config, id, name, user, deviceCode, taskConfig, redeemConfig };
-    delete (fullAcc as any).password;
-    delete (fullAcc as any).rawPassword;
+    delete fullAcc.password;
+    delete fullAcc.rawPassword;
 
     this.accounts.set(name, fullAcc);
     let state = this.accountStates.get(name);
@@ -985,8 +999,6 @@ export class ProfileManager {
         deviceCode,
         status: config.loginInfo ? 'online' : 'login_needed',
         loginInfo: config.loginInfo,
-        autoSign: config.autoSign ?? true,
-        lastSignDate: config.lastSignDate,
         taskConfig,
         redeemConfig,
         desktops: existingAcc?.desktops || [],
@@ -1018,8 +1030,9 @@ export class ProfileManager {
       void (async () => {
         try {
           await this.getPointsAndTasks(name);
-        } catch (e: any) {
-          this.logger.addLog('warn', `[${name}] 后台同步提示: ${e.message}`);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          this.logger.addLog('warn', `[${name}] 后台同步提示: ${msg}`);
         } finally {
           this.notifyStatusChange();
         }
@@ -1028,17 +1041,17 @@ export class ProfileManager {
   }
 
   public removeAccount(name: string): void {
-    // 1. 若该账号正在执行后台挂机，立即释放挂机长连接与状态
-    this.taskStrategyService.stopHang(name).catch(() => {});
-    // 2. 清理该账号正在跟踪的电源状态轮询定时器
+    // 1. 清理该账号正在跟踪的电源状态轮询定时器
     for (const [key, timer] of this.powerTrackingTimers.entries()) {
       if (key.startsWith(`${name}:`)) {
         clearInterval(timer);
         this.powerTrackingTimers.delete(key);
       }
     }
-    // 3. 停止该账号下的所有保活信道与心跳 Worker
+    // 2. 停止该账号下的所有保活信道与心跳 Worker
     this.keepaliveService.stopWorkers(name);
+    // 3. 清理该账号下的休眠自愈看门狗定时器
+    this.watchdogService.stopWatchdogsForAccount(name);
     // 4. 清理今日积分与告警缓存
     this.todayPointsCache.delete(name);
     this.expiredNotifiedAccounts.delete(name);
@@ -1051,276 +1064,13 @@ export class ProfileManager {
     this.logger.addLog('info', `[${name}] 账号已移除`);
   }
 
-  public async manualRunTasks(accountName: string): Promise<string> {
-    const acc = this.accounts.get(accountName);
-    const client = this.getClient(accountName);
-    if (!acc || !client.loginInfo) {
-      throw new Error('账号未登录，无法执行任务');
-    }
-    const state = this.accountStates.get(accountName);
-    const dId = state?.desktops?.[0]?.desktopId;
-    const res = await this.taskStrategyService.executeDailyTasks(client, dId, acc.taskConfig, this.logger);
-    const today = getCstDateString();
-    acc.lastSignDate = today;
-    if (!acc.taskConfig) {
-      acc.taskConfig = { enabled: true, autoSign: true, scheduleTime: getRandomScheduleTime() };
-    }
-    acc.taskConfig.lastRunDate = today;
-    if (state) {
-      state.lastSignDate = today;
-      state.taskConfig = acc.taskConfig;
-    }
-    this.saveToDisk();
-    this.logger.addLog('success', `[${accountName}] 每日任务已执行: ${res.message}`);
-    this.notifyStatusChange();
-
-    // 执行任务后异步重新核验并更新当日已获积分
-    setTimeout(() => {
-      this.getPointsAndTasks(accountName)
-        .then(() => this.notifyStatusChange())
-        .catch(() => {});
-    }, 3000);
-
-    // 若配置开启了保活挂机，在后台异步拉起智能补时挂机
-    if (acc.taskConfig?.keepAliveHang !== false) {
-      this.manualHang(accountName).catch(() => {});
-    }
-
-    return res.message;
-  }
-
-  public async manualHang(accountName: string): Promise<string> {
-    const acc = this.accounts.get(accountName);
-    const client = this.getClient(accountName);
-    if (!acc || !client.loginInfo) {
-      throw new Error('账号未登录，无法挂机');
-    }
-
-    if (this.taskStrategyService.isHangRunning(accountName)) {
-      return '后台挂机任务已在运行中，无需重复触发';
-    }
-
-    // 外部官方客户端主动避让检查
-    const arbiter = DesktopSessionArbiter.getInstance();
-    const curState = this.accountStates.get(accountName);
-    const yieldingDesktop = curState?.desktops?.find((d) => arbiter.getYieldStatus(d.desktopCode || d.desktopId).yielding);
-    if (yieldingDesktop) {
-      const targetKey = yieldingDesktop.desktopCode || yieldingDesktop.desktopId;
-      const yInfo = arbiter.getYieldStatus(targetKey);
-      const dName = yieldingDesktop.desktopName || (yieldingDesktop as any).computerName || (yieldingDesktop as any).name || targetKey;
-      const msg = `云电脑正处于外部官方客户端主动避让期 (剩余 ${yInfo.remainingSeconds}秒)，暂缓启动挂机`;
-      this.logger.addLog('warn', `[${accountName} - ${dName}] ${msg}`);
-      return msg;
-    }
-
-    // 确保清理残留的旧挂机状态与会话缓存
-    this.taskStrategyService.clearHangSession(accountName);
-
-    // 挂机启动前：优先软暂停底层保活连接，无缝让位防踢线
-    const paused = this.keepaliveService.pauseWorkers(accountName);
-    if (!paused) {
-      this.keepaliveService.stopWorkers(accountName);
-    }
-
-    // 立即登记并预设挂机 Session，优先使用缓存，若无缓存或已过期则先异步静默请求任务中心
-    let cachedEntry = this.todayPointsCache.get(accountName);
-    const todayStr = getCstDateString();
-    if (!cachedEntry || !cachedEntry.summary || cachedEntry.date !== todayStr) {
-      try {
-        const sum = await this.getPointsAndTasks(accountName);
-        cachedEntry = { todayPoints: sum.generalPoints + sum.phonePoints, date: todayStr, summary: sum, updatedAt: Date.now() };
-      } catch {}
-    }
-    const hangTask = cachedEntry?.summary?.tasks?.find((t: any) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress));
-    this.taskStrategyService.initPendingHangSession(accountName, hangTask?.currentProgress || 0, hangTask?.totalProgress || 3600);
-
-    // 将桌面状态置为 hanging 并更新挂机状态，保证主页保活在线数不失联
-    const state = this.accountStates.get(accountName);
-    if (state) {
-      for (const d of state.desktops) {
-        (d as any).status = 'hanging';
-      }
-      state.hangStatus = this.taskStrategyService.getHangInfo(accountName) || undefined;
-      this.notifyStatusChange();
-    }
-
-    // 后台异步触发智能补足挂机 (内置网络波动自愈与智能重试机制：最多尝试 5 次)
-    (async () => {
-      let hangResult: { success: boolean; message: string; isCompleted?: boolean } | null = null;
-      const MAX_ATTEMPTS = 5;
-
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        try {
-          if (attempt > 1) {
-            this.logger.addLog('info', `[${accountName}] 挂机会话异常或未达标，等待 5 秒进行第 ${attempt}/${MAX_ATTEMPTS} 次断线续挂...`);
-            await new Promise((r) => setTimeout(r, 5000));
-            // 重试前刷新一次实例凭据
-            try {
-              await client.getDesktopList();
-            } catch {}
-          }
-
-          hangResult = await this.taskStrategyService.executeHang(accountName, client, (cur, tot) => {
-            const curState = this.accountStates.get(accountName);
-            // 只要达到目标秒数，毫秒级就地清理 hangStatus 并广播，绝不在界面留存 3600/3600 滞留卡片
-            if (cur >= tot && curState?.hangStatus) {
-              curState.hangStatus = undefined;
-            }
-            this.notifyStatusChange();
-          });
-
-          // 如果官方核验达标，则退出重试循环
-          if (hangResult.isCompleted || (hangResult.success && !hangResult.message?.includes('补挂'))) {
-            break;
-          }
-
-          // 如果是明确已被手动终止，不再重试
-          if (hangResult.message?.includes('主动终止') || hangResult.message?.includes('已达成')) {
-            break;
-          }
-
-          this.logger.addLog('warn', `[${accountName}] 第 ${attempt} 次挂机未达成: ${hangResult.message}`);
-        } catch (e: any) {
-          this.logger.addLog('warn', `[${accountName}] 第 ${attempt} 次挂机异常: ${e.message}`);
-          hangResult = { success: false, message: e.message };
-        }
-      }
-
-      // 挂机完成（或异常退出）后：若账号开启了保活(autoStart)，恢复底层 7x24 小时持久保活长连接 (挂机与保活解耦)
-      try {
-        const state = this.accountStates.get(accountName);
-        if (state) {
-          state.hangStatus = undefined;
-          for (const d of state.desktops) {
-            if ((d as any).status === 'hanging') {
-              (d as any).status = 'connected';
-            }
-          }
-        }
-        const isKeepAliveEnabled = acc.autoStart !== false;
-        if (isKeepAliveEnabled) {
-          // 优先通过 resumeWorkers 恢复连接，若无对应 Worker 则走同步初始化
-          const resumed = this.keepaliveService.resumeWorkers(accountName);
-          if (!resumed) {
-            try {
-              const list = await client.getDesktopList();
-              const desktopStates = state?.desktops || [];
-              await this.keepaliveService.syncWorkersForAccount(
-                accountName,
-                client,
-                list,
-                desktopStates,
-                (dId) => this.isManualShutdown(dId),
-              );
-            } catch {}
-          }
-        } else {
-          // 若关闭了保活，确保云电脑状态置为 stopped，不维持常驻 Worker
-          if (state) {
-            for (const d of state.desktops) {
-              d.status = 'stopped';
-            }
-          }
-        }
-
-        // 挂机完成后自动拉取官方最新积分并刷新今日积分看板缓存
-        let finalPoints = 0;
-        try {
-          const sum = await this.getPointsAndTasks(accountName);
-          finalPoints = sum.generalPoints + sum.phonePoints;
-        } catch {}
-
-        this.notifyStatusChange();
-      } catch (err: any) {
-        this.logger.addLog('warn', `[${accountName}] 挂机收尾处理提示: ${err.message}`);
-      }
-    })();
-
-    return '已在后台启动智能挂机，正在动态核验并补足挂机时长';
-  }
-
-  public async stopHang(accountName: string): Promise<void> {
-    const acc = this.accounts.get(accountName);
-    const client = this.getClient(accountName);
-    if (!acc || !client) throw new Error(`未找到账号: ${accountName}`);
-
-    await this.taskStrategyService.stopHang(accountName);
-    this.logger.addLog('info', `[${accountName}] 用户已手动中止挂机任务，正在恢复正常保活...`);
-
-    const state = this.accountStates.get(accountName);
-    if (state) {
-      state.hangStatus = undefined;
-      for (const d of state.desktops) {
-        if ((d as any).status === 'hanging') {
-          (d as any).status = 'connected';
-        }
-      }
-    }
-
-    try {
-      const isKeepAliveEnabled = acc.autoStart !== false;
-      if (isKeepAliveEnabled) {
-        const resumed = this.keepaliveService.resumeWorkers(accountName);
-        if (!resumed) {
-          const list = await client.getDesktopList();
-          const desktopStates = state?.desktops || [];
-          await this.keepaliveService.syncWorkersForAccount(
-            accountName,
-            client,
-            list,
-            desktopStates,
-            (dId) => this.isManualShutdown(dId),
-          );
-        }
-      }
-    } catch {}
-
-    this.notifyStatusChange();
-  }
-
-  public async manualSignIn(accountName: string): Promise<string> {
-    const acc = this.accounts.get(accountName);
-    const client = this.getClient(accountName);
-    if (!acc || !client.loginInfo) {
-      throw new Error('账号未登录，无法签到');
-    }
-    const res = await this.taskStrategyService.executeSign(client);
-    const today = getCstDateString();
-    acc.lastSignDate = today;
-    const state = this.accountStates.get(accountName);
-    if (state) state.lastSignDate = today;
-    this.saveToDisk();
-    this.logger.addLog('success', `[${accountName}] 签到完成: ${res.message}`);
-    return res.message;
-  }
-
-  public async manualActivateDesktop(accountName: string): Promise<string> {
-    const acc = this.accounts.get(accountName);
-    const client = this.getClient(accountName);
-    if (!acc || !client.loginInfo) {
-      throw new Error('账号未登录，无法激活');
-    }
-    const state = this.accountStates.get(accountName);
-    const dId = state?.desktops?.[0]?.desktopId;
-    const res = await this.taskStrategyService.activateDesktopSession(client, dId, this.logger);
-    this.logger.addLog('success', `[${accountName}] 登录云电脑: ${res.message}`);
-    // 同步唤醒保活长连接以维持活跃，加速官方任务核验与积分结算
-    this.reloadDesktops(accountName).catch(() => {});
-    setTimeout(() => {
-      this.getPointsAndTasks(accountName)
-        .then(() => this.notifyStatusChange())
-        .catch(() => {});
-    }, 3000);
-    return `${res.message}（官方系统在连接维持 1~2 分钟内自动核验发放积分）`;
-  }
-
   public async manualAiChat(accountName: string): Promise<string> {
     const acc = this.accounts.get(accountName);
     const client = this.getClient(accountName);
     if (!acc || !client.loginInfo) {
       throw new Error('账号未登录，无法执行AI对话');
     }
-    const res = await this.taskStrategyService.executeAiChat(client);
+    const res = await AiChatTask.execute(client);
     this.logger.addLog('success', `[${accountName}] AI对话: ${res.message}`);
     setTimeout(() => {
       this.getPointsAndTasks(accountName)
@@ -1343,7 +1093,11 @@ export class ProfileManager {
       throw new Error('账号未登录，无法兑换');
     }
 
-    const rConf: any = acc.redeemConfig || {};
+    const rConf: RedeemConfig = {
+      enabled: acc.redeemConfig?.enabled ?? false,
+      scheduleType: acc.redeemConfig?.scheduleType ?? 'interval_days',
+      ...acc.redeemConfig,
+    };
     let targetDesktopId = desktopId || rConf.targetDesktopId;
     let state = this.accountStates.get(accountName);
     if ((!state?.desktops || state.desktops.length === 0) && (!targetDesktopId || targetDesktopId === 'undefined')) {
@@ -1402,8 +1156,9 @@ export class ProfileManager {
             safeWriteFileSync(Config.rewardsFile, JSON.stringify(this.rewardsCache, null, 2));
           }
         }
-      } catch (err: any) {
-        this.logger.addLog('warn', `获取在线积分商品列表失败，回退使用本地缓存: ${err.message}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.addLog('warn', `获取在线积分商品列表失败，回退使用本地缓存: ${msg}`);
       }
     }
     // 若没有缓存则返回本地预设
@@ -1412,7 +1167,7 @@ export class ProfileManager {
 
   public async getPointsAndTasks(accountName: string): Promise<PointsSummary> {
     const client = this.getClient(accountName);
-    const summary = await this.taskStrategyService.getPointsAndTasks(client);
+    const summary = await PointsTask.getPointsAndTasks(client);
     let todayEarned = 0;
     for (const t of summary.tasks) {
       if (t.isCompleted) {
@@ -1426,20 +1181,14 @@ export class ProfileManager {
       state.todayPoints = todayEarned;
     }
 
-    // 智能同步日常任务完成状态：若官方显示所有日常任务均已达成，同步标记 lastRunDate 防止调度器误判补跑
+    // 智能同步日常任务完成状态：若官方显示日常任务均已达成，同步标记 lastRunDate 防止调度器误判补跑
     const acc = this.accounts.get(accountName);
     if (acc && acc.taskConfig) {
       const chatTask = summary.tasks.find((t) => t.type === 'chat');
-      const loginTask = summary.tasks.find((t) => t.type === 'login');
-      const hangTask = summary.tasks.find((t) => t.type === 'hang' || isHangTaskName(t.name, t.totalProgress));
-
       const isChatDone = !chatTask || chatTask.isCompleted || (chatTask.totalProgress > 0 && chatTask.currentProgress >= chatTask.totalProgress);
-      const isLoginDone = !loginTask || loginTask.isCompleted || (loginTask.totalProgress > 0 && loginTask.currentProgress >= loginTask.totalProgress);
-      const isHangDone = !hangTask || hangTask.isCompleted || (hangTask.totalProgress > 0 && hangTask.currentProgress >= hangTask.totalProgress);
 
-      if (isChatDone && isLoginDone && isHangDone && acc.taskConfig.lastRunDate !== todayStr) {
+      if (isChatDone && acc.taskConfig.lastRunDate !== todayStr) {
         acc.taskConfig.lastRunDate = todayStr;
-        acc.lastSignDate = todayStr;
         this.saveToDisk();
       }
     }
@@ -1449,7 +1198,7 @@ export class ProfileManager {
 
   public exportConfigSafe() {
     return {
-      version: '2.2.0',
+      version: '3.0.0',
       exportedAt: new Date().toISOString(),
       system: {
         keepAliveSeconds: this.keepAliveSeconds,
@@ -1457,34 +1206,38 @@ export class ProfileManager {
       },
       accounts: Array.from(this.accounts.values()).map((acc) => {
         const sanitized = { ...acc };
-        delete (sanitized as any).password;
-        delete (sanitized as any).rawPassword;
+        delete sanitized.password;
+        delete sanitized.rawPassword;
         return sanitized;
       }),
     };
   }
 
-  public importConfigSafe(data: any): { importedAccounts: number } {
+  public importConfigSafe(data: unknown): { importedAccounts: number } {
     if (!data || typeof data !== 'object') {
       throw new Error('导入的配置文件格式非法');
     }
-    if (data.system) {
-      if (typeof data.system.keepAliveSeconds === 'number' && data.system.keepAliveSeconds >= 10) {
-        this.keepAliveSeconds = data.system.keepAliveSeconds;
+    const cfg = data as Record<string, unknown>;
+    if (cfg.system && typeof cfg.system === 'object') {
+      const sys = cfg.system as Record<string, unknown>;
+      if (typeof sys.keepAliveSeconds === 'number' && sys.keepAliveSeconds >= 10) {
+        this.keepAliveSeconds = sys.keepAliveSeconds;
       }
-      if (typeof data.system.webhookUrl === 'string') {
-        this.webhookUrl = data.system.webhookUrl.trim();
+      if (typeof sys.webhookUrl === 'string') {
+        this.webhookUrl = sys.webhookUrl.trim();
       }
     }
     let importedAccounts = 0;
-    if (Array.isArray(data.accounts)) {
-      for (const acc of data.accounts) {
-        if (!acc || !acc.name) continue;
+    if (Array.isArray(cfg.accounts)) {
+      for (const rawAcc of cfg.accounts) {
+        if (!rawAcc || typeof rawAcc !== 'object') continue;
+        const acc = rawAcc as Record<string, unknown>;
+        if (typeof acc.name !== 'string' || !acc.name) continue;
         const sanitized: AccountConfig = {
-          ...acc,
+          ...(acc as unknown as AccountConfig),
         };
-        delete (sanitized as any).password;
-        delete (sanitized as any).rawPassword;
+        delete sanitized.password;
+        delete sanitized.rawPassword;
         this.accounts.set(sanitized.name, sanitized);
         importedAccounts++;
       }
@@ -1493,7 +1246,24 @@ export class ProfileManager {
     return { importedAccounts };
   }
 
-  public saveToDisk(): void {
+  public saveToDisk(immediate = false): void {
+    if (immediate) {
+      if (this.saveDebounceTimer) {
+        clearTimeout(this.saveDebounceTimer);
+        this.saveDebounceTimer = null;
+      }
+      this.executeSaveToDisk();
+      return;
+    }
+
+    if (this.saveDebounceTimer) return;
+    this.saveDebounceTimer = setTimeout(() => {
+      this.saveDebounceTimer = null;
+      this.executeSaveToDisk();
+    }, SAVE_CONFIG_DEBOUNCE_MS);
+  }
+
+  private executeSaveToDisk(): void {
     Config.initDirs();
 
     // 1. 保存 config.json (系统设置)
@@ -1509,8 +1279,8 @@ export class ProfileManager {
     // 2. 保存 accounts.json (账号与各账号独立策略配置，严禁任何明文密码或敏感凭据落盘)
     const list: AccountConfig[] = Array.from(this.accounts.values()).map((acc) => {
       const sanitized = { ...acc };
-      delete (sanitized as any).password;
-      delete (sanitized as any).rawPassword;
+      delete sanitized.password;
+      delete sanitized.rawPassword;
       return sanitized;
     });
     safeWriteFileSync(Config.accountsFile, JSON.stringify(list, null, 2));
@@ -1559,7 +1329,7 @@ export class ProfileManager {
 
     try {
       // 3. 加载 accounts.json (优先加载独立 accounts.json，亦兼容旧版 config.json 内 accounts 字段迁移)
-      let rawAccounts: any[] = [];
+      let rawAccounts: Partial<AccountConfig>[] = [];
     if (fs.existsSync(Config.accountsFile)) {
       try {
         const accContent = fs.readFileSync(Config.accountsFile, 'utf8');
@@ -1587,8 +1357,9 @@ export class ProfileManager {
     }
 
     for (const acc of rawAccounts) {
-      const user = acc.loginInfo?.mobilephone || acc.user;
-      let name = acc.name || user;
+      const user = String(acc.loginInfo?.mobilephone || acc.user || '').trim();
+      if (!user) continue;
+      let name = String(acc.name || user).trim();
       // 如果此前自动生成的默认名称形如 '用户0130824707'，自动纠偏为手机号码
       if ((name === acc.user || /^用户\d+$/.test(name)) && acc.loginInfo?.mobilephone) {
         name = acc.loginInfo.mobilephone;
@@ -1596,10 +1367,7 @@ export class ProfileManager {
       const deviceCode = Config.resolveDeviceCode(name, acc.deviceCode);
       const taskConfig = acc.taskConfig || {
         enabled: true,
-        autoSign: true,
-        loginDesktop: true,
         aiChat: true,
-        keepAliveHang: true,
         scheduleTime: getRandomScheduleTime(),
       };
       if (!taskConfig.scheduleTime) {
@@ -1609,8 +1377,8 @@ export class ProfileManager {
       const id = acc.id || crypto.randomUUID();
       const desktops = Array.isArray(acc.desktops) ? acc.desktops : [];
       const fullAcc: AccountConfig = { ...acc, id, name, user, deviceCode, taskConfig, redeemConfig, desktops };
-      delete (fullAcc as any).password;
-      delete (fullAcc as any).rawPassword;
+      delete fullAcc.password;
+      delete fullAcc.rawPassword;
       this.accounts.set(name, fullAcc);
 
       const client = this.getClient(name);
@@ -1625,11 +1393,9 @@ export class ProfileManager {
         deviceCode: acc.deviceCode || client.getDeviceCode(),
         status: acc.loginInfo ? 'online' : 'login_needed',
         loginInfo: acc.loginInfo,
-        autoSign: acc.autoSign ?? true,
-        lastSignDate: acc.lastSignDate,
         taskConfig,
         redeemConfig,
-        desktops: desktops.map((d: any) => ({
+        desktops: desktops.map((d: ManagedDesktopState) => ({
           desktopId: d.desktopId,
           desktopName: d.desktopName,
           desktopCode: d.desktopCode,
@@ -1637,7 +1403,7 @@ export class ProfileManager {
           imageName: d.imageName || '',
           flavorName: d.flavorName || d.desktopName || '',
           status: 'idle',
-          lastHeartbeat: d.lastHeartbeat,
+          lastHeartbeat: typeof d.lastHeartbeat === 'string' ? d.lastHeartbeat : undefined,
         })),
       };
       this.accountStates.set(name, state);
@@ -1646,19 +1412,25 @@ export class ProfileManager {
     this.saveToDisk();
     this.logger.addLog('info', `已加载本地配置文件 (${this.accounts.size} 个账号)`);
 
+      let delayMs = 0;
       for (const [name, acc] of this.accounts.entries()) {
         if (acc.loginInfo && acc.autoStart !== false) {
-          this.reloadDesktops(name).catch((err) => {
-            this.logger.addLog('warn', `[${name}] 自启动保活提示: ${err.message}`);
-          });
-          // 服务启动加载时自动拉取一次今日积分数据
-          this.getPointsAndTasks(name)
-            .then(() => this.notifyStatusChange())
-            .catch(() => {});
+          const staggerDelay = delayMs;
+          delayMs += 800; // 每个账号错峰 800ms 启动，防止瞬时并发冲击天翼云接口
+          setTimeout(() => {
+            this.reloadDesktops(name).catch((err) => {
+              this.logger.addLog('warn', `[${name}] 自启动保活提示: ${err.message}`);
+            });
+            // 服务启动加载时自动拉取一次今日积分数据
+            this.getPointsAndTasks(name)
+              .then(() => this.notifyStatusChange())
+              .catch(() => {});
+          }, staggerDelay);
         }
       }
-    } catch (err: any) {
-      this.logger.addLog('error', `加载配置文件 config.json 失败: ${err.message}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.addLog('error', `加载配置文件 config.json 失败: ${msg}`);
     }
   }
 }

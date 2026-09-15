@@ -1,15 +1,15 @@
 import WebSocket from 'ws';
 import { Protocol, ClinkMsgType } from '../../core/protocol.js';
-import type { Desktop, DesktopInfo } from '../../core/client.js';
-import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
+import type { Desktop, DesktopInfo, LoginInfo } from '../../core/client.js';
 
 export interface KeepAliveWorkerOptions {
   accountName: string;
   desktop: Desktop;
   desktopInfo: DesktopInfo;
-  loginInfo: any;
+  loginInfo: LoginInfo;
   deviceCode: string;
-  onStatusChange?: (status: 'connecting' | 'connected' | 'reconnecting' | 'stopped') => void;
+  onStatusChange?: (status: 'connecting' | 'connected' | 'reconnecting' | 'paused' | 'stopped') => void;
+  onPreempted?: (code: number, reason: string) => void;
   onHeartbeat?: () => void;
   onRefreshInfo?: () => Promise<DesktopInfo | null>;
   onLog?: (level: 'info' | 'warn' | 'error' | 'success', msg: string) => void;
@@ -26,19 +26,18 @@ export interface KeepAliveWorkerOptions {
  * 4. 支持 pause() 与 resume() 软暂停/恢复，与挂机任务无缝优雅交接
  */
 export class KeepAliveWorker {
-  private options: KeepAliveWorkerOptions;
+  public readonly options: KeepAliveWorkerOptions;
   private currentWs: WebSocket | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
-  private isRunning = false;
+  public isRunning = false;
   private isReconnecting = false;
-  private isPaused = false;
+  public isPaused = false;
   private isHandshakeComplete = false;
   private consecutiveFailures = 0;
-  private needsFreshTicket = false;
+  public needsFreshTicket = false;
   private lastGatewayError = '';
   private handshakeTimeout: NodeJS.Timeout | null = null;
-  private yieldClearedHandler: ((data: { desktopId: string }) => void) | null = null;
 
   constructor(options: KeepAliveWorkerOptions) {
     this.options = options;
@@ -46,7 +45,7 @@ export class KeepAliveWorker {
 
   private get logPrefix(): string {
     const d = this.options.desktop;
-    const dName = d?.desktopName || (d as any)?.computerName || (d as any)?.name || d?.desktopCode || d?.desktopId || '';
+    const dName = d?.desktopName || d?.computerName || d?.name || d?.desktopCode || d?.desktopId || '';
     return dName ? `${this.options.accountName} - ${dName}` : this.options.accountName;
   }
 
@@ -54,35 +53,10 @@ export class KeepAliveWorker {
     this.options.onLog?.(level, `[${this.logPrefix}] ${msg}`);
   }
 
-  private bindYieldCleared(): void {
-    if (this.yieldClearedHandler) return;
-    const dId = String(this.options.desktop.desktopId);
-    this.yieldClearedHandler = ({ desktopId }) => {
-      if (String(desktopId) === dId && this.isRunning && !this.isPaused) {
-        if (this.reconnectTimer) {
-          clearTimeout(this.reconnectTimer);
-          this.reconnectTimer = null;
-        }
-        this.isReconnecting = false;
-        this.log('info', '外部客户端避让期已解除，立即尝试恢复保活长连接');
-        this.connect();
-      }
-    };
-    DesktopSessionArbiter.getInstance().on('yield:cleared', this.yieldClearedHandler);
-  }
-
-  private unbindYieldCleared(): void {
-    if (this.yieldClearedHandler) {
-      DesktopSessionArbiter.getInstance().off('yield:cleared', this.yieldClearedHandler);
-      this.yieldClearedHandler = null;
-    }
-  }
-
   public start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
     this.isPaused = false;
-    this.bindYieldCleared();
     this.connect();
   }
 
@@ -93,7 +67,6 @@ export class KeepAliveWorker {
     this.consecutiveFailures = 0;
     this.needsFreshTicket = false;
     this.lastGatewayError = '';
-    this.unbindYieldCleared();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -125,7 +98,8 @@ export class KeepAliveWorker {
       this.heartbeatTimer = null;
     }
     this.cleanupSocket();
-    this.log('info', '保活通道已软暂停（让位给任务执行）');
+    this.log('info', '保活通道已暂停');
+    this.options.onStatusChange?.('paused');
   }
 
   /**
@@ -163,8 +137,9 @@ export class KeepAliveWorker {
       this.currentWs.send(hbBuf);
       this.log('info', '发送客户端活跃心跳 (30s 心跳保活)');
       this.options.onHeartbeat?.();
-    } catch (err: any) {
-      this.log('warn', `发送客户端心跳异常: ${err.message}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log('warn', `发送客户端心跳异常: ${msg}`);
     }
   }
 
@@ -216,23 +191,6 @@ export class KeepAliveWorker {
 
     this.cleanupSocket();
 
-    const dId = String(this.options.desktop.desktopId);
-    const yieldStatus = DesktopSessionArbiter.getInstance().getYieldStatus(dId);
-    if (yieldStatus.yielding) {
-      this.log(
-        'info',
-        `桌面处于外部官方客户端主动避让期 (剩余 ${yieldStatus.remainingSeconds}秒)，暂缓建立长连接`,
-      );
-      this.isReconnecting = true;
-      this.options.onStatusChange?.('reconnecting');
-      this.reconnectTimer = setTimeout(() => {
-        this.reconnectTimer = null;
-        this.isReconnecting = false;
-        this.connect();
-      }, Math.max(1000, yieldStatus.remainingSeconds * 1000));
-      return;
-    }
-
     // 凭据有效性前置防御检查
     if (!this.isCertValid(this.options.desktopInfo?.clientCert)) {
       this.log('warn', '检测到长连接凭据证书不完整，准备向官方申请全新凭据...');
@@ -251,8 +209,9 @@ export class KeepAliveWorker {
         } else {
           throw new Error('调度中心未返回有效网关凭据');
         }
-      } catch (e: any) {
-        this.log('warn', `换取长连接凭据提示: ${e.message}`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.log('warn', `换取长连接凭据提示: ${msg}`);
         this.isReconnecting = false;
         const retryDelay = Math.min(5000 * Math.max(1, this.consecutiveFailures), 30000);
         this.reconnectTimer = setTimeout(() => {
@@ -290,8 +249,22 @@ export class KeepAliveWorker {
       
       const isConflict = code === 4001 || reasonStr.includes('preempt') || reasonStr.includes('conflict');
       if (isConflict) {
-        this.log('warn', `检测到云电脑已被外部官方客户端接入 (Code ${code})，系统主动避让 5 分钟，暂停长连接保活`);
-        await DesktopSessionArbiter.getInstance().yieldToExternal(dId, 5, `网关通知外部客户端接入 (Code ${code})`);
+        if (this.heartbeatTimer) {
+          clearInterval(this.heartbeatTimer);
+          this.heartbeatTimer = null;
+        }
+        if (this.handshakeTimeout) {
+          clearTimeout(this.handshakeTimeout);
+          this.handshakeTimeout = null;
+        }
+        this.cleanupSocket();
+        this.isReconnecting = false;
+        this.isPaused = true;
+        this.needsFreshTicket = true;
+        this.log('warn', `检测到官方或前台客户端接入 (${code}, ${reasonStr})，后台保活长连接主动让位暂停`);
+        this.options.onStatusChange?.('paused');
+        this.options.onPreempted?.(code, reasonStr);
+        return;
       }
 
       if (this.heartbeatTimer) {
@@ -304,55 +277,53 @@ export class KeepAliveWorker {
       }
       this.cleanupSocket();
 
-      let retryDelay = isConflict ? 300000 : 5000;
+      let retryDelay = 5000;
 
-      if (!isConflict) {
-        const isConnectionRefused =
-          this.lastGatewayError.includes('connection refused') || this.lastGatewayError.includes('failed to connect');
+      const isConnectionRefused =
+        this.lastGatewayError.includes('connection refused') || this.lastGatewayError.includes('failed to connect');
 
-        if (this.isHandshakeComplete) {
-          // 运行中正常网络断开：重置握手完成标记
-          this.isHandshakeComplete = false;
-          this.consecutiveFailures = 0;
-          this.needsFreshTicket = true;
-          this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
-        } else {
-          // 未完成握手即断开（如网关 1005 关闭或拒接）：累计握手失败计数
-          this.consecutiveFailures++;
-          // 握手失败/被拒接，下次必须强制申请全新 Ticket！天翼云 Ticket 为单次消费凭据，不可复用！
-          this.needsFreshTicket = true;
+      if (this.isHandshakeComplete) {
+        // 运行中正常网络断开：重置握手完成标记
+        this.isHandshakeComplete = false;
+        this.consecutiveFailures = 0;
+        this.needsFreshTicket = true;
+        this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
+      } else {
+        // 未完成握手即断开（如网关 1005 关闭或拒接）：累计握手失败计数
+        this.consecutiveFailures++;
+        // 握手失败/被拒接，下次必须强制申请全新 Ticket！天翼云 Ticket 为单次消费凭据，不可复用！
+        this.needsFreshTicket = true;
 
-          if (isConnectionRefused) {
-            // connection refused 说明云电脑服务正在冷启动中 (端口 7003 尚未就绪)
-            // 采用平滑阶梯退避 (3s -> 5s -> 10s)，每次重新申请全新 Ticket 接入
-            if (this.consecutiveFailures <= 2) {
-              retryDelay = 3000;
-            } else if (this.consecutiveFailures <= 4) {
-              retryDelay = 5000;
-            } else {
-              retryDelay = 10000;
-            }
-            this.log('info', `云电脑服务正在拉起就绪中，${retryDelay / 1000}秒后申请全新凭据接入长连接 (连续重试 ${this.consecutiveFailures} 次)...`);
+        if (isConnectionRefused) {
+          // connection refused 说明云电脑服务正在冷启动中 (端口 7003 尚未就绪)
+          // 采用平滑阶梯退避 (3s -> 5s -> 10s)，每次重新申请全新 Ticket 接入
+          if (this.consecutiveFailures <= 2) {
+            retryDelay = 3000;
+          } else if (this.consecutiveFailures <= 4) {
+            retryDelay = 5000;
           } else {
-            // 阶梯指数退避：5s -> 10s -> 20s -> 30s，最高 60s
-            if (this.consecutiveFailures === 1) {
-              retryDelay = 5000;
-            } else if (this.consecutiveFailures === 2) {
-              retryDelay = 10000;
-            } else if (this.consecutiveFailures === 3) {
-              retryDelay = 20000;
-            } else if (this.consecutiveFailures === 4) {
-              retryDelay = 30000;
-            } else {
-              retryDelay = 60000;
-            }
-
-            const retryDelaySec = Math.round(retryDelay / 1000);
-            this.log(
-              'warn',
-              `长连接握手未完成即断开 (${code}, ${reasonStr || '远程连接关闭'})，${retryDelaySec}秒后换取新凭据重试 (连续重试 ${this.consecutiveFailures} 次)...`,
-            );
+            retryDelay = 10000;
           }
+          this.log('info', `云电脑服务正在拉起就绪中，${retryDelay / 1000}秒后申请全新凭据接入长连接 (连续重试 ${this.consecutiveFailures} 次)...`);
+        } else {
+          // 阶梯指数退避：5s -> 10s -> 20s -> 30s，最高 60s
+          if (this.consecutiveFailures === 1) {
+            retryDelay = 5000;
+          } else if (this.consecutiveFailures === 2) {
+            retryDelay = 10000;
+          } else if (this.consecutiveFailures === 3) {
+            retryDelay = 20000;
+          } else if (this.consecutiveFailures === 4) {
+            retryDelay = 30000;
+          } else {
+            retryDelay = 60000;
+          }
+
+          const retryDelaySec = Math.round(retryDelay / 1000);
+          this.log(
+            'warn',
+            `长连接握手未完成即断开 (${code}, ${reasonStr || '远程连接关闭'})，${retryDelaySec}秒后换取新凭据重试 (连续重试 ${this.consecutiveFailures} 次)...`,
+          );
         }
       }
 
@@ -384,8 +355,9 @@ export class KeepAliveWorker {
 
       try {
         ws.send(JSON.stringify(connectMessage));
-      } catch (err: any) {
-        this.log('error', `发送连接配置失败: ${err.message}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log('error', `发送连接配置失败: ${msg}`);
         ws.close();
         return;
       }
@@ -397,8 +369,9 @@ export class KeepAliveWorker {
           const initialPayload = Buffer.from('UkVEUQIAAAACAAAAGgAAAAAAAAABAAEAAAABAAAAEgAAAAkAAAAECAAA', 'base64');
           ws.send(initialPayload);
           // 注意：此处等待服务端实际协议回包确认，绝不假定握手成功
-        } catch (err: any) {
-          this.log('error', `握手流程异常: ${err.message}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.log('error', `握手流程异常: ${msg}`);
         }
       }, 500);
 
@@ -440,8 +413,9 @@ export class KeepAliveWorker {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(response);
           }
-        } catch (err: any) {
-          this.log('warn', `处理保活校验异常: ${err.message}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.log('error', `保活加密校验处理异常: ${msg}`);
         }
         return;
       }
@@ -497,7 +471,7 @@ export class KeepAliveWorker {
             // 声明为桌面合法拥有者并激活在席 Session，彻底根除网关因空占位触发的 light thread 僵尸回收
             try {
               const msg112 = Protocol.buildMainClientLoginInfo(
-                dId,
+                String(desktop.desktopId),
                 desktopInfo.token || '',
                 '60',
                 this.options.deviceCode || '',
@@ -532,7 +506,6 @@ export class KeepAliveWorker {
             info.type === ClinkMsgType.MSG_MAIN_DESKTOP_LOCKED ||
             info.type === ClinkMsgType.MSG_END_MAIN
           ) {
-            this.log('warn', `收到服务端会话通知 (Type ${info.type})，检测到外部官方客户端接入，系统主动避让 5 分钟`);
             triggerReconnect(4001, `Type ${info.type} preempt`);
             return;
           }

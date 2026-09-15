@@ -43,38 +43,9 @@ onMounted(() => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'init') {
-           store.logs = (data.logs || []).slice(-1000);
+           store.initLogs(data.logs);
         } else if (data.type === 'log') {
-          const incoming = data.log;
-          // 智能折叠：在当前末尾连续心跳波次（Block）内寻找同款心跳折叠，遇到业务日志立即打断
-          const isHeartbeat = incoming.message && incoming.message.includes('发送客户端活跃心跳');
-          let found = false;
-          if (isHeartbeat) {
-            for (let i = store.logs.length - 1; i >= 0; i--) {
-              const item = store.logs[i];
-              const itemIsHeartbeat = item.message && item.message.includes('发送客户端活跃心跳');
-              if (!itemIsHeartbeat) {
-                // 遇到业务/报警日志，停止回溯
-                break;
-              }
-              if (
-                item.id === incoming.id ||
-                (item.message === incoming.message && item.level === incoming.level)
-              ) {
-                const [matched] = store.logs.splice(i, 1);
-                matched.count = incoming.count || (matched.count || 1) + 1;
-                matched.time = incoming.time;
-                store.logs.push(matched);
-                found = true;
-                break;
-              }
-            }
-          }
-
-          if (!found) {
-            store.logs.push(incoming);
-            if (store.logs.length > 1000) store.logs.splice(0, store.logs.length - 1000);
-          }
+          store.appendLog(data.log);
         }
         scrollToBottom();
       } catch {}
@@ -131,7 +102,7 @@ onUnmounted(() => {
     >
       <div v-if="store.logs.length === 0" class="flex flex-col items-center justify-center h-full text-muted-foreground/60 gap-2">
         <Terminal class="size-8 stroke-[1.5] text-muted-foreground/40" />
-        <p class="text-xs">暂无日志输出，启动保活或签到任务后将在此实时呈现</p>
+        <p class="text-xs">暂无日志输出，启动保活或执行任务后将在此实时呈现</p>
       </div>
 
       <div
