@@ -45,6 +45,12 @@ export interface ManagedDesktopState extends DesktopModel {
   desktopCode: string;
   desktopName: string;
   useStatusText: string;
+  watchdog?: {
+    active: boolean;
+    currentIntervalSec: number;
+    nextProbeSec: number;
+    failRounds: number;
+  };
   yieldStatus?: {
     active?: boolean;
     yielding?: boolean;

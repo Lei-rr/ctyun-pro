@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { Config, getRandomScheduleTime, DEFAULT_REDEEM_CONFIG, type AccountConfig, type TaskConfig, type RedeemConfig } from '../config.js';
 import { CtYunClient, type Desktop, type DesktopInfo, type LoginInfo } from './client.js';
 import { KeepaliveService, type ManagedDesktopState } from '../modules/keepalive/index.js';
+import { WatchdogService } from '../modules/watchdog/index.js';
 import { Logger, type LogItem } from './logger.js';
 import { TaskScheduler, PointsTask, AiChatTask, type PointsSummary } from '../modules/tasks/index.js';
 import { RewardRedeemService, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../modules/reward/index.js';
@@ -10,7 +11,6 @@ import { safeWriteFileSync, sendWebhookNotification, getCstDateString, getCstDat
 import type { DesktopInstanceSummary } from '../types/index.js';
 
 // 核心常量规范定义
-const WATCHDOG_PROBE_INTERVAL_MS = 300000; // 暂停状态下的探针周期: 5 分钟 (300s)
 const POWER_TRACKING_INTERVAL_MS = 20000;  // 电源操作后的轮询追踪周期: 20 秒
 const POWER_TRACKING_MAX_ROUNDS = 15;      // 电源状态轮询最大轮次 (15 * 20s = 5 分钟超时)
 const SAVE_CONFIG_DEBOUNCE_MS = 150;       // 配置落盘防抖延迟: 150 毫秒
@@ -42,6 +42,7 @@ export class ProfileManager {
   private accountStates: Map<string, ManagedAccount> = new Map();
   private logger: Logger = new Logger();
   private keepaliveService: KeepaliveService;
+  private watchdogService: WatchdogService;
   private taskScheduler: TaskScheduler;
   private statusListeners: Set<() => void> = new Set();
 
@@ -56,19 +57,25 @@ export class ProfileManager {
   private reloadDesktopsPromises: Map<string, Promise<void>> = new Map();
   // 电源操作异步状态轮询定时器追踪 (按 desktopCode 跟踪，防止重复轮询及账户卸载后野定时器)
   private powerTrackingTimers: Map<string, NodeJS.Timeout> = new Map();
-  // 暂停状态下看门狗定时器 (按 accountName:desktopId 跟踪，每 5 分钟轮询一次 useStatusText，脱离运行中后唤醒并恢复保活)
-  private pauseWatchdogTimers: Map<string, NodeJS.Timeout> = new Map();
 
   constructor() {
     this.keepaliveService = new KeepaliveService(this.logger, () => this.notifyStatusChange());
+    this.watchdogService = new WatchdogService({
+      profileManager: this,
+      logger: this.logger,
+    });
     this.taskScheduler = new TaskScheduler(this, this.logger);
     this.loadFromDisk();
     this.taskScheduler.start();
 
-    // 监听保活服务派发的桌面进入 paused 事件，启动轻量 HTTP 休眠自愈看门狗
+    // 监听保活服务派发的桌面进入 paused 事件，启动避让自愈看门狗
     this.keepaliveService.on('desktop:paused', ({ accountName, desktopId }) => {
-      this.startPauseWatchdog(accountName, desktopId);
+      this.watchdogService.startWatchdog(accountName, desktopId);
     });
+  }
+
+  public getWatchdogService(): WatchdogService {
+    return this.watchdogService;
   }
 
   public getKeepaliveService(): KeepaliveService {
@@ -127,9 +134,9 @@ export class ProfileManager {
     // 1. 立即暂停该单台云电脑的后台保活长连接，并清理看门狗（若存在）
     this.keepaliveService.pauseWorkerForDesktop(matchedAccount, canonicalKey);
     const matchedId = matched?.desktop?.desktopId || canonicalKey;
-    this.clearPauseWatchdog(matchedAccount, String(matchedId));
+    this.watchdogService.stopWatchdog(matchedAccount, String(matchedId));
     if (matched?.desktop?.desktopCode) {
-      this.clearPauseWatchdog(matchedAccount, String(matched.desktop.desktopCode));
+      this.watchdogService.stopWatchdog(matchedAccount, String(matched.desktop.desktopCode));
     }
   }
 
@@ -380,7 +387,26 @@ export class ProfileManager {
       }
     }
     return Array.from(this.accountStates.values()).map((state) => {
-      return this.sanitizeAccount(state);
+      const sanitized = this.sanitizeAccount(state);
+      if (sanitized.desktops && sanitized.name) {
+        sanitized.desktops = sanitized.desktops.map((d) => {
+          const dKey = String(d.desktopCode || d.desktopId || '');
+          const info = this.watchdogService.getWatchdogInfo(sanitized.name, dKey);
+          if (info) {
+            return {
+              ...d,
+              watchdog: {
+                active: true,
+                currentIntervalSec: info.currentIntervalSec,
+                nextProbeSec: info.nextProbeSec,
+                failRounds: info.failRounds,
+              },
+            };
+          }
+          return d;
+        });
+      }
+      return sanitized;
     });
   }
 
@@ -448,7 +474,7 @@ export class ProfileManager {
     }
 
     // 开启前清理该账号名下可能存在的休眠自愈看门狗定时器
-    this.clearPauseWatchdogsForAccount(accountName);
+    this.watchdogService.stopWatchdogsForAccount(accountName);
 
     // 立即秒级更新状态并广播通知前端，避免用户等待外部网络 I/O
     acc.autoStart = true;
@@ -476,7 +502,7 @@ export class ProfileManager {
     // 停止长连接
     this.keepaliveService.stopWorkers(accountName);
     // 彻底停止：清除该账号名下所有看门狗定时器，彻底静默，绝不探测 HTTP 也绝不发起 WebSocket
-    this.clearPauseWatchdogsForAccount(accountName);
+    this.watchdogService.stopWatchdogsForAccount(accountName);
 
     const state = this.accountStates.get(accountName);
     if (state) {
@@ -492,14 +518,11 @@ export class ProfileManager {
   public async stopAll(): Promise<void> {
     this.taskScheduler.stop();
     this.keepaliveService.stopAll();
+    this.watchdogService.stopAll();
     for (const [, timer] of this.powerTrackingTimers.entries()) {
       clearInterval(timer);
     }
     this.powerTrackingTimers.clear();
-    for (const [, timer] of this.pauseWatchdogTimers.entries()) {
-      clearInterval(timer);
-    }
-    this.pauseWatchdogTimers.clear();
     for (const [, timer] of this.webReleaseTimers.entries()) {
       clearTimeout(timer);
     }
@@ -673,135 +696,6 @@ export class ProfileManager {
   }
 
   /**
-   * 启动暂停状态下的 5 分钟（300s）轻量 HTTP 看门狗探针
-   * 探测 useStatusText，若脱离“运行中”（虚拟机休眠或关机），自动触发开机唤醒并恢复保活长连
-   */
-  private startPauseWatchdog(accountName: string, desktopId: string): void {
-    const key = `${accountName}:${desktopId}`;
-    if (this.pauseWatchdogTimers.has(key)) return;
-
-    const matched = this.findDesktopByCode(desktopId);
-    const dPrefix = matched?.desktop ? `${accountName} - ${matched.desktop.desktopName || matched.desktop.desktopCode}` : accountName;
-    this.logger.addLog('info', `[${dPrefix}] 官方客户端在线，后台长连接暂停让位 (启动 5 分钟休眠看门狗探针)`);
-
-    const timer = setInterval(async () => {
-      try {
-        const acc = this.accounts.get(accountName);
-        const state = this.accountStates.get(accountName);
-        if (!acc || !state) {
-          this.clearPauseWatchdog(accountName, desktopId);
-          return;
-        }
-
-        // 查找目标桌面
-        const target = state.desktops.find(
-          (item: ManagedDesktopState) => String(item.desktopId) === String(desktopId) || String(item.desktopCode) === String(desktopId),
-        );
-        if (!target) {
-          this.clearPauseWatchdog(accountName, desktopId);
-          return;
-        }
-
-        // 若当前桌面已不在 paused 状态（例如被手动启动或彻底停止），退出看门狗
-        if (target.status !== 'paused') {
-          this.clearPauseWatchdog(accountName, desktopId);
-          return;
-        }
-
-        const client = this.getClient(accountName);
-        if (!client.loginInfo) return;
-
-        // 通过轻量 getDesktopState / getDesktopList 查询官方实时状态
-        const objType = typeof target?.objType === 'number' ? target.objType : 0;
-        let realStatusText = '';
-        let isSessionActive = true;
-
-        try {
-          const stateInfo = await client.getDesktopState(desktopId, objType);
-          if (stateInfo) {
-            realStatusText = stateInfo.useStatusText || '';
-            // useStatus 20 表示未连接/无活跃会话
-            if (String(stateInfo.useStatus) === '20' || String(stateInfo.desktopState) === '20') {
-              isSessionActive = false;
-            }
-          }
-        } catch {}
-
-        if (!realStatusText) {
-          const pageRes = await client.getDesktopList();
-          const matched = pageRes?.find(
-            (item: Desktop) => String(item.desktopId) === String(desktopId) || String(item.desktopCode) === String(desktopId),
-          );
-          if (!matched) return;
-          realStatusText = matched.useStatusText || '';
-          if (String(matched.useStatus) === '20' || String(matched.status) === '20') {
-            isSessionActive = false;
-          }
-        }
-
-        target.useStatusText = realStatusText;
-        this.notifyStatusChange();
-
-        // 若云电脑脱离活跃运行态（检测到关机、休眠、状态 20 等），立即自动自愈唤醒并恢复长连
-        const isNotRunning = !realStatusText.includes('运行') && !realStatusText.includes('使用');
-        if (!isSessionActive || isNotRunning) {
-          this.logger.addLog(
-            'info',
-            `[${accountName} - ${target.desktopName || target.desktopCode}] 看门狗检测到云电脑脱离外部活跃占用 (${realStatusText || '无活跃会话'})，触发自动恢复保活...`,
-          );
-
-          // 清除看门狗定时器
-          this.clearPauseWatchdog(accountName, desktopId);
-
-          // 自动调用开机唤醒（若关机/休眠）
-          try {
-            await client.operateDesktop(target.desktopCode || desktopId, 'on');
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            this.logger.addLog('warn', `[${accountName}] 自愈开机指令提示: ${msg}`);
-          }
-
-          // 恢复保活状态并唤醒 Worker 长连
-          acc.autoStart = true;
-          this.saveToDisk();
-          state.status = 'online';
-          target.status = 'connecting';
-          this.notifyStatusChange();
-
-          // 缓冲 3 秒等端口就绪后精准恢复长连
-          setTimeout(async () => {
-            await this.keepaliveService.resumeWorkerForDesktop(accountName, target.desktopCode || desktopId);
-          }, 3000);
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.logger.addLog('warn', `[${accountName}] 看门狗探针检测异常: ${msg}`);
-      }
-    }, WATCHDOG_PROBE_INTERVAL_MS);
-
-    this.pauseWatchdogTimers.set(key, timer);
-  }
-
-  private clearPauseWatchdog(accountName: string, desktopId: string): void {
-    const key = `${accountName}:${desktopId}`;
-    const timer = this.pauseWatchdogTimers.get(key);
-    if (timer) {
-      clearInterval(timer);
-      this.pauseWatchdogTimers.delete(key);
-    }
-  }
-
-  private clearPauseWatchdogsForAccount(accountName: string): void {
-    const prefix = `${accountName}:`;
-    for (const [key, timer] of this.pauseWatchdogTimers.entries()) {
-      if (key.startsWith(prefix)) {
-        clearInterval(timer);
-        this.pauseWatchdogTimers.delete(key);
-      }
-    }
-  }
-
-  /**
    * 电源操作（开机/关机/重启）后异步轮询官方最新真实状态
    */
   private trackDesktopStatusAfterPower(
@@ -905,7 +799,7 @@ export class ProfileManager {
     const client = this.clients.get(realOldName);
 
     this.keepaliveService.stopWorkers(realOldName);
-    this.clearPauseWatchdogsForAccount(realOldName);
+    this.watchdogService.stopWatchdogsForAccount(realOldName);
     this.accounts.delete(realOldName);
     this.accountStates.delete(realOldName);
     if (client) this.clients.delete(realOldName);
@@ -1152,7 +1046,7 @@ export class ProfileManager {
     // 2. 停止该账号下的所有保活信道与心跳 Worker
     this.keepaliveService.stopWorkers(name);
     // 3. 清理该账号下的休眠自愈看门狗定时器
-    this.clearPauseWatchdogsForAccount(name);
+    this.watchdogService.stopWatchdogsForAccount(name);
     // 4. 清理今日积分与告警缓存
     this.todayPointsCache.delete(name);
     this.expiredNotifiedAccounts.delete(name);

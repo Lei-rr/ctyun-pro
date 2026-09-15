@@ -11,6 +11,12 @@ export interface Desktop {
   useStatusText: string;
   status: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'paused' | 'stopped';
   lastHeartbeat?: string;
+  watchdog?: {
+    active: boolean;
+    currentIntervalSec: number;
+    nextProbeSec: number;
+    failRounds: number;
+  };
   yieldStatus?: {
     yielding: boolean;
     remainingSeconds: number;

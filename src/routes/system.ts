@@ -9,6 +9,46 @@ export const systemRoutes: FastifyPluginAsync<{
 }> = async (fastify, { manager, authContext }) => {
   const { verifyAuth } = authContext;
 
+  // 0. 容器健康检查与监控探针接口 (无需鉴权，供 Docker / K8s / 探针使用)
+  fastify.get('/api/health', async () => {
+    const summary = manager.getAccountsSummary();
+    const totalAccounts = summary.length;
+    let totalDesktops = 0;
+    let onlineDesktops = 0;
+    let pausedDesktops = 0;
+
+    for (const acc of summary) {
+      if (acc.desktops) {
+        totalDesktops += acc.desktops.length;
+        for (const d of acc.desktops) {
+          if (d.status === 'running') onlineDesktops++;
+          if (d.status === 'paused') pausedDesktops++;
+        }
+      }
+    }
+
+    const activeWatchdogs = manager.getWatchdogService().getActiveCount();
+    const memUsage = process.memoryUsage();
+
+    return {
+      status: 'healthy',
+      uptime: Math.floor(process.uptime()),
+      timestamp: getCstDateTimeString(),
+      metrics: {
+        totalAccounts,
+        totalDesktops,
+        onlineDesktops,
+        pausedDesktops,
+        activeWatchdogs,
+        memory: {
+          rssMb: Math.round(memUsage.rss / 1024 / 1024),
+          heapUsedMb: Math.round(memUsage.heapUsed / 1024 / 1024),
+          heapTotalMb: Math.round(memUsage.heapTotal / 1024 / 1024),
+        },
+      },
+    };
+  });
+
   // 1. 获取系统状态 & 账号列表
   fastify.get('/api/status', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;

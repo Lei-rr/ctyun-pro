@@ -452,7 +452,7 @@ onUnmounted(() => {
                           :class="desktop.yieldStatus?.yielding ? 'bg-purple-500' : (desktop.status === 'connected' ? 'bg-emerald-500 animate-pulse' : (desktop.status === 'connecting' ? 'bg-amber-400 animate-ping' : (desktop.status === 'paused' ? 'bg-amber-500' : 'bg-muted-foreground/30')))"
                         ></span>
                         <span :class="desktop.yieldStatus?.yielding ? 'text-purple-600 dark:text-purple-400' : (desktop.status === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : (desktop.status === 'paused' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'))" class="truncate">
-                           {{ desktop.yieldStatus?.yielding ? '主动避让' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : (desktop.status === 'paused' ? '已暂停(探针)' : '已停止')) }}
+                           {{ desktop.yieldStatus?.yielding ? '主动避让' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : (desktop.status === 'paused' ? (desktop.watchdog?.nextProbeSec ? `避让中(${desktop.watchdog.nextProbeSec}s)` : '避让探针中') : '已停止')) }}
                         </span>
                       </div>
                     </TableCell>
@@ -565,7 +565,7 @@ onUnmounted(() => {
                     :class="desktop.yieldStatus?.yielding ? 'bg-purple-500' : (desktop.status === 'connected' ? 'bg-emerald-500 animate-pulse' : (desktop.status === 'connecting' ? 'bg-amber-400 animate-ping' : (desktop.status === 'paused' ? 'bg-amber-500' : 'bg-muted-foreground/30')))"
                   ></span>
                   <span :class="desktop.yieldStatus?.yielding ? 'text-purple-600 dark:text-purple-400' : (desktop.status === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : (desktop.status === 'paused' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'))">
-                     {{ desktop.yieldStatus?.yielding ? '主动避让' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : (desktop.status === 'paused' ? '已暂停(探针)' : '已停止')) }}
+                     {{ desktop.yieldStatus?.yielding ? '主动避让' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : (desktop.status === 'paused' ? (desktop.watchdog?.nextProbeSec ? `避让中(${desktop.watchdog.nextProbeSec}s)` : '避让探针中') : '已停止')) }}
                   </span>
                 </div>
                 <div class="inline-flex items-center gap-1">
