@@ -5,6 +5,7 @@ import { useAppStore, type Account } from '@/stores/app';
 import {
   Monitor,
   User,
+  Users,
   Play,
   Square,
   Trash2,
@@ -29,6 +30,7 @@ import { Badge } from '@/shared/ui/badge';
 import StatCard from '@/components/common/StatCard.vue';
 import PageHeader from '@/components/common/PageHeader.vue';
 import ManagementBar from '@/components/common/ManagementBar.vue';
+import EmptyState from '@/components/common/EmptyState.vue';
 import AccountRenameDialog from '@/components/dialogs/AccountRenameDialog.vue';
 import PointsTaskDialog from '@/components/dialogs/PointsTaskDialog.vue';
 import PowerOperateDialog, { type PowerTarget } from '@/components/dialogs/PowerOperateDialog.vue';
@@ -41,14 +43,6 @@ import {
   TableBody,
   TableCell,
 } from '@/shared/ui/table';
-import {
-  Empty,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-  EmptyDescription,
-  EmptyContent,
-} from '@/shared/ui/empty';
 
 const store = useAppStore();
 
@@ -287,24 +281,23 @@ onUnmounted(() => {
       @open-points-task="openPointsModal()"
     />
 
-    <!-- 4. 空状态 -->
-    <Empty v-if="filteredAccounts.length === 0" class="border border-dashed border-border/70 rounded-[22px] py-14 bg-card/40">
-      <EmptyHeader>
-        <EmptyMedia variant="icon">
-          <Monitor class="size-7 text-muted-foreground" />
-        </EmptyMedia>
-        <EmptyTitle>{{ store.accounts.length === 0 ? '暂无天翼云账号' : '未匹配到相关账号' }}</EmptyTitle>
-        <EmptyDescription>
-          {{ store.accounts.length === 0 ? '接入天翼云账号后，系统将自动识别验证码、绑定设备并建立云电脑 WebSocket 保活' : '请尝试调整搜索关键字' }}
-        </EmptyDescription>
-      </EmptyHeader>
-      <EmptyContent v-if="store.accounts.length === 0">
-        <Button size="sm" class="rounded-full px-4 gap-1.5 shadow-xs cursor-pointer" @click="store.openAddModal()">
-          <Plus class="size-4" />
-          立即添加账号
-        </Button>
-      </EmptyContent>
-    </Empty>
+    <!-- 4. 空状态 (WorkBuddy EmptyState 风格) -->
+    <EmptyState
+      v-if="filteredAccounts.length === 0"
+      :icon="Users"
+      :title="store.accounts.length === 0 ? '暂无天翼云账号' : '未匹配到相关账号'"
+      :description="store.accounts.length === 0 ? '点击「添加账号」输入手机号与验证码，系统将自动绑定设备并建立云电脑保活' : '请尝试调整搜索关键字'"
+      className="flex flex-col items-center justify-center py-16 text-center border border-dashed border-border/70 rounded-[20px] bg-card/40 my-4"
+    >
+      <Button
+        v-if="store.accounts.length === 0"
+        class="mt-4 rounded-full px-5 cursor-pointer shadow-xs gap-1.5"
+        @click="store.openAddModal()"
+      >
+        <Plus class="size-4" />
+        添加账号
+      </Button>
+    </EmptyState>
 
     <!-- 5. 账号与云电脑卡片流 (WorkBuddy 20px 圆角毛玻璃卡片) -->
     <div v-else class="space-y-4">

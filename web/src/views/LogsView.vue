@@ -6,6 +6,7 @@ import { Badge } from '@/shared/ui/badge';
 import { Switch } from '@/shared/ui/switch';
 import { Terminal, RotateCcw } from 'lucide-vue-next';
 import PageHeader from '@/components/common/PageHeader.vue';
+import EmptyState from '@/components/common/EmptyState.vue';
 
 const store = useAppStore();
 const logBox = ref<HTMLDivElement | null>(null);
@@ -90,10 +91,13 @@ onUnmounted(() => {
       ref="logBox"
       class="h-[620px] w-full rounded-[20px] bg-card border border-border/50 p-4 sm:p-5 font-mono text-xs overflow-y-auto space-y-1.5 shadow-xs scroll-slim"
     >
-      <div v-if="store.logs.length === 0" class="flex flex-col items-center justify-center h-full text-muted-foreground/60 gap-2">
-        <Terminal class="size-8 stroke-[1.5] text-muted-foreground/40" />
-        <p class="text-xs">暂无日志输出，启动保活或执行任务后将在此实时呈现</p>
-      </div>
+      <EmptyState
+        v-if="store.logs.length === 0"
+        :icon="Terminal"
+        title="暂无日志"
+        description="启动保活或执行任务后将在此实时呈现系统运行输出"
+        className="flex flex-col items-center justify-center h-full text-center py-12"
+      />
 
       <div
         v-for="log in store.logs"

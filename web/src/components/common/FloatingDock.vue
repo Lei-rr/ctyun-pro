@@ -1,164 +1,255 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { ref, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAppStore } from '@/stores/app';
 import { Button } from '@/shared/ui/button';
 import {
   DropdownMenu,
+  DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from '@/shared/ui/dropdown-menu';
 import {
   LayoutDashboard,
   Terminal,
+  RotateCcw,
   Sun,
   Moon,
-  Monitor,
-  Settings2,
-  LogOut,
-  RefreshCw,
-  FolderSync,
+  Laptop,
+  Settings,
   Download,
   Upload,
-  MoreVertical,
+  LogOut,
+  ChevronRight,
+  Menu,
+  X,
 } from 'lucide-vue-next';
-
-defineProps<{
-  theme: 'dark' | 'light' | 'system';
-  unreadCount?: number;
-}>();
-
-const emit = defineEmits<{
-  (e: 'set-theme', mode: 'dark' | 'light' | 'system'): void;
-  (e: 'open-system-config'): void;
-  (e: 'export-profiles'): void;
-  (e: 'trigger-import'): void;
-}>();
 
 const route = useRoute();
 const router = useRouter();
 const store = useAppStore();
 
-const navItems = [
-  {
-    path: '/',
-    label: '控制台',
-    icon: LayoutDashboard,
-  },
-  {
-    path: '/logs',
-    label: '实时日志',
-    icon: Terminal,
-  },
-];
+const emit = defineEmits<{
+  (e: 'open-system-config'): void;
+}>();
 
-const isProfilesActive = computed(() => route.path === '/');
-const isLogsActive = computed(() => route.path === '/logs');
+const isMobileOpen = ref(false);
 
-function handleReloadAll() {
-  store.fetchStatus();
+function toggleMobile() {
+  isMobileOpen.value = !isMobileOpen.value;
+}
+
+function handleRefresh() {
+  store.fetchAccounts();
+  store.fetchLogs();
+}
+
+const themeIcon = computed(() => {
+  if (store.themeMode === 'light') return Sun;
+  if (store.themeMode === 'dark') return Moon;
+  return Laptop;
+});
+
+function cycleTheme() {
+  if (store.themeMode === 'dark') store.setThemeMode('light');
+  else if (store.themeMode === 'light') store.setThemeMode('system');
+  else store.setThemeMode('dark');
+}
+
+function handleExport() {
+  store.exportProfiles();
+}
+
+function triggerImport() {
+  const input = document.getElementById('profile-import-input') as HTMLInputElement;
+  if (input) input.click();
+}
+
+function handleLogout() {
+  store.logout();
+}
+
+function navigateTo(path: string) {
+  router.push(path);
+  isMobileOpen.value = false;
 }
 </script>
 
 <template>
-  <!-- 底部固定容器 (WorkBuddy Floating Dock) -->
-  <div class="fixed bottom-6 inset-x-0 mx-auto max-w-fit px-4 pointer-events-none z-50">
-    <div class="pointer-events-auto flex items-center gap-1.5 p-2 rounded-full bg-background/80 backdrop-blur-xl border border-border/60 shadow-2xl transition-all">
-      <!-- 页面导航项 -->
+  <aside
+    aria-label="快捷导航"
+    class="fixed bottom-6 right-6 z-50 md:left-1/2 md:right-auto md:-translate-x-1/2"
+  >
+    <!-- 桌面端 Dock: 一比一对齐 WorkBuddy FloatingDockDesktop -->
+    <div
+      class="hidden md:flex items-center gap-2 h-16 px-4 pb-3 rounded-full bg-background/70 backdrop-blur-md border border-border/40 shadow-lg shadow-black/10 dark:shadow-white/5"
+    >
+      <!-- 控制台 -->
       <button
-        v-for="item in navItems"
-        :key="item.path"
-        @click="router.push(item.path)"
-        class="relative flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium transition-all duration-200 cursor-pointer select-none"
-        :class="route.path === item.path ? 'bg-muted text-foreground shadow-2xs font-semibold' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'"
+        type="button"
+        @click="navigateTo('/')"
+        class="group relative flex h-10 w-10 items-center justify-center rounded-full transition-all hover:bg-muted/80"
+        :class="route.path === '/' ? 'bg-muted text-primary' : 'text-muted-foreground'"
+        title="控制台"
       >
-        <component :is="item.icon" class="size-4 shrink-0" />
-        <span>{{ item.label }}</span>
-        <span
-          v-if="item.path === '/logs' && unreadCount && unreadCount > 0"
-          class="size-2 rounded-full bg-primary animate-pulse"
-        ></span>
+        <LayoutDashboard class="h-4 w-4 transition-transform group-hover:scale-110" />
+        <span class="sr-only">控制台</span>
       </button>
 
-      <!-- 分隔线 -->
-      <div class="h-4 w-px bg-border/60 mx-1"></div>
-
-      <!-- 快速刷新 -->
-      <Button
-        variant="ghost"
-        size="icon"
-        class="size-8.5 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/70 cursor-pointer"
-        :title="store.loading ? '正在同步数据...' : '手动刷新数据'"
-        @click="handleReloadAll"
+      <!-- 实时日志 -->
+      <button
+        type="button"
+        @click="navigateTo('/logs')"
+        class="group relative flex h-10 w-10 items-center justify-center rounded-full transition-all hover:bg-muted/80"
+        :class="route.path === '/logs' ? 'bg-muted text-primary' : 'text-muted-foreground'"
+        title="实时日志"
       >
-        <RefreshCw class="size-4" :class="{ 'animate-spin': store.loading }" />
-      </Button>
+        <Terminal class="h-4 w-4 transition-transform group-hover:scale-110" />
+        <span
+          v-if="store.unreadLogs"
+          class="absolute top-2 right-2 h-1.5 w-1.5 rounded-full bg-emerald-500 ring-2 ring-background"
+        />
+        <span class="sr-only">实时日志</span>
+      </button>
 
-      <!-- 主题切换 Dropdown -->
+      <!-- 分隔线 (workbuddy divider) -->
+      <div class="h-5 w-px bg-border/60 mx-0.5" />
+
+      <!-- 刷新 -->
+      <button
+        type="button"
+        @click="handleRefresh"
+        class="group relative flex h-10 w-10 items-center justify-center rounded-full text-muted-foreground transition-all hover:bg-muted/80 hover:text-foreground"
+        title="刷新数据"
+      >
+        <RotateCcw class="h-4 w-4 transition-transform group-hover:rotate-180 duration-500" />
+        <span class="sr-only">刷新</span>
+      </button>
+
+      <!-- 主题切换 -->
+      <button
+        type="button"
+        @click="cycleTheme"
+        class="group relative flex h-10 w-10 items-center justify-center rounded-full text-muted-foreground transition-all hover:bg-muted/80 hover:text-foreground"
+        :title="`当前主题: ${store.themeMode}`"
+      >
+        <component :is="themeIcon" class="h-4 w-4 transition-transform group-hover:scale-110" />
+        <span class="sr-only">切换主题</span>
+      </button>
+
+      <!-- 更多运维操作下拉 -->
       <DropdownMenu>
         <DropdownMenuTrigger as-child>
-          <Button
-            variant="ghost"
-            size="icon"
-            class="size-8.5 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/70 cursor-pointer"
-            title="切换主题"
+          <button
+            type="button"
+            class="group relative flex h-10 w-10 items-center justify-center rounded-full text-muted-foreground transition-all hover:bg-muted/80 hover:text-foreground"
+            title="更多操作"
           >
-            <Sun v-if="theme === 'light'" class="size-4" />
-            <Moon v-else-if="theme === 'dark'" class="size-4" />
-            <Monitor v-else class="size-4" />
-          </Button>
+            <Settings class="h-4 w-4 transition-transform group-hover:rotate-90 duration-300" />
+            <span class="sr-only">更多操作</span>
+          </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="center" side="top" :side-offset="12" class="w-32 rounded-2xl p-1 shadow-xl backdrop-blur-xl bg-popover/90 border border-border/50">
-          <DropdownMenuItem class="rounded-xl text-xs gap-2 cursor-pointer" @click="emit('set-theme', 'light')">
-            <Sun class="size-3.5" />
-            <span>浅色模式</span>
+        <DropdownMenuContent align="center" side="top" class="w-48 mb-2 rounded-2xl p-1.5 bg-popover/90 backdrop-blur-md border-border/60 shadow-xl">
+          <DropdownMenuItem @click="emit('open-system-config')" class="rounded-xl cursor-pointer text-xs py-2">
+            <Settings class="mr-2 h-3.5 w-3.5" />
+            系统配置
           </DropdownMenuItem>
-          <DropdownMenuItem class="rounded-xl text-xs gap-2 cursor-pointer" @click="emit('set-theme', 'dark')">
-            <Moon class="size-3.5" />
-            <span>深色模式</span>
+          <DropdownMenuItem @click="handleExport" class="rounded-xl cursor-pointer text-xs py-2">
+            <Download class="mr-2 h-3.5 w-3.5" />
+            导出账号配置
           </DropdownMenuItem>
-          <DropdownMenuItem class="rounded-xl text-xs gap-2 cursor-pointer" @click="emit('set-theme', 'system')">
-            <Monitor class="size-3.5" />
-            <span>跟随系统</span>
+          <DropdownMenuItem @click="triggerImport" class="rounded-xl cursor-pointer text-xs py-2">
+            <Upload class="mr-2 h-3.5 w-3.5" />
+            导入账号配置
           </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <!-- 更多设置与系统运维 Dropdown -->
-      <DropdownMenu>
-        <DropdownMenuTrigger as-child>
-          <Button
-            variant="ghost"
-            size="icon"
-            class="size-8.5 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/70 cursor-pointer"
-            title="更多选项与设置"
-          >
-            <MoreVertical class="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" side="top" :side-offset="12" class="w-48 rounded-2xl p-1.5 shadow-xl backdrop-blur-xl bg-popover/90 border border-border/50">
-          <DropdownMenuItem class="rounded-xl text-xs gap-2 cursor-pointer" @click="emit('open-system-config')">
-            <Settings2 class="size-3.5 text-muted-foreground" />
-            <span>系统设置与 Webhook</span>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator class="my-1 bg-border/40" />
-          <DropdownMenuItem class="rounded-xl text-xs gap-2 cursor-pointer" @click="emit('export-profiles')">
-            <Download class="size-3.5 text-muted-foreground" />
-            <span>导出账号配置 (JSON)</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem class="rounded-xl text-xs gap-2 cursor-pointer" @click="emit('trigger-import')">
-            <Upload class="size-3.5 text-muted-foreground" />
-            <span>导入账号配置 (JSON)</span>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator class="my-1 bg-border/40" />
-          <DropdownMenuItem class="rounded-xl text-xs gap-2 cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10" @click="store.logout()">
-            <LogOut class="size-3.5" />
-            <span>退出管理会话</span>
+          <DropdownMenuSeparator class="bg-border/50 my-1" />
+          <DropdownMenuItem @click="handleLogout" class="rounded-xl cursor-pointer text-xs py-2 text-rose-500 focus:text-rose-500">
+            <LogOut class="mr-2 h-3.5 w-3.5" />
+            退出登录
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
-  </div>
+
+    <!-- 手机端 Dock: 一比一对齐 WorkBuddy FloatingDockMobile (折叠圆钮 + 弹出纵向胶囊) -->
+    <div class="relative block md:hidden">
+      <!-- 展开的菜单 -->
+      <Transition
+        enter-active-class="transition duration-200 ease-out"
+        enter-from-class="transform opacity-0 translate-y-2 scale-95"
+        enter-to-class="transform opacity-100 translate-y-0 scale-100"
+        leave-active-class="transition duration-150 ease-in"
+        leave-from-class="transform opacity-100 translate-y-0 scale-100"
+        leave-to-class="transform opacity-0 translate-y-2 scale-95"
+      >
+        <div
+          v-if="isMobileOpen"
+          class="absolute bottom-full right-0 mb-3 flex flex-col items-center gap-2 p-2 rounded-2xl bg-background/80 backdrop-blur-xl border border-border/50 shadow-2xl ring-1 ring-white/10"
+        >
+          <!-- 控制台 -->
+          <button
+            type="button"
+            @click="navigateTo('/')"
+            class="flex h-10 w-10 items-center justify-center rounded-full transition-colors"
+            :class="route.path === '/' ? 'bg-primary text-primary-foreground' : 'bg-muted/60 text-foreground'"
+          >
+            <LayoutDashboard class="h-4 w-4" />
+          </button>
+
+          <!-- 实时日志 -->
+          <button
+            type="button"
+            @click="navigateTo('/logs')"
+            class="relative flex h-10 w-10 items-center justify-center rounded-full transition-colors"
+            :class="route.path === '/logs' ? 'bg-primary text-primary-foreground' : 'bg-muted/60 text-foreground'"
+          >
+            <Terminal class="h-4 w-4" />
+            <span
+              v-if="store.unreadLogs"
+              class="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-background"
+            />
+          </button>
+
+          <!-- 刷新 -->
+          <button
+            type="button"
+            @click="handleRefresh"
+            class="flex h-10 w-10 items-center justify-center rounded-full bg-muted/60 text-foreground transition-colors hover:bg-muted"
+          >
+            <RotateCcw class="h-4 w-4" />
+          </button>
+
+          <!-- 系统配置 -->
+          <button
+            type="button"
+            @click="emit('open-system-config'); isMobileOpen = false"
+            class="flex h-10 w-10 items-center justify-center rounded-full bg-muted/60 text-foreground transition-colors hover:bg-muted"
+          >
+            <Settings class="h-4 w-4" />
+          </button>
+
+          <!-- 退出 -->
+          <button
+            type="button"
+            @click="handleLogout"
+            class="flex h-10 w-10 items-center justify-center rounded-full bg-rose-500/10 text-rose-500 transition-colors"
+          >
+            <LogOut class="h-4 w-4" />
+          </button>
+        </div>
+      </Transition>
+
+      <!-- 手机端常驻折叠圆钮 (对齐 WorkBuddy 48x48 悬浮毛玻璃球) -->
+      <button
+        type="button"
+        @click="toggleMobile"
+        class="flex h-12 w-12 items-center justify-center rounded-full bg-background/80 backdrop-blur-md border border-border/40 shadow-lg shadow-black/10 dark:shadow-white/5 text-foreground active:scale-95 transition-all"
+        aria-label="切换菜单"
+      >
+        <Menu v-if="!isMobileOpen" class="h-5 w-5 transition-transform" />
+        <X v-else class="h-5 w-5 transition-transform rotate-90" />
+      </button>
+    </div>
+  </aside>
 </template>
