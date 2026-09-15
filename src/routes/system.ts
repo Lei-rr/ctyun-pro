@@ -27,7 +27,7 @@ export const systemRoutes: FastifyPluginAsync<{
       }
     }
 
-    const activeWatchdogs = manager.getWatchdogService().getActiveCount();
+    const activeWatchdogs = manager.getWatchdogService().getActiveWatchdogCount();
     const memUsage = process.memoryUsage();
 
     return {
