@@ -107,6 +107,26 @@ export class KeepaliveService extends EventEmitter {
   }
 
   /**
+   * 暂停单台云电脑的保活 Worker
+   */
+  public pauseWorkerForDesktop(accountName: string, desktopCodeOrId: string): boolean {
+    const list = this.workers.get(accountName);
+    if (!list || list.length === 0) return false;
+
+    for (const w of list) {
+      const d = w.options?.desktop;
+      const targetKey = d?.desktopCode || String(d?.desktopId || '');
+      if (targetKey === desktopCodeOrId || String(d?.desktopId) === desktopCodeOrId) {
+        try {
+          w.pause();
+          return true;
+        } catch {}
+      }
+    }
+    return false;
+  }
+
+  /**
    * 恢复单台云电脑的保活 Worker 并安全重新申请仲裁租约与全新凭证
    */
   public async resumeWorkerForDesktop(accountName: string, desktopCodeOrId: string): Promise<boolean> {

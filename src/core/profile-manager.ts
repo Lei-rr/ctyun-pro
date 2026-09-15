@@ -195,7 +195,10 @@ export class ProfileManager {
       this.webReleaseTimers.delete(canonicalKey);
     }
 
-    // 仲裁器注册 Web 直连高优先级租约（带 TTL 自动防死锁），驱逐所有后台长连接
+    // 1. 立即暂停该单台云电脑的后台保活长连接
+    this.keepaliveService.pauseWorkerForDesktop(matchedAccount, canonicalKey);
+
+    // 2. 仲裁器注册 Web 直连高优先级租约（带 TTL 自动防死锁），驱逐后台长连接
     const arbiter = DesktopSessionArbiter.getInstance();
     const ttlMs = Math.max(30, Number(durationSec) || 60) * 1000;
     arbiter.acquireLease(canonicalKey, 'web_direct', matchedAccount, async () => {}, ttlMs).catch(() => {});
@@ -214,19 +217,19 @@ export class ProfileManager {
       this.webReleaseTimers.delete(canonicalKey);
     }
 
-    // 引入延迟释放宽限期（Grace Period，默认 10 秒）：
+    // 引入延迟释放宽限期（默认 20 秒）：
     // 浏览器用户刷新网页时会触发 beforeunload 发送 web-close，但 1~2 秒后新页面就会加载并发送 web-active。
-    // 若立即释放租约，后台保活 Worker 会瞬时唤醒发起连接导致天翼云 1005 踢线。
-    const timer = setTimeout(() => {
+    // 宽限期到期后，精准恢复该单台云电脑的保活 Worker
+    const timer = setTimeout(async () => {
       this.webReleaseTimers.delete(canonicalKey);
 
       const arbiter = DesktopSessionArbiter.getInstance();
       arbiter.releaseLease(canonicalKey, 'web_direct', matchedAccount).catch(() => {});
 
-      // 关键恢复：前台直连关闭且宽限期到期后，自动恢复该账号下的保活 Worker 运行
+      // 关键恢复：前台直连关闭且宽限期到期后，精准恢复单台云电脑保活 Worker 运行
       const acc = this.accounts.get(matchedAccount);
       if (acc && acc.autoStart !== false) {
-        this.keepaliveService.resumeWorkers(matchedAccount);
+        await this.keepaliveService.resumeWorkerForDesktop(matchedAccount, canonicalKey);
       }
     }, Math.max(1, delaySec) * 1000);
 
