@@ -89,6 +89,19 @@ export class WatchdogService {
   }
 
   /**
+   * 停止指定账号下所有桌面的看门狗探针
+   */
+  public stopWatchdogsForAccount(accountName: string): void {
+    for (const [key, state] of this.states.entries()) {
+      if (key.startsWith(`${accountName}:`)) {
+        if (state.timer) clearTimeout(state.timer);
+        this.states.delete(key);
+      }
+    }
+    this.profileManager.notifyStatusChange();
+  }
+
+  /**
    * 停止单台桌面的看门狗探针
    */
   public stopWatchdog(accountName: string, desktopId: string): void {
