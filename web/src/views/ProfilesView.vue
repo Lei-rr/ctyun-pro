@@ -17,6 +17,7 @@ import {
   Power,
   RotateCw,
   ExternalLink,
+  Loader2,
 } from 'lucide-vue-next';
 import { Button } from '@/shared/ui/button';
 import { Badge } from '@/shared/ui/badge';
@@ -350,10 +351,12 @@ onUnmounted(() => {
                 variant="secondary"
                 size="sm"
                 class="h-8 px-2.5 text-xs gap-1 cursor-pointer text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
+                :disabled="Boolean(store.accountActionLoading[account.name])"
                 @click="store.accountAction(account.name, 'start')"
                 title="开启后台长连接保活"
               >
-                <Play class="size-3.5 fill-current" />
+                <Loader2 v-if="store.accountActionLoading[account.name] === 'start'" class="size-3.5 animate-spin" />
+                <Play v-else class="size-3.5 fill-current" />
                 开启
               </Button>
 
@@ -363,10 +366,12 @@ onUnmounted(() => {
                 variant="secondary"
                 size="sm"
                 class="h-8 px-2.5 text-xs gap-1 cursor-pointer text-destructive/80 hover:bg-destructive/10"
+                :disabled="Boolean(store.accountActionLoading[account.name])"
                 @click="store.accountAction(account.name, 'stop')"
                 title="彻底停止保活：断开长连接且彻底不发起任何探测，完全静止"
               >
-                <Square class="size-3.5 fill-current" />
+                <Loader2 v-if="store.accountActionLoading[account.name] === 'stop'" class="size-3.5 animate-spin" />
+                <Square v-else class="size-3.5 fill-current" />
                 停止
               </Button>
             </template>
@@ -375,10 +380,12 @@ onUnmounted(() => {
               variant="ghost"
               size="icon"
               class="size-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+              :disabled="Boolean(store.accountActionLoading[account.name])"
               @click="store.accountAction(account.name, 'delete')"
               title="删除账号"
             >
-              <Trash2 class="size-4" />
+              <Loader2 v-if="store.accountActionLoading[account.name] === 'delete'" class="size-4 animate-spin" />
+              <Trash2 v-else class="size-4" />
             </Button>
           </div>
         </div>

@@ -775,6 +775,11 @@ export class ProfileManager {
       if (attempts >= maxAttempts) {
         clearInterval(timer);
         this.powerTrackingTimers.delete(trackingKey);
+        const state = this.accountStates.get(accountName);
+        const target = state?.desktops.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
+        const dName = target?.desktopName || target?.computerName || target?.name || desktopId;
+        const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
+        this.logger.addLog('warn', `[${dPrefix}] 电源操作追踪已达 5 分钟上限，已结束实时追踪`);
         // 超时后执行一次全量刷新校准
         this.reloadDesktops(accountName).catch(() => {});
       }

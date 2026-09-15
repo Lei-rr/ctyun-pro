@@ -617,73 +617,91 @@ export const useAppStore = defineStore('app', () => {
       }
     }
 
-    async function accountAction(accountName: string, action: 'start' | 'stop' | 'delete') {
-      if (action === 'delete') {
-        const confirmed = await confirmDelete(`账号 [${accountName}]`, '删除后将移除所有已配置的保活与云电脑实例信息。');
-        if (!confirmed) return;
-      }
+  const accountActionLoading = ref<Record<string, string>>({});
+  const batchActionLoading = ref(false);
 
-      // 乐观即时更新前端状态，提升丝滑手感，无需等待网络来回
-      const targetAcc = accounts.value.find((a) => a.name === accountName);
-      if (targetAcc) {
-        if (action === 'start') {
-          targetAcc.status = 'online';
-        } else if (action === 'stop') {
-          targetAcc.status = 'idle';
-          if (targetAcc.desktops) {
-            for (const d of targetAcc.desktops) {
-              d.status = 'stopped';
-            }
+  async function accountAction(accountName: string, action: 'start' | 'stop' | 'delete') {
+    if (action === 'delete') {
+      const confirmed = await confirmDelete(`账号 [${accountName}]`, '删除后将移除所有已配置的保活与云电脑实例信息。');
+      if (!confirmed) return;
+    }
+
+    accountActionLoading.value[accountName] = action;
+
+    // 乐观即时更新前端状态，提升丝滑手感，无需等待网络来回
+    const targetAcc = accounts.value.find((a) => a.name === accountName);
+    if (targetAcc) {
+      if (action === 'start') {
+        targetAcc.status = 'online';
+      } else if (action === 'stop') {
+        targetAcc.status = 'idle';
+        if (targetAcc.desktops) {
+          for (const d of targetAcc.desktops) {
+            d.status = 'stopped';
           }
         }
       }
-
-      try {
-        let res: Response;
-        if (action === 'delete') {
-          res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}`, {
-            method: 'DELETE',
-            headers: getHeaders(),
-          });
-        } else if (action === 'start') {
-          res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/start`, {
-            method: 'POST',
-            headers: getHeaders(),
-            body: '{}',
-          });
-        } else if (action === 'stop') {
-          res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/stop`, {
-            method: 'POST',
-            headers: getHeaders(),
-            body: '{}',
-          });
-        } else {
-          res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/sync`, {
-            method: 'POST',
-            headers: getHeaders(),
-            body: '{}',
-          });
-        }
-        const data = await res.json();
-        if (!data.success) {
-          toast.error(data.msg || '操作失败');
-        } else {
-          if (action === 'delete') toast.success(`账号 [${accountName}] 已删除`);
-          else if (action === 'start') toast.success(`账号 [${accountName}] 保活已启动`);
-          else toast.info(`账号 [${accountName}] 保活已彻底停止`);
-        }
-        fetchStatus();
-      } catch (err: any) {
-        toast.error(err.message || '网络请求错误');
-        fetchStatus();
-      }
     }
+
+    try {
+      let res: Response;
+      if (action === 'delete') {
+        res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}`, {
+          method: 'DELETE',
+          headers: getHeaders(),
+        });
+      } else if (action === 'start') {
+        res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/start`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: '{}',
+        });
+      } else if (action === 'stop') {
+        res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/stop`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: '{}',
+        });
+      } else {
+        res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/sync`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: '{}',
+        });
+      }
+      const data = await res.json();
+      if (!data.success) {
+        toast.error(data.msg || '操作失败');
+      } else {
+        if (action === 'delete') toast.success(`账号 [${accountName}] 已删除`);
+        else if (action === 'start') toast.success(`账号 [${accountName}] 保活已启动`);
+        else toast.info(`账号 [${accountName}] 保活已彻底停止`);
+      }
+      fetchStatus();
+    } catch (err: any) {
+      toast.error(err.message || '网络请求错误');
+      fetchStatus();
+    } finally {
+      delete accountActionLoading.value[accountName];
+    }
+  }
 
   async function triggerAll(action: 'start' | 'stop') {
-    for (const a of accounts.value) {
-      await accountAction(a.name, action);
+    if (batchActionLoading.value) return;
+    batchActionLoading.value = true;
+    try {
+      for (let i = 0; i < accounts.value.length; i++) {
+        const a = accounts.value[i];
+        if (i > 0) {
+          // 仿生错峰调度：账号间间隔 800ms，配合后端并发门禁
+          await new Promise((r) => setTimeout(r, 800));
+        }
+        await accountAction(a.name, action);
+      }
+      toast.success(action === 'start' ? '已向所有账号下发保活启动指令' : '已停止所有账号保活');
+    } finally {
+      batchActionLoading.value = false;
     }
-    toast.success(action === 'start' ? '已向所有账号下发保活启动指令' : '已停止所有账号保活');
   }
 
   // 5. 策略设置弹窗
@@ -971,6 +989,9 @@ export const useAppStore = defineStore('app', () => {
     sendSms,
     submitBindDevice,
     accountAction,
+    accountActionLoading,
+    batchActionLoading,
+    triggerAll,
     renameAccount: async (oldName: string, newName: string) => {
       const res = await fetch(`/api/profiles/${encodeURIComponent(oldName)}/rename`, {
         method: 'POST',
@@ -1001,7 +1022,6 @@ export const useAppStore = defineStore('app', () => {
       if (!json.success) throw new Error(json.msg || '获取积分详情失败');
       return json.data;
     },
-    triggerAll,
     connectWebSocket,
     disconnectWebSocket,
     isWsConnected,
