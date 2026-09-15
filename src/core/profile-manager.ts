@@ -195,8 +195,13 @@ export class ProfileManager {
       this.webReleaseTimers.delete(canonicalKey);
     }
 
-    // 1. 立即暂停该单台云电脑的后台保活长连接
+    // 1. 立即暂停该单台云电脑的后台保活长连接，并清理看门狗（若存在）
     this.keepaliveService.pauseWorkerForDesktop(matchedAccount, canonicalKey);
+    const matchedId = matched?.desktop?.desktopId || canonicalKey;
+    this.clearPauseWatchdog(matchedAccount, String(matchedId));
+    if (matched?.desktop?.desktopCode) {
+      this.clearPauseWatchdog(matchedAccount, String(matched.desktop.desktopCode));
+    }
 
     // 2. 仲裁器注册 Web 直连高优先级租约（带 TTL 自动防死锁），驱逐后台长连接
     const arbiter = DesktopSessionArbiter.getInstance();
