@@ -185,8 +185,9 @@ export class RewardRedeemService {
           `[积分不足拦截] 当前可用积分 ${currentPoints} 不足，兑换商品需要 ${resolvedPoints} 积分，已放弃下单`,
         );
       }
-    } catch (err: any) {
-      if (err.message?.includes('[积分不足拦截]')) {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('[积分不足拦截]')) {
         throw err;
       }
     }

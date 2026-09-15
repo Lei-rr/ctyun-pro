@@ -1,0 +1,58 @@
+import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
+import type { ProfileManager } from '../core/index.js';
+import type { AuthContext } from './auth.js';
+
+export const logRoutes: FastifyPluginAsync<{
+  manager: ProfileManager;
+  authContext: AuthContext;
+}> = async (fastify, { manager, authContext }) => {
+  const { verifyAuth, isValidToken, parseCookieToken } = authContext;
+
+  // SSE 实时日志推流 (带 token 验证，兼容同源 Cookie 鉴权)
+  fastify.get('/api/logs/stream', (request: FastifyRequest<{ Querystring: { token?: string } }>, reply) => {
+    const cookieToken = parseCookieToken(request.headers?.cookie);
+    const token = (request.query?.token as string) || cookieToken;
+    if (manager.adminPassword && (!token || !isValidToken(token))) {
+      return reply.code(401).send('Unauthorized');
+    }
+
+    reply.hijack();
+    reply.raw.setHeader('Content-Type', 'text/event-stream');
+    reply.raw.setHeader('Cache-Control', 'no-cache');
+    reply.raw.setHeader('Connection', 'keep-alive');
+    reply.raw.flushHeaders();
+
+    const recent = manager.getRecentLogs();
+    reply.raw.write(`data: ${JSON.stringify({ type: 'init', logs: recent })}\n\n`);
+
+    let closed = false;
+    const unsubscribe = manager.subscribeLogs((log) => {
+      if (closed || reply.raw.writableEnded) return;
+      try {
+        if (log.message === '__CLEAR__') {
+          reply.raw.write(`data: ${JSON.stringify({ type: 'init', logs: [] })}\n\n`);
+        } else {
+          reply.raw.write(`data: ${JSON.stringify({ type: 'log', log })}\n\n`);
+        }
+      } catch {}
+    });
+
+    request.raw.on('close', () => {
+      closed = true;
+      unsubscribe();
+    });
+  });
+
+  // 获取历史日志快照
+  fastify.get('/api/logs', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!verifyAuth(request, reply)) return;
+    return { success: true, data: manager.getRecentLogs() };
+  });
+
+  // 清空服务端日志
+  fastify.post('/api/logs/clear', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!verifyAuth(request, reply)) return;
+    manager.clearLogs();
+    return { success: true };
+  });
+};

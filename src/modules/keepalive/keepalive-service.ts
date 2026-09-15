@@ -1,26 +1,10 @@
+import { EventEmitter } from 'events';
 import type { CtYunClient, Desktop, DesktopInfo } from '../../core/client.js';
 import { KeepAliveWorker } from './worker.js';
 import type { Logger } from '../../core/logger.js';
 import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
-export interface ManagedDesktopState {
-  desktopId: string;
-  desktopName: string;
-  desktopCode: string;
-  useStatusText: string;
-  imageName?: string;
-  flavorName?: string;
-  objType?: number;
-  objId?: string;
-  poolId?: string;
-  isPool?: boolean;
-  status: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
-  lastHeartbeat?: string;
-  yieldStatus?: {
-    yielding: boolean;
-    remainingSeconds: number;
-    reason?: string;
-  };
-}
+import type { ManagedDesktopState } from '../../types/index.js';
+export type { ManagedDesktopState };
 
 /**
  * 现代化静默保活服务模块 (Keepalive Service)
@@ -31,7 +15,7 @@ export interface ManagedDesktopState {
  * 3. 严格 30 秒活跃心跳节奏，心跳日志纯文本格式，支持防刷屏聚合；
  * 4. 遇到挂机任务或前台直连接入，秒级避让，主动挂起或释放。
  */
-export class KeepaliveService {
+export class KeepaliveService extends EventEmitter {
   private workers: Map<string, KeepAliveWorker[]> = new Map();
   private logger: Logger;
   private onStateChange?: () => void;
@@ -40,6 +24,7 @@ export class KeepaliveService {
   private syncWorkersPromises: Map<string, Promise<void>> = new Map();
 
   constructor(logger: Logger, onStateChange?: () => void) {
+    super();
     this.logger = logger;
     this.onStateChange = onStateChange;
     this.arbiter = DesktopSessionArbiter.getInstance();
@@ -54,7 +39,7 @@ export class KeepaliveService {
     if (list) {
       for (const w of list) {
         try {
-          const d = (w as any).options?.desktop;
+          const d = w.options?.desktop;
           const targetKey = d?.desktopCode || String(d?.desktopId || '');
           if (targetKey) {
             this.arbiter.releaseLease(targetKey, 'keepalive', accountName).catch(() => {});
@@ -75,7 +60,7 @@ export class KeepaliveService {
 
     const remaining: KeepAliveWorker[] = [];
     for (const w of list) {
-      const d = (w as any).options?.desktop;
+      const d = w.options?.desktop;
       if (d && (d.desktopCode === desktopCodeOrId || String(d.desktopId) === String(desktopCodeOrId))) {
         try {
           const targetKey = d.desktopCode || String(d.desktopId);
@@ -129,10 +114,10 @@ export class KeepaliveService {
     if (!list || list.length === 0) return false;
 
     for (const w of list) {
-      const d = (w as any).options?.desktop;
+      const d = w.options?.desktop;
       const targetKey = d?.desktopCode || String(d?.desktopId || '');
       if (targetKey === desktopCodeOrId || String(d?.desktopId) === desktopCodeOrId) {
-        const dName = d?.desktopName || (d as any)?.computerName || (d as any)?.name || targetKey;
+        const dName = d?.desktopName || d?.computerName || d?.name || targetKey;
         const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
 
         // 重新获取桌面长连接仲裁租约
@@ -151,7 +136,7 @@ export class KeepaliveService {
         }
 
         this.logger.addLog('info', `[${dPrefix}] 外部避让已安全解除，正在申请全新凭据并唤醒恢复保活长连接...`);
-        (w as any).needsFreshTicket = true;
+        w.needsFreshTicket = true;
         w.resume();
         return true;
       }
@@ -166,7 +151,7 @@ export class KeepaliveService {
     for (const [acc, workers] of this.workers.entries()) {
       for (const w of workers) {
         try {
-          const d = (w as any).options?.desktop;
+          const d = w.options?.desktop;
           const targetKey = d?.desktopCode || String(d?.desktopId || '');
           if (targetKey) {
             this.arbiter.releaseLease(targetKey, 'keepalive', acc).catch(() => {});
@@ -221,7 +206,7 @@ export class KeepaliveService {
     const allActive =
       existingWorkers.length === desktops.length &&
       existingWorkers.length > 0 &&
-      existingWorkers.every((w) => (w as any).isRunning && !(w as any).isPaused);
+      existingWorkers.every((w) => w.isRunning && !w.isPaused);
 
     if (allActive) {
       return;
@@ -231,8 +216,8 @@ export class KeepaliveService {
     if (existingWorkers.length === desktops.length && existingWorkers.length > 0) {
       let anyRecovered = false;
       for (const w of existingWorkers) {
-        if ((w as any).isPaused) {
-          const d = (w as any).options?.desktop;
+        if (w.isPaused) {
+          const d = w.options?.desktop;
           const targetKey = d?.desktopCode || String(d?.desktopId || '');
           if (targetKey && !this.arbiter.isBusy(targetKey)) {
             await this.resumeWorkerForDesktop(accountName, targetKey);
@@ -243,7 +228,7 @@ export class KeepaliveService {
       // 若已有 worker 全部恢复正常，直接返回
       if (
         anyRecovered &&
-        existingWorkers.every((w) => (w as any).isRunning && !(w as any).isPaused)
+        existingWorkers.every((w) => w.isRunning && !w.isPaused)
       ) {
         return;
       }
@@ -257,11 +242,11 @@ export class KeepaliveService {
       const state = desktopStates[i];
 
       const dCode = d.desktopCode || d.desktopId;
-      const dName = d.desktopName || (d as any).computerName || (d as any).name || dCode;
+      const dName = d.desktopName || d.computerName || d.name || dCode;
       const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
       const dIdStr = String(d.desktopId);
 
-      // 外部客户端避让或高优先级独占避让：若桌面正处于智能挂机、前台直连或外部避让中，保活通道暂缓建立
+      // 外部客户端避让或高优先级独占避让：若桌面正处于前台直连或外部避让中，保活通道暂缓建立
       const primaryKey = d.desktopCode || dIdStr;
       if (this.arbiter.isBusy(primaryKey)) {
         const yieldStatus = this.arbiter.getYieldStatus(primaryKey);
@@ -298,11 +283,12 @@ export class KeepaliveService {
         this.logger.addLog('warn', `[${dPrefix}] 当前状态: [${d.useStatusText}]，正在下发自动${actionText}指令...`);
         try {
           await client.operateDesktop(d.desktopId, autoOp);
-        } catch (e: any) {
+        } catch (e) {
           try {
             await client.operateDesktop(d.desktopId, isSleep ? 'on' : 'awake');
           } catch {}
-          this.logger.addLog('warn', `[${dPrefix}] 自动${actionText}提示: ${e.message}`);
+          const msg = e instanceof Error ? e.message : String(e);
+          this.logger.addLog('warn', `[${dPrefix}] 自动${actionText}提示: ${msg}`);
         }
 
         let ready = false;
@@ -333,12 +319,12 @@ export class KeepaliveService {
         try {
           info = await client.connectDesktop(d);
           if (info && info.clinkLvsOutHost) break;
-        } catch (e: any) {
+        } catch (e) {
           if (attempt === maxRetries) {
             this.logger.addLog('warn', `[${dPrefix}] 暂时未能获取到云电脑连接信道，将在下个周期自动重试`);
             break;
           }
-          await new Promise((r) => setTimeout(r, 4000));
+          await new Promise((r) => setTimeout(r, 2000));
         }
       }
 
@@ -356,7 +342,7 @@ export class KeepaliveService {
           'keepalive',
           accountName,
           async () => {
-            // 当被高优先级（挂机或前台直连）抢占时的优雅释放回调
+            // 当被高优先级（前台直连）抢占时的优雅释放回调
             if (workerInstance) {
               workerInstance.pause();
             }
@@ -384,6 +370,9 @@ export class KeepaliveService {
             }
             this.onStateChange?.();
           },
+          onPreempted: (code, reason) => {
+            this.emit('worker:preempted', { accountName, desktopCode: d.desktopCode, desktopId: d.desktopId, code, reason });
+          },
           onHeartbeat: () => {
             if (state) {
               state.lastHeartbeat = new Date().toLocaleTimeString('zh-CN', {
@@ -407,8 +396,9 @@ export class KeepaliveService {
 
         workerInstance.start();
         newWorkers.push(workerInstance);
-      } catch (err: any) {
-        this.logger.addLog('error', `[${dPrefix}] 保活连接建立失败: ${err.message}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.addLog('error', `[${dPrefix}] 保活连接建立失败: ${msg}`);
       }
     }
 

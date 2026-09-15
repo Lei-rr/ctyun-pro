@@ -161,8 +161,9 @@ export class AiChatTask {
       }
 
       return { success: true, message: `官方AI对话已成功完成 (提示词: "${prompt}")` };
-    } catch (err: any) {
-      return { success: false, message: `AI对话交互异常: ${err.message}` };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, message: `AI对话交互异常: ${msg}` };
     }
   }
 }

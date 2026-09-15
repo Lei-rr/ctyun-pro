@@ -243,8 +243,9 @@ export async function sendWebhookNotification(
       timeoutMs: 8000,
     });
     return true;
-  } catch (err: any) {
-    console.error(`[Webhook] 推送失败 (${url}):`, err.message);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[Webhook] 推送失败 (${url}):`, msg);
     return false;
   }
 }

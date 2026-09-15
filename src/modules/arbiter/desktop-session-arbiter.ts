@@ -178,17 +178,18 @@ export class DesktopSessionArbiter extends EventEmitter {
 
     this.emit('yield:triggered', { desktopId: key, until, reason });
 
-    // 若当前持有自动化租约 (keepalive 或 hang)，立即通知持约者让位释放
+    // 若当前持有自动化保活租约 (keepalive)，立即通知持约者让位释放
     const current = this.checkAndEvictExpired(key);
-    if (current && (current.purpose === 'keepalive' || current.purpose === 'hang')) {
+    if (current && current.purpose === 'keepalive') {
       if (current.releaseCallback) {
         try {
           await Promise.race([
             Promise.resolve(current.releaseCallback()),
             new Promise((_, reject) => setTimeout(() => reject(new Error('避让释放旧租约超时')), 3000)),
           ]);
-        } catch (e: any) {
-          this.logger?.addLog('warn', `${prefix} 避让释放旧租约异常: ${e.message}`);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          this.logger?.addLog('warn', `${prefix} 避让释放旧租约异常: ${msg}`);
         }
       }
       this.activeLeases.delete(key);
@@ -305,12 +306,12 @@ export class DesktopSessionArbiter extends EventEmitter {
           return true;
         }
 
-        // 优先级比对
+        // 优先级比对 (web_direct > keepalive)
         const priorityOrder: Record<LeasePurpose, number> = {
           idle: 0,
           keepalive: 1,
-          hang: 2,
-          web_direct: 3,
+          hang: 1, // 历史兼容占位
+          web_direct: 2,
         };
 
         const currentPriority = priorityOrder[currentHolder.purpose] || 0;
@@ -336,8 +337,9 @@ export class DesktopSessionArbiter extends EventEmitter {
               Promise.resolve(currentHolder.releaseCallback()),
               new Promise((_, reject) => setTimeout(() => reject(new Error('释放租约超时')), 3000)),
             ]);
-          } catch (e: any) {
-            this.logger?.addLog('warn', `${prefix} 旧租约释放异常: ${e.message}`);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            this.logger?.addLog('warn', `${prefix} 旧租约释放异常: ${msg}`);
           }
         }
       }
@@ -407,14 +409,14 @@ export class DesktopSessionArbiter extends EventEmitter {
   }
 
   /**
-   * 判定指定桌面当前是否正处于挂机、前台直连或外部客户端避让期
+   * 判定指定桌面当前是否正处于前台直连或外部客户端避让期
    */
   public isBusy(desktopId: string): boolean {
     const { key } = this.resolveDesktop(desktopId);
     const yieldStatus = this.getYieldStatus(key);
     if (yieldStatus.yielding) return true;
     const holder = this.checkAndEvictExpired(key);
-    return holder ? holder.purpose === 'hang' || holder.purpose === 'web_direct' : false;
+    return holder ? holder.purpose === 'web_direct' : false;
   }
 
   /**

@@ -1,4 +1,6 @@
 import path from 'node:path';
+import type { LoginInfo } from './core/client.js';
+import type { ManagedDesktopState } from './types/index.js';
 import fs from 'node:fs';
 
 export const DEFAULT_REDEEM_CONFIG: RedeemConfig = {
@@ -24,7 +26,7 @@ export interface RedeemConfig {
 }
 
 export function getRandomScheduleTime(): string {
-  const hour = Math.floor(Math.random() * 9); // 0 ~ 8 点之间随机
+  const hour = Math.floor(Math.random() * 4) + 2; // 02:00 ~ 06:00 之间随机
   const minute = Math.floor(Math.random() * 60);
   const pad = (n: number) => n.toString().padStart(2, '0');
   return `${pad(hour)}:${pad(minute)}`;
@@ -33,10 +35,7 @@ export function getRandomScheduleTime(): string {
 export interface TaskConfig {
   enabled: boolean; // 是否开启自动做任务
   autoSign?: boolean; // 每日自动签到
-  loginDesktop?: boolean; // 登录 AI 云电脑
-  aiChat?: boolean; // 与 AI 对话
-  keepAliveHang?: boolean; // 智能补时挂机满1小时
-  autoReportActivity?: boolean; // 自动上报事件推进「登录AI云电脑」
+  aiChat?: boolean; // 与 AI 对话 (每日 02:00~06:00 随机错峰执行)
   scheduleTime?: string; // 每日做任务时间 (如 08:30)
   lastRunDate?: string; // 上次执行任务日期 YYYY-MM-DD
   retryDate?: string; // 重试日期
@@ -48,14 +47,16 @@ export interface AccountConfig {
   id?: string; // 全局唯一不可变 UUID (主键)
   name: string; // 账号别名/备注名 (允许重名)
   user: string; // 手机号或账号名
+  password?: string;
+  rawPassword?: string;
   deviceCode?: string;
   autoStart?: boolean;
   autoSign?: boolean; // 每日自动签到开关 (兼容旧配置)
   lastSignDate?: string; // 上次签到日期 YYYY-MM-DD
   taskConfig?: TaskConfig; // 做任务策略设置
   redeemConfig?: RedeemConfig; // 自动兑换策略设置
-  loginInfo?: any;
-  desktops?: any[]; // 本地缓存持久化的云电脑列表快照
+  loginInfo?: LoginInfo;
+  desktops?: ManagedDesktopState[]; // 本地缓存持久化的云电脑列表快照
 }
 
 export interface SystemConfig {

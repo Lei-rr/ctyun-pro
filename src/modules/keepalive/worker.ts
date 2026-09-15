@@ -1,15 +1,16 @@
 import WebSocket from 'ws';
 import { Protocol, ClinkMsgType } from '../../core/protocol.js';
-import type { Desktop, DesktopInfo } from '../../core/client.js';
+import type { Desktop, DesktopInfo, LoginInfo } from '../../core/client.js';
 import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
 
 export interface KeepAliveWorkerOptions {
   accountName: string;
   desktop: Desktop;
   desktopInfo: DesktopInfo;
-  loginInfo: any;
+  loginInfo: LoginInfo;
   deviceCode: string;
-  onStatusChange?: (status: 'connecting' | 'connected' | 'reconnecting' | 'stopped') => void;
+  onStatusChange?: (status: 'connecting' | 'connected' | 'reconnecting' | 'paused' | 'stopped') => void;
+  onPreempted?: (code: number, reason: string) => void;
   onHeartbeat?: () => void;
   onRefreshInfo?: () => Promise<DesktopInfo | null>;
   onLog?: (level: 'info' | 'warn' | 'error' | 'success', msg: string) => void;
@@ -26,16 +27,16 @@ export interface KeepAliveWorkerOptions {
  * 4. 支持 pause() 与 resume() 软暂停/恢复，与挂机任务无缝优雅交接
  */
 export class KeepAliveWorker {
-  private options: KeepAliveWorkerOptions;
+  public readonly options: KeepAliveWorkerOptions;
   private currentWs: WebSocket | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
-  private isRunning = false;
+  public isRunning = false;
   private isReconnecting = false;
-  private isPaused = false;
+  public isPaused = false;
   private isHandshakeComplete = false;
   private consecutiveFailures = 0;
-  private needsFreshTicket = false;
+  public needsFreshTicket = false;
   private lastGatewayError = '';
   private handshakeTimeout: NodeJS.Timeout | null = null;
   private yieldClearedHandler: ((data: { desktopId: string }) => void) | null = null;
@@ -46,7 +47,7 @@ export class KeepAliveWorker {
 
   private get logPrefix(): string {
     const d = this.options.desktop;
-    const dName = d?.desktopName || (d as any)?.computerName || (d as any)?.name || d?.desktopCode || d?.desktopId || '';
+    const dName = d?.desktopName || d?.computerName || d?.name || d?.desktopCode || d?.desktopId || '';
     return dName ? `${this.options.accountName} - ${dName}` : this.options.accountName;
   }
 
@@ -125,7 +126,8 @@ export class KeepAliveWorker {
       this.heartbeatTimer = null;
     }
     this.cleanupSocket();
-    this.log('info', '保活通道已软暂停（让位给任务执行）');
+    this.log('info', '保活通道已暂停');
+    this.options.onStatusChange?.('paused');
   }
 
   /**
@@ -163,8 +165,9 @@ export class KeepAliveWorker {
       this.currentWs.send(hbBuf);
       this.log('info', '发送客户端活跃心跳 (30s 心跳保活)');
       this.options.onHeartbeat?.();
-    } catch (err: any) {
-      this.log('warn', `发送客户端心跳异常: ${err.message}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log('warn', `发送客户端心跳异常: ${msg}`);
     }
   }
 
@@ -247,8 +250,9 @@ export class KeepAliveWorker {
         } else {
           throw new Error('调度中心未返回有效网关凭据');
         }
-      } catch (e: any) {
-        this.log('warn', `换取长连接凭据提示: ${e.message}`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.log('warn', `换取长连接凭据提示: ${msg}`);
         this.isReconnecting = false;
         const retryDelay = Math.min(5000 * Math.max(1, this.consecutiveFailures), 30000);
         this.reconnectTimer = setTimeout(() => {
@@ -296,9 +300,11 @@ export class KeepAliveWorker {
         }
         this.cleanupSocket();
         this.isReconnecting = false;
+        this.isPaused = true;
         this.needsFreshTicket = true;
-        // 外部客户端接入冲突：交由桌面仲裁器统一进行主动避让与前置状态探测，恢复时由事件驱动唤醒
-        await DesktopSessionArbiter.getInstance().yieldToExternal(dId, 5, `网关通知外部客户端接入 (Code ${code})`);
+        this.log('warn', `收到官方客户端在线/挤占信令 (${code}, ${reasonStr})，立即断开长连进入暂停状态`);
+        this.options.onStatusChange?.('paused');
+        this.options.onPreempted?.(code, reasonStr);
         return;
       }
 
@@ -390,8 +396,9 @@ export class KeepAliveWorker {
 
       try {
         ws.send(JSON.stringify(connectMessage));
-      } catch (err: any) {
-        this.log('error', `发送连接配置失败: ${err.message}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log('error', `发送连接配置失败: ${msg}`);
         ws.close();
         return;
       }
@@ -403,8 +410,9 @@ export class KeepAliveWorker {
           const initialPayload = Buffer.from('UkVEUQIAAAACAAAAGgAAAAAAAAABAAEAAAABAAAAEgAAAAkAAAAECAAA', 'base64');
           ws.send(initialPayload);
           // 注意：此处等待服务端实际协议回包确认，绝不假定握手成功
-        } catch (err: any) {
-          this.log('error', `握手流程异常: ${err.message}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.log('error', `握手流程异常: ${msg}`);
         }
       }, 500);
 
@@ -446,8 +454,9 @@ export class KeepAliveWorker {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(response);
           }
-        } catch (err: any) {
-          this.log('warn', `处理保活校验异常: ${err.message}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.log('error', `保活加密校验处理异常: ${msg}`);
         }
         return;
       }

@@ -22,7 +22,7 @@ const store = useAppStore();
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm font-medium text-foreground">每日自动任务</div>
-            <div class="text-xs text-muted-foreground">定时自动完成签到、AI 对话与云电脑挂机</div>
+            <div class="text-xs text-muted-foreground">定时自动完成签到与 AI 对话 (保活长连自然跑满登录与挂机)</div>
           </div>
           <Switch v-model:checked="store.policyTaskEnabled" />
         </div>
@@ -40,10 +40,10 @@ const store = useAppStore();
           <div class="space-y-2 pt-1 text-xs">
             <div class="flex items-center justify-between py-1">
               <div>
-                <span class="text-foreground font-medium">登录 AI 云电脑</span>
+                <span class="text-foreground font-medium">每日签到</span>
                 <span class="text-emerald-500 font-medium ml-1.5">+100分</span>
               </div>
-              <Switch v-model:checked="store.policyLoginDesktop" />
+              <Switch v-model:checked="store.policyAutoSign" />
             </div>
             <div class="flex items-center justify-between py-1">
               <div>
@@ -51,13 +51,6 @@ const store = useAppStore();
                 <span class="text-emerald-500 font-medium ml-1.5">+100分</span>
               </div>
               <Switch v-model:checked="store.policyAiChat" />
-            </div>
-            <div class="flex items-center justify-between py-1">
-              <div>
-                <span class="text-foreground font-medium">使用 1 小时智能补时挂机</span>
-                <span class="text-emerald-500 font-medium ml-1.5">+100分</span>
-              </div>
-              <Switch v-model:checked="store.policyKeepAliveHang" />
             </div>
           </div>
         </div>

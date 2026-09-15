@@ -3,6 +3,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { URL } from 'node:url';
 import type { ProfileManager } from './profile-manager.js';
+import { CtYunClient } from './client.js';
 
 // 官方入口与静态资源全量实时透传代理（不设本地/内存缓存，保障官方前端升级后版本强一致）
 
@@ -78,8 +79,9 @@ async function proxyStaticAsset(reply: FastifyReply, targetUrl: string): Promise
       .header('Content-Type', upstream.contentType)
       .header('Cache-Control', 'no-cache, no-store, must-revalidate')
       .send(upstream.buffer);
-  } catch (err: any) {
-    reply.code(502).send(`Gateway Proxy Error: ${err.message}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    reply.code(502).send(`Gateway Proxy Error: ${msg}`);
   }
 }
 
@@ -89,7 +91,7 @@ async function proxyStaticAsset(reply: FastifyReply, targetUrl: string): Promise
 export function registerDesktopProxyRoutes(
   fastify: FastifyInstance,
   manager: ProfileManager,
-  verifyAuth: (request: any, reply: any) => boolean,
+  verifyAuth: (request: FastifyRequest, reply: FastifyReply) => boolean,
 ): void {
   // 1. 云电脑 Web 免密直通操作视窗 (顶级 RESTful 直连: /desktop/:id)
   const renderDesktopView = async (request: FastifyRequest, reply: FastifyReply) => {
@@ -135,20 +137,20 @@ export function registerDesktopProxyRoutes(
         logined: true,
         userId: client.loginInfo?.userId,
         userName: client.loginInfo?.userName,
-        userEid: (client.loginInfo as any)?.userEid || '',
+        userEid: client.loginInfo?.userEid || '',
         userAccount: client.loginInfo?.userAccount || '',
         mobilephone: client.loginInfo?.mobilephone || accountName,
         tenantId: client.loginInfo?.tenantId,
         secretKey: client.loginInfo?.secretKey,
-        deviceType: (client as any).deviceType || '60',
+        deviceType: CtYunClient.DEVICE_TYPE,
         bondedDevice: true,
-        commonLoginReqHeader: (client.loginInfo as any)?.commonLoginReqHeader || '',
+        commonLoginReqHeader: client.loginInfo?.commonLoginReqHeader || '',
         timestamp: Date.now(),
       };
 
       let html = await getCtyunIndexHtml();
 
-      const safeJson = (val: any) => JSON.stringify(val).replace(/</g, '\\u003c');
+      const safeJson = (val: unknown) => JSON.stringify(val).replace(/</g, '\\u003c');
 
       // 现代化注入脚本：深色质感骨架屏、凭据自动化注水、API 代理拦截、前台 Web 避让心跳保持
       const injectScript = `
@@ -200,7 +202,7 @@ export function registerDesktopProxyRoutes(
 (function() {
   const desktopCode = ${safeJson(desktop.desktopCode)};
   const accountName = ${safeJson(accountName)};
-  const token = ${safeJson((client.loginInfo as any)?.token || '')};
+  const token = ${safeJson(client.loginInfo?.token || '')};
   const authData = ${safeJson(authDataObj)};
   const deviceCode = ${safeJson(client.getDeviceCode())};
   const expiredAt = ${safeJson(String(Date.now() + 72 * 3600 * 1000))};
@@ -469,8 +471,9 @@ export function registerDesktopProxyRoutes(
         .type('text/html; charset=utf-8')
         .header('Cache-Control', 'no-store')
         .send(html);
-    } catch (err: any) {
-      reply.code(500).type('text/html; charset=utf-8').send(`<h3 style="font-family:sans-serif;padding:20px;">连接云电脑服务异常: ${err.message}</h3>`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      reply.code(500).type('text/html; charset=utf-8').send(`<h3 style="font-family:sans-serif;padding:20px;">连接云电脑服务异常: ${msg}</h3>`);
     }
   };
 

@@ -9,7 +9,7 @@ export interface Desktop {
   desktopCode: string;
   desktopName: string;
   useStatusText: string;
-  status: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'stopped';
+  status: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'paused' | 'stopped';
   lastHeartbeat?: string;
   yieldStatus?: {
     yielding: boolean;
@@ -23,6 +23,7 @@ export interface Account {
   user: string;
   deviceCode: string;
   status: 'idle' | 'login_needed' | 'need_sms' | 'online' | 'error';
+  autoStart?: boolean;
   lastError?: string;
   autoSign?: boolean;
   lastSignDate?: string;
@@ -30,7 +31,7 @@ export interface Account {
     enabled?: boolean;
     scheduleTime?: string;
     autoSign?: boolean;
-    autoReportActivity?: boolean;
+    aiChat?: boolean;
     lastRunDate?: string;
   };
   redeemConfig?: {
@@ -45,13 +46,6 @@ export interface Account {
     lastRedeemDate?: string;
   };
   todayPoints?: number;
-  hangStatus?: {
-    running: boolean;
-    startTime?: number;
-    currentProgress?: number;
-    totalProgress?: number;
-    message?: string;
-  };
   desktops: Desktop[];
 }
 
@@ -181,7 +175,7 @@ export const useAppStore = defineStore('app', () => {
       (acc, a) =>
         acc +
         (a.desktops?.filter(
-          (d) => d.status === 'connected' || Boolean(a.hangStatus?.running),
+          (d) => d.status === 'connected',
         )?.length || 0),
       0,
     ),
@@ -616,7 +610,7 @@ export const useAppStore = defineStore('app', () => {
       }
     }
 
-    async function accountAction(accountName: string, action: 'start' | 'stop' | 'delete') {
+    async function accountAction(accountName: string, action: 'start' | 'pause' | 'stop' | 'delete') {
       if (action === 'delete') {
         const confirmed = await confirmDelete(`账号 [${accountName}]`, '删除后将移除所有已配置的保活与云电脑实例信息。');
         if (!confirmed) return;
@@ -627,8 +621,20 @@ export const useAppStore = defineStore('app', () => {
       if (targetAcc) {
         if (action === 'start') {
           targetAcc.status = 'online';
+        } else if (action === 'pause') {
+          targetAcc.status = 'idle';
+          if (targetAcc.desktops) {
+            for (const d of targetAcc.desktops) {
+              d.status = 'paused';
+            }
+          }
         } else if (action === 'stop') {
           targetAcc.status = 'idle';
+          if (targetAcc.desktops) {
+            for (const d of targetAcc.desktops) {
+              d.status = 'stopped';
+            }
+          }
         }
       }
 
@@ -641,6 +647,11 @@ export const useAppStore = defineStore('app', () => {
           });
         } else if (action === 'start') {
           res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/start`, {
+            method: 'POST',
+            headers: getHeaders(),
+          });
+        } else if (action === 'pause') {
+          res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/pause`, {
             method: 'POST',
             headers: getHeaders(),
           });
@@ -661,7 +672,8 @@ export const useAppStore = defineStore('app', () => {
         } else {
           if (action === 'delete') toast.success(`账号 [${accountName}] 已删除`);
           else if (action === 'start') toast.success(`账号 [${accountName}] 保活已启动`);
-          else toast.info(`账号 [${accountName}] 保活已停止`);
+          else if (action === 'pause') toast.info(`账号 [${accountName}] 保活已暂停 (看门狗探测休眠中)`);
+          else toast.info(`账号 [${accountName}] 保活已彻底停止`);
         }
         fetchStatus();
       } catch (err: any) {
@@ -690,9 +702,7 @@ export const useAppStore = defineStore('app', () => {
 
   const policyScheduleTime = ref(getRandomScheduleTime());
   const policyAutoSign = ref(true);
-  const policyLoginDesktop = ref(true);
   const policyAiChat = ref(true);
-  const policyKeepAliveHang = ref(true);
   const policyRedeemEnabled = ref(false);
   const policyScheduleType = ref('interval_days');
   const policyMonthlyDay = ref(28);
@@ -806,9 +816,7 @@ export const useAppStore = defineStore('app', () => {
     policyTaskEnabled.value = t.enabled !== undefined ? t.enabled : (account.autoSign ?? true);
     policyScheduleTime.value = t.scheduleTime || getRandomScheduleTime();
     policyAutoSign.value = t.autoSign !== undefined ? t.autoSign : (account.autoSign ?? true);
-    policyLoginDesktop.value = t.loginDesktop !== undefined ? t.loginDesktop : true;
     policyAiChat.value = t.aiChat !== undefined ? t.aiChat : true;
-    policyKeepAliveHang.value = t.keepAliveHang !== undefined ? t.keepAliveHang : true;
 
     const r = (account.redeemConfig as any) || {};
     policyRedeemEnabled.value = Boolean(r.enabled);
@@ -850,9 +858,7 @@ export const useAppStore = defineStore('app', () => {
             enabled: policyTaskEnabled.value,
             scheduleTime: policyScheduleTime.value || getRandomScheduleTime(),
             autoSign: policyAutoSign.value,
-            loginDesktop: policyLoginDesktop.value,
             aiChat: policyAiChat.value,
-            keepAliveHang: policyKeepAliveHang.value,
           },
           redeemConfig: {
             enabled: policyRedeemEnabled.value,
@@ -897,63 +903,6 @@ export const useAppStore = defineStore('app', () => {
       fetchStatus();
     } catch (e: any) {
       toast.error(e.message || '任务请求异常');
-    }
-  }
-
-  async function manualActivateDesktop(accountName: string) {
-    try {
-      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/hang/start`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ accountName }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        toast.success(json.msg || '智能挂机已启动');
-      } else {
-        toast.error(json.msg || '挂机启动失败');
-      }
-      fetchStatus();
-    } catch (e: any) {
-      toast.error(e.message || '挂机请求异常');
-    }
-  }
-
-  async function manualStopHang(accountName: string) {
-    try {
-      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/hang/stop`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ accountName }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        toast.success(json.msg || '已中止挂机任务');
-      } else {
-        toast.error(json.msg || '中止挂机失败');
-      }
-      fetchStatus();
-    } catch (e: any) {
-      toast.error(e.message || '请求异常');
-    }
-  }
-
-  async function manualLoginDesktopTask(accountName: string) {
-    try {
-      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/login`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ accountName }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        toast.success(json.msg || '云电脑会话激活成功');
-      } else {
-        toast.error(json.msg || '激活失败');
-      }
-      fetchStatus();
-    } catch (e: any) {
-      toast.error(e.message || '请求异常');
     }
   }
 
@@ -1119,9 +1068,7 @@ export const useAppStore = defineStore('app', () => {
     policyTaskEnabled,
     policyScheduleTime,
     policyAutoSign,
-    policyLoginDesktop,
     policyAiChat,
-    policyKeepAliveHang,
     policyRedeemEnabled,
     policyScheduleType,
     policyMonthlyDay,
@@ -1137,9 +1084,6 @@ export const useAppStore = defineStore('app', () => {
     openPolicyModal,
     savePolicy,
     manualRunTasks,
-    manualActivateDesktop,
-    manualStopHang,
-    manualLoginDesktopTask,
     manualAiChatTask,
     manualSignIn,
     manualRedeem,

@@ -2,9 +2,9 @@ import { Protocol } from './protocol.js';
 import { safeFetch } from './utils.js';
 
 export interface ChallengeData {
-  effectiveSeconds: number;
   challengeId: string;
   challengeCode: string;
+  effectiveSeconds?: number;
 }
 
 export interface LoginInfo {
@@ -14,9 +14,12 @@ export interface LoginInfo {
   userId: number;
   tenantId: number;
   userName: string;
+  userEid?: string;
   mobilephone?: string;
   email?: string;
   token?: string;
+  commonLoginReqHeader?: string;
+  [key: string]: unknown;
 }
 
 export interface DesktopInfo {
@@ -44,6 +47,9 @@ export interface Desktop {
   objId?: string;
   poolId?: string;
   isPool?: boolean;
+  name?: string;
+  computerName?: string;
+  [key: string]: unknown;
 }
 
 export interface DesktopStateInfo {
@@ -56,6 +62,22 @@ export interface DesktopStateInfo {
   useStatus?: string | number;
   useStatusText?: string;
   useStatusColor?: string;
+}
+
+export interface RawDesktopItem {
+  desktopId?: string | number;
+  objId?: string | number;
+  poolId?: string | number;
+  desktopName?: string;
+  poolName?: string;
+  desktopCode?: string;
+  useStatusText?: string;
+  useStatus?: number | string;
+  imageName?: string;
+  flavorName?: string;
+  prodGroupName?: string;
+  objType?: number;
+  [key: string]: unknown;
 }
 
 export class CtYunClient {
@@ -372,9 +394,9 @@ export class CtYunClient {
    * 7. 解析聚合云电脑列表 (兼容普通单机 NORMAL、政企桌面池 POOL 与抢占式 Preemption)
    */
   private static parseDesktopItems(data: {
-    desktopList?: any[];
-    desktopPoolList?: any[];
-    preemptionDesktopList?: any[];
+    desktopList?: RawDesktopItem[];
+    desktopPoolList?: RawDesktopItem[];
+    preemptionDesktopList?: RawDesktopItem[];
   }): Desktop[] {
     const results: Desktop[] = [];
 
@@ -385,7 +407,7 @@ export class CtYunClient {
           desktopId: String(item.desktopId || item.objId),
           desktopName: item.desktopName || '天翼云电脑',
           desktopCode: item.desktopCode || '',
-          useStatusText: item.useStatusText || item.useStatus || '运行中',
+          useStatusText: String(item.useStatusText || item.useStatus || '运行中'),
           useStatus: item.useStatus,
           imageName: item.imageName || '',
           flavorName: item.flavorName || item.prodGroupName || '',
@@ -404,7 +426,7 @@ export class CtYunClient {
           desktopId: String(item.desktopId || poolId),
           desktopName: item.poolName || item.desktopName || '天翼云电脑(政企桌面池)',
           desktopCode: item.desktopCode || poolId,
-          useStatusText: item.useStatusText || item.useStatus || '运行中',
+          useStatusText: String(item.useStatusText || item.useStatus || '运行中'),
           useStatus: item.useStatus,
           imageName: item.imageName || '',
           flavorName: item.flavorName || item.prodGroupName || '政企版',
@@ -424,7 +446,7 @@ export class CtYunClient {
           desktopId: String(item.desktopId || objId),
           desktopName: item.desktopName || '天翼云电脑(抢占式)',
           desktopCode: item.desktopCode || objId,
-          useStatusText: item.useStatusText || item.useStatus || '运行中',
+          useStatusText: String(item.useStatusText || item.useStatus || '运行中'),
           useStatus: item.useStatus,
           imageName: item.imageName || '',
           flavorName: item.flavorName || item.prodGroupName || '',
@@ -594,8 +616,9 @@ export class CtYunClient {
         return json.data.desktopInfo;
       }
       throw new Error(json.msg || `官方接口返回异常 (Code ${json.code})`);
-    } catch (e: any) {
-      throw new Error(e.message || '获取连接信息失败');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(msg || '获取连接信息失败');
     }
   }
 

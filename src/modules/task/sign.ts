@@ -1,10 +1,11 @@
 import type { CtYunClient } from '../../core/client.js';
 import { safeFetch } from '../../core/utils.js';
 
-export type TaskType = 'hang' | 'login' | 'chat' | 'other';
+export type TaskType = 'sign' | 'hang' | 'login' | 'chat' | 'other';
 
 export function getTaskType(name: string, totalProgress = 0): TaskType {
   const n = name || '';
+  if (n.includes('签到') || n.includes('打卡')) return 'sign';
   // 1. 登录类任务 (优先判定，严格与挂机时长任务隔离)
   if (n.includes('登录')) return 'login';
 
@@ -21,10 +22,6 @@ export function getTaskType(name: string, totalProgress = 0): TaskType {
   }
 
   return 'other';
-}
-
-export function isHangTaskName(name: string, totalProgress = 0): boolean {
-  return getTaskType(name, totalProgress) === 'hang';
 }
 
 export interface TaskItem {
@@ -114,8 +111,8 @@ export class SignTask {
         } else {
           lastRecErr = `HTTP ${recRes.status}`;
         }
-      } catch (e: any) {
-        lastRecErr = e.message;
+      } catch (e) {
+        lastRecErr = e instanceof Error ? e.message : String(e);
       }
       if (attempt < 3) await new Promise((r) => setTimeout(r, 1500));
     }

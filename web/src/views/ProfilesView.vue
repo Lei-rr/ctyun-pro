@@ -6,6 +6,7 @@ import {
   Monitor,
   User,
   Play,
+  Pause,
   Square,
   Trash2,
   Settings2,
@@ -148,22 +149,12 @@ function parseDesktopSpec(desktop: any): string {
   return spec;
 }
 
-// 挂机秒级平滑自增计时器 (按秒累加进度)
-let hangSecondTimer: any = null;
+// 避让秒级平滑自减计时器
+let yieldSecondTimer: any = null;
 
 onMounted(() => {
-  hangSecondTimer = setInterval(() => {
+  yieldSecondTimer = setInterval(() => {
     for (const acc of store.accounts) {
-      if (acc.hangStatus?.running) {
-        const cur = acc.hangStatus.currentProgress || 0;
-        const tot = acc.hangStatus.totalProgress || 3600;
-        if (cur + 1 < tot) {
-          acc.hangStatus.currentProgress = cur + 1;
-        } else {
-          // 达标即刻清空，杜绝 3600/3600 滞留卡片假死
-          acc.hangStatus = undefined;
-        }
-      }
       if (acc.desktops && Array.isArray(acc.desktops)) {
         for (const dt of acc.desktops) {
           if (dt.yieldStatus?.yielding) {
@@ -181,9 +172,9 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  if (hangSecondTimer) {
-    clearInterval(hangSecondTimer);
-    hangSecondTimer = null;
+  if (yieldSecondTimer) {
+    clearInterval(yieldSecondTimer);
+    yieldSecondTimer = null;
   }
 });
 </script>
@@ -281,19 +272,19 @@ onUnmounted(() => {
                   variant="secondary"
                   class="h-5 shrink-0 px-2 text-[11px] font-normal flex items-center gap-1.5"
                   :class="{
-                    'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': account.status === 'online' || account.hangStatus?.running,
-                    'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': account.status === 'login_needed' || account.status === 'need_sms',
+                    'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': account.status === 'online',
+                    'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': account.status === 'login_needed' || account.status === 'need_sms' || (account.desktops && account.desktops.some(d => d.status === 'paused')),
                     'bg-destructive/10 text-destructive border border-destructive/20': account.status === 'error',
                   }"
                 >
                   <span
-                    v-if="account.status === 'online' || account.hangStatus?.running"
+                    v-if="account.status === 'online'"
                     class="relative flex size-1.5 shrink-0"
                   >
                     <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
                     <span class="relative inline-flex size-1.5 rounded-full bg-emerald-500"></span>
                   </span>
-                  <span>{{ account.hangStatus?.running ? '挂机中' : (account.status === 'online' ? '保活中' : account.status === 'idle' ? '就绪' : account.status === 'error' ? '异常' : '需认证') }}</span>
+                  <span>{{ account.desktops && account.desktops.some(d => d.status === 'paused') ? '暂停探测中' : (account.status === 'online' ? '保活中' : account.status === 'idle' ? '已停止' : account.status === 'error' ? '异常' : '需认证') }}</span>
                 </Badge>
                  <Badge v-if="account.taskConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
                    每日任务 ({{ account.taskConfig?.scheduleTime || '随机时间' }})
@@ -332,6 +323,7 @@ onUnmounted(() => {
               策略设置
             </Button>
 
+            <!-- 认证异常状态 -->
             <Button
               v-if="account.status === 'login_needed' || account.status === 'need_sms'"
               size="sm"
@@ -341,27 +333,47 @@ onUnmounted(() => {
               去认证
             </Button>
 
-            <Button
-              v-else-if="account.status !== 'online'"
-              variant="secondary"
-              size="sm"
-              class="h-8 px-3 text-xs gap-1.5 cursor-pointer text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
-              @click="store.accountAction(account.name, 'start')"
-            >
-              <Play class="size-3.5 fill-current" />
-              保活
-            </Button>
+            <!-- 三态控制按钮组：开启 / 暂停 / 停止 -->
+            <template v-else>
+              <!-- 开启保活按钮 (非 online 状态均可点击开启) -->
+              <Button
+                v-if="account.status !== 'online'"
+                variant="secondary"
+                size="sm"
+                class="h-8 px-2.5 text-xs gap-1 cursor-pointer text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
+                @click="store.accountAction(account.name, 'start')"
+                title="开启后台长连接保活"
+              >
+                <Play class="size-3.5 fill-current" />
+                开启
+              </Button>
 
-            <Button
-              v-else
-              variant="secondary"
-              size="sm"
-              class="h-8 px-3 text-xs gap-1.5 cursor-pointer"
-              @click="store.accountAction(account.name, 'stop')"
-            >
-              <Square class="size-3.5 fill-current" />
-              停止
-            </Button>
+              <!-- 暂停保活按钮 (已在线或未暂停时显示) -->
+              <Button
+                v-if="account.status === 'online'"
+                variant="secondary"
+                size="sm"
+                class="h-8 px-2.5 text-xs gap-1 cursor-pointer text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                @click="store.accountAction(account.name, 'pause')"
+                title="断开长连接并暂停，仅以 5 分钟探针监听虚拟机，休眠后自动开机自愈"
+              >
+                <Pause class="size-3.5 fill-current" />
+                暂停
+              </Button>
+
+              <!-- 彻底停止按钮 (当未彻底停止时可点击) -->
+              <Button
+                v-if="account.status === 'online' || (account.desktops && account.desktops.some(d => d.status === 'paused'))"
+                variant="secondary"
+                size="sm"
+                class="h-8 px-2.5 text-xs gap-1 cursor-pointer text-destructive/80 hover:bg-destructive/10"
+                @click="store.accountAction(account.name, 'stop')"
+                title="彻底停止保活：断开长连接且彻底不发起任何探测，完全静默"
+              >
+                <Square class="size-3.5 fill-current" />
+                停止
+              </Button>
+            </template>
 
             <Button
               variant="ghost"
@@ -428,23 +440,23 @@ onUnmounted(() => {
                         class="h-5 px-2 text-[11px] font-normal"
                         :class="{
                           'bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20': desktop.yieldStatus?.yielding,
-                          'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': !desktop.yieldStatus?.yielding && (account.hangStatus?.running || desktop.status === 'hanging' || desktop.useStatusText === '运行中' || desktop.status === 'connected'),
-                          'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': !desktop.yieldStatus?.yielding && !(account.hangStatus?.running || desktop.status === 'hanging') && desktop.useStatusText !== '运行中' && desktop.status === 'connecting',
-                          'bg-muted text-muted-foreground': !desktop.yieldStatus?.yielding && !(account.hangStatus?.running || desktop.status === 'hanging') && desktop.useStatusText !== '运行中' && desktop.status !== 'connected' && desktop.status !== 'connecting',
+                          'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': !desktop.yieldStatus?.yielding && (desktop.useStatusText === '运行中' || desktop.status === 'connected'),
+                          'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': !desktop.yieldStatus?.yielding && (desktop.status === 'connecting' || desktop.status === 'paused'),
+                          'bg-muted text-muted-foreground': !desktop.yieldStatus?.yielding && desktop.useStatusText !== '运行中' && desktop.status !== 'connected' && desktop.status !== 'connecting' && desktop.status !== 'paused',
                         }"
                         :title="desktop.yieldStatus?.yielding ? (desktop.yieldStatus.reason || '检测到外部官方客户端在线，系统主动避让中') : ''"
                       >
-                        {{ desktop.yieldStatus?.yielding ? `避让中 (${desktop.yieldStatus.remainingSeconds}s)` : (account.hangStatus?.running || desktop.status === 'hanging' ? '挂机中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机')))) }}
+                        {{ desktop.yieldStatus?.yielding ? `避让中 (${desktop.yieldStatus.remainingSeconds}s)` : (desktop.status === 'paused' ? '暂停探测中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机')))) }}
                       </Badge>
                     </TableCell>
                     <TableCell class="py-2.5 whitespace-nowrap">
                       <div class="flex items-center gap-1.5 text-xs font-medium">
                         <span
                           class="size-2 rounded-full shrink-0"
-                          :class="desktop.yieldStatus?.yielding ? 'bg-purple-500' : (account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'bg-emerald-500 animate-pulse' : (desktop.status === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-muted-foreground/30'))"
+                          :class="desktop.yieldStatus?.yielding ? 'bg-purple-500' : (desktop.status === 'connected' ? 'bg-emerald-500 animate-pulse' : (desktop.status === 'connecting' ? 'bg-amber-400 animate-ping' : (desktop.status === 'paused' ? 'bg-amber-500' : 'bg-muted-foreground/30')))"
                         ></span>
-                        <span :class="desktop.yieldStatus?.yielding ? 'text-purple-600 dark:text-purple-400' : (account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')" class="truncate">
-                           {{ desktop.yieldStatus?.yielding ? '主动避让' : (account.hangStatus?.running || desktop.status === 'hanging' ? '纯协议挂机' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : '未连接')) }}
+                        <span :class="desktop.yieldStatus?.yielding ? 'text-purple-600 dark:text-purple-400' : (desktop.status === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : (desktop.status === 'paused' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'))" class="truncate">
+                           {{ desktop.yieldStatus?.yielding ? '主动避让' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : (desktop.status === 'paused' ? '已暂停(探针)' : '已停止')) }}
                         </span>
                       </div>
                     </TableCell>
@@ -503,44 +515,6 @@ onUnmounted(() => {
                       </div>
                     </TableCell>
                   </TableRow>
-
-                  <!-- 云电脑下方长条挂机进度条 (仅挂机中展示) -->
-                  <TableRow
-                    v-if="account.hangStatus?.running"
-                    class="hover:bg-transparent border-b border-border/20"
-                  >
-                    <TableCell colspan="7" class="py-1 px-4">
-                      <div class="flex items-center gap-3">
-                        <span class="text-[11px] font-medium text-foreground shrink-0 flex items-center gap-1.5">
-                          <span class="size-1.5 rounded-full bg-neutral-900 dark:bg-neutral-100 animate-pulse"></span>
-                          挂机进度
-                        </span>
-                        <div class="h-1 flex-1 bg-neutral-200 dark:bg-neutral-800 rounded-full overflow-hidden">
-                          <div
-                            class="h-full bg-neutral-900 dark:bg-neutral-100 rounded-full transition-all duration-500"
-                            :style="{
-                              width: Math.min(100, Math.max(0, Math.floor(((account.hangStatus.currentProgress || 0) / (account.hangStatus.totalProgress || 3600)) * 100))) + '%'
-                            }"
-                          ></div>
-                        </div>
-                        <span class="text-[11px] font-mono font-medium text-foreground tabular-nums shrink-0">
-                          {{ account.hangStatus.currentProgress || 0 }} / {{ account.hangStatus.totalProgress || 3600 }} 秒
-                          ({{ Math.floor(((account.hangStatus.currentProgress || 0) / (account.hangStatus.totalProgress || 3600)) * 100) }}%)
-                          · 剩余约 {{ Math.ceil(Math.max(0, (account.hangStatus.totalProgress || 3600) - (account.hangStatus.currentProgress || 0)) / 60) }} 分钟
-                        </span>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          class="h-6 px-2 text-xs text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0 cursor-pointer ml-auto"
-                          @click="store.manualStopHang(account.name)"
-                          title="中止当前挂机任务并恢复保活"
-                        >
-                          <Square class="size-3 mr-1 fill-current" />
-                          中止挂机
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
                 </template>
               </TableBody>
             </Table>
@@ -575,13 +549,13 @@ onUnmounted(() => {
                   class="h-5 px-1.5 text-[11px] font-normal"
                   :class="{
                     'bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20': desktop.yieldStatus?.yielding,
-                    'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': !desktop.yieldStatus?.yielding && (account.hangStatus?.running || desktop.status === 'hanging' || desktop.useStatusText === '运行中' || desktop.status === 'connected'),
-                    'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': !desktop.yieldStatus?.yielding && !(account.hangStatus?.running || desktop.status === 'hanging') && desktop.useStatusText !== '运行中' && desktop.status === 'connecting',
-                    'bg-muted text-muted-foreground': !desktop.yieldStatus?.yielding && !(account.hangStatus?.running || desktop.status === 'hanging') && desktop.useStatusText !== '运行中' && desktop.status !== 'connected' && desktop.status !== 'connecting',
+                    'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': !desktop.yieldStatus?.yielding && (desktop.useStatusText === '运行中' || desktop.status === 'connected'),
+                    'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': !desktop.yieldStatus?.yielding && (desktop.status === 'connecting' || desktop.status === 'paused'),
+                    'bg-muted text-muted-foreground': !desktop.yieldStatus?.yielding && desktop.useStatusText !== '运行中' && desktop.status !== 'connected' && desktop.status !== 'connecting' && desktop.status !== 'paused',
                   }"
                   :title="desktop.yieldStatus?.yielding ? (desktop.yieldStatus.reason || '检测到外部官方客户端在线，系统主动避让中') : ''"
                 >
-                  {{ desktop.yieldStatus?.yielding ? `避让中 (${desktop.yieldStatus.remainingSeconds}s)` : (account.hangStatus?.running || desktop.status === 'hanging' ? '挂机中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机')))) }}
+                  {{ desktop.yieldStatus?.yielding ? `避让中 (${desktop.yieldStatus.remainingSeconds}s)` : (desktop.status === 'paused' ? '暂停探测中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机')))) }}
                 </Badge>
               </div>
               <div class="flex items-center justify-between text-xs text-muted-foreground font-mono">
@@ -592,10 +566,10 @@ onUnmounted(() => {
                 <div class="flex items-center gap-1.5 text-xs">
                   <span
                     class="size-2 rounded-full"
-                    :class="desktop.yieldStatus?.yielding ? 'bg-purple-500' : (account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'bg-emerald-500 animate-pulse' : (desktop.status === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-muted-foreground/30'))"
+                    :class="desktop.yieldStatus?.yielding ? 'bg-purple-500' : (desktop.status === 'connected' ? 'bg-emerald-500 animate-pulse' : (desktop.status === 'connecting' ? 'bg-amber-400 animate-ping' : (desktop.status === 'paused' ? 'bg-amber-500' : 'bg-muted-foreground/30')))"
                   ></span>
-                  <span :class="desktop.yieldStatus?.yielding ? 'text-purple-600 dark:text-purple-400' : (account.hangStatus?.running || desktop.status === 'hanging' || desktop.status === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')">
-                     {{ desktop.yieldStatus?.yielding ? '主动避让' : (account.hangStatus?.running || desktop.status === 'hanging' ? '纯协议挂机' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : '未连接')) }}
+                  <span :class="desktop.yieldStatus?.yielding ? 'text-purple-600 dark:text-purple-400' : (desktop.status === 'connected' ? 'text-emerald-600 dark:text-emerald-400' : (desktop.status === 'paused' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'))">
+                     {{ desktop.yieldStatus?.yielding ? '主动避让' : (desktop.status === 'connected' ? '在线' : desktop.status === 'connecting' ? '正在连接' : (desktop.status === 'paused' ? '已暂停(探针)' : '已停止')) }}
                   </span>
                 </div>
                 <div class="inline-flex items-center gap-1">
@@ -646,40 +620,6 @@ onUnmounted(() => {
                       <Power class="size-3.5" />
                     </Button>
                   </template>
-                </div>
-              </div>
-
-              <!-- 手机端云电脑下方长条挂机进度条 -->
-              <div
-                v-if="account.hangStatus?.running"
-                class="pt-1 mt-1 border-t border-border/20 space-y-1"
-              >
-                <div class="flex items-center justify-between text-[11px] font-mono text-foreground">
-                  <span class="flex items-center gap-1">
-                    <span class="size-1.5 rounded-full bg-neutral-900 dark:bg-neutral-100 animate-pulse"></span>
-                    挂机进度
-                  </span>
-                  <div class="flex items-center gap-2">
-                    <span>{{ account.hangStatus.currentProgress || 0 }}/{{ account.hangStatus.totalProgress || 3600 }}秒 ({{ Math.floor(((account.hangStatus.currentProgress || 0) / (account.hangStatus.totalProgress || 3600)) * 100) }}%)</span>
-                    <button
-                      type="button"
-                      class="text-xs text-destructive hover:underline cursor-pointer"
-                      @click="store.manualStopHang(account.name)"
-                    >
-                      中止
-                    </button>
-                  </div>
-                </div>
-                <div class="h-1 w-full bg-neutral-200 dark:bg-neutral-800 rounded-full overflow-hidden">
-                  <div
-                    class="h-full bg-neutral-900 dark:bg-neutral-100 rounded-full transition-all duration-500"
-                    :style="{
-                      width: Math.min(100, Math.max(0, Math.floor(((account.hangStatus.currentProgress || 0) / (account.hangStatus.totalProgress || 3600)) * 100))) + '%'
-                    }"
-                  ></div>
-                </div>
-                <div class="text-[10px] text-right text-muted-foreground font-mono">
-                  剩余约 {{ Math.ceil(Math.max(0, (account.hangStatus.totalProgress || 3600) - (account.hangStatus.currentProgress || 0)) / 60) }} 分钟
                 </div>
               </div>
             </div>
