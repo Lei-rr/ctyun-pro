@@ -31,6 +31,18 @@ export const taskRoutes: FastifyPluginAsync<{
     },
   );
 
+  // 兼容前端 /api/profiles/:id/points 路由
+  fastify.get(
+    '/api/profiles/:id/points',
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      if (!verifyAuth(request, reply)) return;
+      const acc = resolveAccount(request.params.id, reply);
+      if (!acc) return;
+      const data = await manager.getPointsAndTasks(acc.name);
+      return { success: true, data };
+    },
+  );
+
   // 手动执行所有日常任务
   fastify.post(
     '/api/profiles/:id/tasks/run',

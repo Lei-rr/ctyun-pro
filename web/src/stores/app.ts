@@ -649,21 +649,25 @@ export const useAppStore = defineStore('app', () => {
           res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/start`, {
             method: 'POST',
             headers: getHeaders(),
+            body: '{}',
           });
         } else if (action === 'pause') {
           res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/pause`, {
             method: 'POST',
             headers: getHeaders(),
+            body: '{}',
           });
         } else if (action === 'stop') {
           res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/stop`, {
             method: 'POST',
             headers: getHeaders(),
+            body: '{}',
           });
         } else {
           res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/sync`, {
             method: 'POST',
             headers: getHeaders(),
+            body: '{}',
           });
         }
         const data = await res.json();
@@ -693,16 +697,6 @@ export const useAppStore = defineStore('app', () => {
   const showPolicyModal = ref(false);
   const policyAccount = ref('');
   const policyTaskEnabled = ref(true);
-  function getRandomScheduleTime(): string {
-    const hour = Math.floor(Math.random() * 9); // 0 ~ 8 点之间随机
-    const minute = Math.floor(Math.random() * 60);
-    const pad = (n: number) => n.toString().padStart(2, '0');
-    return `${pad(hour)}:${pad(minute)}`;
-  }
-
-  const policyScheduleTime = ref(getRandomScheduleTime());
-  const policyAutoSign = ref(true);
-  const policyAiChat = ref(true);
   const policyRedeemEnabled = ref(false);
   const policyScheduleType = ref('interval_days');
   const policyMonthlyDay = ref(28);
@@ -814,9 +808,6 @@ export const useAppStore = defineStore('app', () => {
     policyAccount.value = account.name;
     const t = (account as any).taskConfig || {};
     policyTaskEnabled.value = t.enabled !== undefined ? t.enabled : (account.autoSign ?? true);
-    policyScheduleTime.value = t.scheduleTime || getRandomScheduleTime();
-    policyAutoSign.value = t.autoSign !== undefined ? t.autoSign : (account.autoSign ?? true);
-    policyAiChat.value = t.aiChat !== undefined ? t.aiChat : true;
 
     const r = (account.redeemConfig as any) || {};
     policyRedeemEnabled.value = Boolean(r.enabled);
@@ -853,12 +844,11 @@ export const useAppStore = defineStore('app', () => {
         headers: getHeaders(),
         body: JSON.stringify({
           accountName: policyAccount.value,
-          autoSign: policyTaskEnabled.value && policyAutoSign.value,
+          autoSign: false,
           taskConfig: {
             enabled: policyTaskEnabled.value,
-            scheduleTime: policyScheduleTime.value || getRandomScheduleTime(),
-            autoSign: policyAutoSign.value,
-            aiChat: policyAiChat.value,
+            autoSign: false,
+            aiChat: policyTaskEnabled.value,
           },
           redeemConfig: {
             enabled: policyRedeemEnabled.value,

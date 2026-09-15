@@ -17,42 +17,14 @@ const store = useAppStore();
     content-class="sm:max-w-md"
   >
     <div class="space-y-4">
-      <!-- 模块 1: 每日定时任务 -->
+      <!-- 模块 1: 每日自动 AI 对话任务 (02:00~06:00 随机错峰执行) -->
       <div class="p-4 rounded-xl bg-muted/40 border border-border/40 space-y-3.5">
         <div class="flex items-center justify-between">
           <div>
-            <div class="text-sm font-medium text-foreground">每日自动任务</div>
-            <div class="text-xs text-muted-foreground">定时自动完成签到与 AI 对话 (保活长连自然跑满登录与挂机)</div>
+            <div class="text-sm font-medium text-foreground">每日自动 AI 对话</div>
+            <div class="text-xs text-muted-foreground">每日 02:00~06:00 随机错峰自动与 AI 对话 (+100 积分)</div>
           </div>
           <Switch v-model:checked="store.policyTaskEnabled" />
-        </div>
-
-        <div v-if="store.policyTaskEnabled" class="pt-3 space-y-3 border-t border-border/40">
-          <div class="space-y-1.5">
-            <label class="text-xs font-medium text-foreground">每日执行时间</label>
-            <Input
-              type="time"
-              v-model="store.policyScheduleTime"
-              class="h-9 font-mono text-xs"
-            />
-          </div>
-
-          <div class="space-y-2 pt-1 text-xs">
-            <div class="flex items-center justify-between py-1">
-              <div>
-                <span class="text-foreground font-medium">每日签到</span>
-                <span class="text-emerald-500 font-medium ml-1.5">+100分</span>
-              </div>
-              <Switch v-model:checked="store.policyAutoSign" />
-            </div>
-            <div class="flex items-center justify-between py-1">
-              <div>
-                <span class="text-foreground font-medium">与 AI 助手对话</span>
-                <span class="text-emerald-500 font-medium ml-1.5">+100分</span>
-              </div>
-              <Switch v-model:checked="store.policyAiChat" />
-            </div>
-          </div>
         </div>
       </div>
 

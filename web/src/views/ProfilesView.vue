@@ -6,7 +6,6 @@ import {
   Monitor,
   User,
   Play,
-  Pause,
   Square,
   Trash2,
   Settings2,
@@ -275,6 +274,7 @@ onUnmounted(() => {
                     'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': account.status === 'online',
                     'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': account.status === 'login_needed' || account.status === 'need_sms' || (account.desktops && account.desktops.some(d => d.status === 'paused')),
                     'bg-destructive/10 text-destructive border border-destructive/20': account.status === 'error',
+                    'bg-muted text-muted-foreground border border-border/40': account.status === 'idle',
                   }"
                 >
                   <span
@@ -284,14 +284,19 @@ onUnmounted(() => {
                     <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
                     <span class="relative inline-flex size-1.5 rounded-full bg-emerald-500"></span>
                   </span>
+                  <span
+                    v-else-if="account.desktops && account.desktops.some(d => d.status === 'paused')"
+                    class="size-1.5 rounded-full bg-amber-500 shrink-0"
+                  ></span>
                   <span>{{ account.desktops && account.desktops.some(d => d.status === 'paused') ? '暂停探测中' : (account.status === 'online' ? '保活中' : account.status === 'idle' ? '已停止' : account.status === 'error' ? '异常' : '需认证') }}</span>
-                </Badge>
-                 <Badge v-if="account.taskConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
-                   每日任务 ({{ account.taskConfig?.scheduleTime || '随机时间' }})
-                 </Badge>
-                 <Badge v-if="account.redeemConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
-                   自动兑换
-                 </Badge>
+                  </Badge>
+                  <!-- 仅在账号处于保活中且开启 AI 对话任务时显示简约标签 -->
+                  <Badge v-if="account.status === 'online' && account.taskConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
+                    AI 对话
+                  </Badge>
+                  <Badge v-if="account.status === 'online' && account.redeemConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
+                  自动兑换
+                  </Badge>
               </div>
               <div class="text-xs text-muted-foreground font-mono truncate">
                 设备指纹: {{ account.deviceCode }}
@@ -333,7 +338,7 @@ onUnmounted(() => {
               去认证
             </Button>
 
-            <!-- 三态控制按钮组：开启 / 暂停 / 停止 -->
+            <!-- 三态控制按钮组：开启 / 停止 -->
             <template v-else>
               <!-- 开启保活按钮 (非 online 状态均可点击开启) -->
               <Button
@@ -348,19 +353,6 @@ onUnmounted(() => {
                 开启
               </Button>
 
-              <!-- 暂停保活按钮 (已在线或未暂停时显示) -->
-              <Button
-                v-if="account.status === 'online'"
-                variant="secondary"
-                size="sm"
-                class="h-8 px-2.5 text-xs gap-1 cursor-pointer text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
-                @click="store.accountAction(account.name, 'pause')"
-                title="断开长连接并暂停，仅以 5 分钟探针监听虚拟机，休眠后自动开机自愈"
-              >
-                <Pause class="size-3.5 fill-current" />
-                暂停
-              </Button>
-
               <!-- 彻底停止按钮 (当未彻底停止时可点击) -->
               <Button
                 v-if="account.status === 'online' || (account.desktops && account.desktops.some(d => d.status === 'paused'))"
@@ -368,7 +360,7 @@ onUnmounted(() => {
                 size="sm"
                 class="h-8 px-2.5 text-xs gap-1 cursor-pointer text-destructive/80 hover:bg-destructive/10"
                 @click="store.accountAction(account.name, 'stop')"
-                title="彻底停止保活：断开长连接且彻底不发起任何探测，完全静默"
+                title="彻底停止保活：断开长连接且彻底不发起任何探测，完全静止"
               >
                 <Square class="size-3.5 fill-current" />
                 停止

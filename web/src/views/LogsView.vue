@@ -43,15 +43,15 @@ onMounted(() => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'init') {
-           store.logs = (data.logs || []).slice(-1000);
+           store.logs.value = (data.logs || []).slice(-1000);
         } else if (data.type === 'log') {
           const incoming = data.log;
           // 智能折叠：在当前末尾连续心跳波次（Block）内寻找同款心跳折叠，遇到业务日志立即打断
           const isHeartbeat = incoming.message && incoming.message.includes('发送客户端活跃心跳');
           let found = false;
           if (isHeartbeat) {
-            for (let i = store.logs.length - 1; i >= 0; i--) {
-              const item = store.logs[i];
+            for (let i = store.logs.value.length - 1; i >= 0; i--) {
+              const item = store.logs.value[i];
               const itemIsHeartbeat = item.message && item.message.includes('发送客户端活跃心跳');
               if (!itemIsHeartbeat) {
                 // 遇到业务/报警日志，停止回溯
@@ -61,10 +61,10 @@ onMounted(() => {
                 item.id === incoming.id ||
                 (item.message === incoming.message && item.level === incoming.level)
               ) {
-                const [matched] = store.logs.splice(i, 1);
+                const [matched] = store.logs.value.splice(i, 1);
                 matched.count = incoming.count || (matched.count || 1) + 1;
                 matched.time = incoming.time;
-                store.logs.push(matched);
+                store.logs.value.push(matched);
                 found = true;
                 break;
               }
@@ -72,8 +72,8 @@ onMounted(() => {
           }
 
           if (!found) {
-            store.logs.push(incoming);
-            if (store.logs.length > 1000) store.logs.splice(0, store.logs.length - 1000);
+            store.logs.value.push(incoming);
+            if (store.logs.value.length > 1000) store.logs.value.splice(0, store.logs.value.length - 1000);
           }
         }
         scrollToBottom();

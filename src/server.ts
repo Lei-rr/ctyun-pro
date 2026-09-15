@@ -38,6 +38,21 @@ export async function createServer(managerInstance?: ProfileManager) {
     });
   });
 
+  // 支持无 body 的 application/json POST/PUT 请求 (如前端带 Header 的动作触发请求)
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    if (!body || (typeof body === 'string' && body.trim() === '')) {
+      done(null, {});
+      return;
+    }
+    try {
+      const json = JSON.parse(body as string);
+      done(null, json);
+    } catch (err: any) {
+      err.statusCode = 400;
+      done(err, undefined);
+    }
+  });
+
   // 短信验证会话内存缓存 (带 10 分钟自动过期 TTL，防止垃圾残留)
   class ExpiringSmsSessionCache extends Map<string, { captchaKey?: string; smsKey?: string; expireAt: number }> {
     private cleanupTimer: NodeJS.Timeout;
