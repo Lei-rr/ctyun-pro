@@ -25,12 +25,9 @@ export interface Account {
   status: 'idle' | 'login_needed' | 'need_sms' | 'online' | 'error';
   autoStart?: boolean;
   lastError?: string;
-  autoSign?: boolean;
-  lastSignDate?: string;
   taskConfig?: {
     enabled?: boolean;
     scheduleTime?: string;
-    autoSign?: boolean;
     aiChat?: boolean;
     lastRunDate?: string;
   };
@@ -796,8 +793,8 @@ export const useAppStore = defineStore('app', () => {
 
   async function openPolicyModal(account: Account) {
     policyAccount.value = account.name;
-    const t = (account as any).taskConfig || {};
-    policyTaskEnabled.value = t.enabled !== undefined ? t.enabled : (account.autoSign ?? true);
+    const t = account.taskConfig || {};
+    policyTaskEnabled.value = t.enabled !== undefined ? t.enabled : true;
 
     const r = (account.redeemConfig as any) || {};
     policyRedeemEnabled.value = Boolean(r.enabled);
@@ -834,10 +831,8 @@ export const useAppStore = defineStore('app', () => {
         headers: getHeaders(),
         body: JSON.stringify({
           accountName: policyAccount.value,
-          autoSign: false,
           taskConfig: {
             enabled: policyTaskEnabled.value,
-            autoSign: false,
             aiChat: policyTaskEnabled.value,
           },
           redeemConfig: {

@@ -106,7 +106,6 @@ export class TaskScheduler {
             try {
               this.logger.addLog('info', `[${name}] 命中每日做任务定时 (${targetTime}，抖动延时 ${(jitterMs/1000).toFixed(1)}s)，正在按策略自动执行...`);
               const res = await TaskRunner.executeDailyTasks(client, tConf, this.logger);
-              acc.lastSignDate = today;
               tConf.lastRunDate = today;
               delete tConf.retryCount;
               delete tConf.retryDate;
@@ -402,9 +401,9 @@ export class TaskScheduler {
             pointInfo = '积分查询暂缓';
           }
 
-          const signMark = acc.lastSignDate === today ? '已打卡' : '待执行';
+          const taskMark = acc.taskConfig?.lastRunDate === today ? '已完成' : '待执行';
           const statusText = isOnline ? '[在线]' : '[离线]';
-          reportLines.push(`${statusText} [${name}]: ${signMark} | ${pointInfo}`);
+          reportLines.push(`${statusText} [${name}]: 任务${taskMark} | ${pointInfo}`);
         }
 
         const title = `CTYUN-PRO - 每日运行早报 (${today})`;

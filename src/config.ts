@@ -34,7 +34,6 @@ export function getRandomScheduleTime(): string {
 
 export interface TaskConfig {
   enabled: boolean; // 是否开启自动做任务
-  autoSign?: boolean; // 每日自动签到
   aiChat?: boolean; // 与 AI 对话 (每日 02:00~06:00 随机错峰执行)
   scheduleTime?: string; // 每日做任务时间 (如 08:30)
   lastRunDate?: string; // 上次执行任务日期 YYYY-MM-DD
@@ -51,8 +50,6 @@ export interface AccountConfig {
   rawPassword?: string;
   deviceCode?: string;
   autoStart?: boolean;
-  autoSign?: boolean; // 每日自动签到开关 (兼容旧配置)
-  lastSignDate?: string; // 上次签到日期 YYYY-MM-DD
   taskConfig?: TaskConfig; // 做任务策略设置
   redeemConfig?: RedeemConfig; // 自动兑换策略设置
   loginInfo?: LoginInfo;

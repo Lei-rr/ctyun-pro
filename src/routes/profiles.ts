@@ -27,7 +27,6 @@ export const profileRoutes: FastifyPluginAsync<{
         Body: {
           name?: string;
           user?: string;
-          autoSign?: boolean;
           autoStart?: boolean;
           taskConfig?: Partial<TaskConfig>;
           redeemConfig?: Partial<RedeemConfig>;
@@ -45,12 +44,10 @@ export const profileRoutes: FastifyPluginAsync<{
       await manager.addOrUpdateAccount({
         name,
         user,
-        autoSign: body.autoSign !== false,
         autoStart: body.autoStart !== false,
         taskConfig: {
           enabled: body.taskConfig?.enabled ?? true,
           scheduleTime: body.taskConfig?.scheduleTime || getRandomScheduleTime(),
-          autoSign: body.taskConfig?.autoSign ?? true,
           aiChat: body.taskConfig?.aiChat ?? true,
         },
         redeemConfig: {
@@ -413,7 +410,6 @@ export const profileRoutes: FastifyPluginAsync<{
       request: FastifyRequest<{
         Params: { id: string };
         Body: {
-          autoSign?: boolean;
           taskConfig?: Partial<TaskConfig>;
           redeemConfig?: Partial<RedeemConfig>;
         };
@@ -428,14 +424,12 @@ export const profileRoutes: FastifyPluginAsync<{
       const currentTaskConfig = acc.taskConfig || {
         enabled: true,
         scheduleTime: getRandomScheduleTime(),
-        autoSign: true,
         aiChat: true,
       };
       const currentRedeemConfig = acc.redeemConfig || { ...DEFAULT_REDEEM_CONFIG };
 
       await manager.addOrUpdateAccount({
         ...acc,
-        autoSign: body.autoSign !== undefined ? body.autoSign : (body.taskConfig?.enabled ?? acc.autoSign),
         taskConfig: body.taskConfig !== undefined ? { ...currentTaskConfig, ...body.taskConfig } : acc.taskConfig,
         redeemConfig: body.redeemConfig !== undefined ? { ...currentRedeemConfig, ...body.redeemConfig } : acc.redeemConfig,
       });

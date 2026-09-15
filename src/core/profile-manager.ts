@@ -4,7 +4,7 @@ import { Config, getRandomScheduleTime, DEFAULT_REDEEM_CONFIG, type AccountConfi
 import { CtYunClient, type Desktop, type DesktopInfo, type LoginInfo } from './client.js';
 import { KeepaliveService, type ManagedDesktopState } from '../modules/keepalive/index.js';
 import { Logger, type LogItem } from './logger.js';
-import { TaskScheduler, SignTask, AiChatTask, type PointsSummary } from '../modules/tasks/index.js';
+import { TaskScheduler, PointsTask, AiChatTask, type PointsSummary } from '../modules/tasks/index.js';
 import { RewardRedeemService, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../modules/reward/index.js';
 import { DesktopSessionArbiter } from '../modules/arbiter/desktop-session-arbiter.js';
 import { safeWriteFileSync, sendWebhookNotification, getCstDateString, getCstDateTimeString } from './utils.js';
@@ -26,8 +26,6 @@ export interface ManagedAccount {
   lastError?: string;
   loginInfo?: LoginInfo;
   autoStart?: boolean;
-  autoSign?: boolean;
-  lastSignDate?: string;
   taskConfig?: TaskConfig;
   redeemConfig?: RedeemConfig;
   todayPoints?: number;
@@ -442,7 +440,6 @@ export class ProfileManager {
         if (!acc.taskConfig) {
           acc.taskConfig = {
             enabled: true,
-            autoSign: true,
             aiChat: true,
             scheduleTime: getRandomScheduleTime(),
           };
@@ -450,8 +447,6 @@ export class ProfileManager {
           acc.taskConfig.scheduleTime = getRandomScheduleTime();
         }
         state.autoStart = acc.autoStart;
-        state.autoSign = acc.autoSign ?? false;
-        state.lastSignDate = acc.lastSignDate;
         state.taskConfig = acc.taskConfig;
         state.redeemConfig = acc.redeemConfig;
         const pts = this.todayPointsCache.get(name);
@@ -1172,7 +1167,6 @@ export class ProfileManager {
     const id = config.id || existingAcc?.id || crypto.randomUUID();
     const taskConfig = config.taskConfig || existingAcc?.taskConfig || {
       enabled: true,
-      autoSign: true,
       aiChat: true,
       scheduleTime: getRandomScheduleTime(),
     };
@@ -1194,8 +1188,6 @@ export class ProfileManager {
         deviceCode,
         status: config.loginInfo ? 'online' : 'login_needed',
         loginInfo: config.loginInfo,
-        autoSign: config.autoSign ?? true,
-        lastSignDate: config.lastSignDate,
         taskConfig,
         redeemConfig,
         desktops: existingAcc?.desktops || [],
@@ -1364,7 +1356,7 @@ export class ProfileManager {
 
   public async getPointsAndTasks(accountName: string): Promise<PointsSummary> {
     const client = this.getClient(accountName);
-    const summary = await SignTask.getPointsAndTasks(client);
+    const summary = await PointsTask.getPointsAndTasks(client);
     let todayEarned = 0;
     for (const t of summary.tasks) {
       if (t.isCompleted) {
@@ -1386,7 +1378,6 @@ export class ProfileManager {
 
       if (isChatDone && acc.taskConfig.lastRunDate !== todayStr) {
         acc.taskConfig.lastRunDate = todayStr;
-        acc.lastSignDate = todayStr;
         this.saveToDisk();
       }
     }
@@ -1565,7 +1556,6 @@ export class ProfileManager {
       const deviceCode = Config.resolveDeviceCode(name, acc.deviceCode);
       const taskConfig = acc.taskConfig || {
         enabled: true,
-        autoSign: true,
         aiChat: true,
         scheduleTime: getRandomScheduleTime(),
       };
@@ -1592,8 +1582,6 @@ export class ProfileManager {
         deviceCode: acc.deviceCode || client.getDeviceCode(),
         status: acc.loginInfo ? 'online' : 'login_needed',
         loginInfo: acc.loginInfo,
-        autoSign: acc.autoSign ?? true,
-        lastSignDate: acc.lastSignDate,
         taskConfig,
         redeemConfig,
         desktops: desktops.map((d: ManagedDesktopState) => ({

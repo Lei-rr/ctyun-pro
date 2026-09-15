@@ -102,7 +102,7 @@ onUnmounted(() => {
     >
       <div v-if="store.logs.length === 0" class="flex flex-col items-center justify-center h-full text-muted-foreground/60 gap-2">
         <Terminal class="size-8 stroke-[1.5] text-muted-foreground/40" />
-        <p class="text-xs">暂无日志输出，启动保活或签到任务后将在此实时呈现</p>
+        <p class="text-xs">暂无日志输出，启动保活或执行任务后将在此实时呈现</p>
       </div>
 
       <div
