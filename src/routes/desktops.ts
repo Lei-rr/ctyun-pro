@@ -93,5 +93,4 @@ export const desktopRoutes: FastifyPluginAsync<{
   };
 
   fastify.post('/api/desktops/:desktopCode/rename', handleDesktopRename);
-  fastify.put('/api/desktops/:desktopCode/rename', handleDesktopRename);
 };

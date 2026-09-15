@@ -993,7 +993,7 @@ export const useAppStore = defineStore('app', () => {
       await fetchStatus();
     },
     fetchPointsAndTasks: async (accountUserOrName: string) => {
-      const res = await fetch(`/api/profiles/${encodeURIComponent(accountUserOrName)}/points`, {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(accountUserOrName)}/tasks`, {
         headers: getHeaders(),
       });
       const json = await res.json();

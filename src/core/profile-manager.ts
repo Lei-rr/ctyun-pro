@@ -5,7 +5,7 @@ import { CtYunClient, type Desktop, type DesktopInfo, type LoginInfo } from './c
 import { KeepaliveService, type ManagedDesktopState } from '../modules/keepalive/index.js';
 import { Logger, type LogItem } from './logger.js';
 import { TaskScheduler } from '../modules/strategy/index.js';
-import { TaskRunner, SignTask, AiChatTask, type PointsSummary } from '../modules/task/index.js';
+import { SignTask, AiChatTask, type PointsSummary } from '../modules/task/index.js';
 import { RewardRedeemService, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../modules/reward/index.js';
 import { DesktopSessionArbiter } from '../modules/arbiter/desktop-session-arbiter.js';
 import { safeWriteFileSync, sendWebhookNotification, getCstDateString, getCstDateTimeString } from './utils.js';
@@ -550,27 +550,6 @@ export class ProfileManager {
     this.getPointsAndTasks(accountName)
       .then(() => this.notifyStatusChange())
       .catch(() => {});
-  }
-
-  public pauseAccount(accountName: string): void {
-    const acc = this.accounts.get(accountName);
-    if (acc) {
-      acc.autoStart = false;
-      this.saveToDisk();
-    }
-    // 暂停保活 Worker 长连（断开 WS，不触发 5 分钟退避重连）
-    this.keepaliveService.pauseWorkers(accountName);
-    const state = this.accountStates.get(accountName);
-    if (state) {
-      state.status = 'idle';
-      for (const d of state.desktops) {
-        d.status = 'paused';
-        // 为每一个桌面启动 5 分钟轻量 HTTP 看门狗探针
-        this.startPauseWatchdog(accountName, d.desktopId);
-      }
-    }
-    this.logger.addLog('warn', `[${accountName}] 保活长连已手动暂停（进入轻量看门狗探测状态）`);
-    this.notifyStatusChange();
   }
 
   public stopAccount(accountName: string): void {
@@ -1254,55 +1233,6 @@ export class ProfileManager {
     this.saveToDisk();
     this.notifyStatusChange();
     this.logger.addLog('info', `[${name}] 账号已移除`);
-  }
-
-  public async manualRunTasks(accountName: string): Promise<string> {
-    const acc = this.accounts.get(accountName);
-    const client = this.getClient(accountName);
-    if (!acc || !client.loginInfo) {
-      throw new Error('账号未登录，无法执行任务');
-    }
-    const state = this.accountStates.get(accountName);
-    const dId = state?.desktops?.[0]?.desktopId;
-    const res = await TaskRunner.executeDailyTasks(client, acc.taskConfig, this.logger);
-    const today = getCstDateString();
-    acc.lastSignDate = today;
-    if (!acc.taskConfig) {
-      acc.taskConfig = { enabled: true, autoSign: true, scheduleTime: getRandomScheduleTime() };
-    }
-    acc.taskConfig.lastRunDate = today;
-    if (state) {
-      state.lastSignDate = today;
-      state.taskConfig = acc.taskConfig;
-    }
-    this.saveToDisk();
-    this.logger.addLog('success', `[${accountName}] 每日任务已执行: ${res.message}`);
-    this.notifyStatusChange();
-
-    // 执行任务后异步重新核验并更新当日已获积分
-    setTimeout(() => {
-      this.getPointsAndTasks(accountName)
-        .then(() => this.notifyStatusChange())
-        .catch(() => {});
-    }, 3000);
-
-    return res.message;
-  }
-
-  public async manualSignIn(accountName: string): Promise<string> {
-    const acc = this.accounts.get(accountName);
-    const client = this.getClient(accountName);
-    if (!acc || !client.loginInfo) {
-      throw new Error('账号未登录，无法签到');
-    }
-    const res = await SignTask.signIn(client);
-    const today = getCstDateString();
-    acc.lastSignDate = today;
-    const state = this.accountStates.get(accountName);
-    if (state) state.lastSignDate = today;
-    this.saveToDisk();
-    this.logger.addLog('success', `[${accountName}] 签到完成: ${res.message}`);
-    return res.message;
   }
 
   public async manualAiChat(accountName: string): Promise<string> {

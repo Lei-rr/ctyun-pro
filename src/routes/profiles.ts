@@ -199,7 +199,6 @@ export const profileRoutes: FastifyPluginAsync<{
   };
 
   fastify.post('/api/profiles/:id/rename', handleProfileRename);
-  fastify.put('/api/profiles/:id/rename', handleProfileRename);
 
   // 触发指定 Profile 的实例列表同步与本地落盘
   fastify.post(
@@ -467,18 +466,6 @@ export const profileRoutes: FastifyPluginAsync<{
       if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
       manager.stopAccount(acc.name);
       return { success: true, msg: `账号 [${acc.name}] 保活已停止` };
-    },
-  );
-
-  fastify.post(
-    '/api/profiles/:id/pause',
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!verifyAuth(request, reply)) return;
-      const { id } = request.params;
-      const acc = manager.getAccount(id);
-      if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
-      manager.pauseAccount(acc.name);
-      return { success: true, msg: `账号 [${acc.name}] 保活已暂停` };
     },
   );
 };

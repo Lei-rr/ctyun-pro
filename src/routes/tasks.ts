@@ -31,42 +31,6 @@ export const taskRoutes: FastifyPluginAsync<{
     },
   );
 
-  // 兼容前端 /api/profiles/:id/points 路由
-  fastify.get(
-    '/api/profiles/:id/points',
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!verifyAuth(request, reply)) return;
-      const acc = resolveAccount(request.params.id, reply);
-      if (!acc) return;
-      const data = await manager.getPointsAndTasks(acc.name);
-      return { success: true, data };
-    },
-  );
-
-  // 手动执行所有日常任务
-  fastify.post(
-    '/api/profiles/:id/tasks/run',
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!verifyAuth(request, reply)) return;
-      const acc = resolveAccount(request.params.id, reply);
-      if (!acc) return;
-      const msg = await manager.manualRunTasks(acc.name);
-      return { success: true, msg };
-    },
-  );
-
-  // 手动执行每日签到打卡
-  fastify.post(
-    '/api/profiles/:id/tasks/sign',
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!verifyAuth(request, reply)) return;
-      const acc = resolveAccount(request.params.id, reply);
-      if (!acc) return;
-      const msg = await manager.manualSignIn(acc.name);
-      return { success: true, msg };
-    },
-  );
-
   // 手动执行 AI 对话互动任务
   fastify.post(
     '/api/profiles/:id/tasks/chat',
