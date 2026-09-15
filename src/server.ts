@@ -53,6 +53,11 @@ export async function createServer(managerInstance?: ProfileManager) {
     }
   });
 
+  // 支持所有其他媒体类型直接以 Buffer 透传 (供反向代理等场景直通，防止 415 Unsupported Media Type)
+  fastify.addContentTypeParser('*', { parseAs: 'buffer' }, (req, body, done) => {
+    done(null, body);
+  });
+
   // 短信验证会话内存缓存 (带 10 分钟自动过期 TTL，防止垃圾残留)
   class ExpiringSmsSessionCache extends Map<string, { captchaKey?: string; smsKey?: string; expireAt: number }> {
     private cleanupTimer: NodeJS.Timeout;
