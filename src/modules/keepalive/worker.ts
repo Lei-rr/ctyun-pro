@@ -1,7 +1,6 @@
 import WebSocket from 'ws';
 import { Protocol, ClinkMsgType } from '../../core/protocol.js';
 import type { Desktop, DesktopInfo, LoginInfo } from '../../core/client.js';
-import { DesktopSessionArbiter } from '../arbiter/desktop-session-arbiter.js';
 
 export interface KeepAliveWorkerOptions {
   accountName: string;
@@ -39,7 +38,6 @@ export class KeepAliveWorker {
   public needsFreshTicket = false;
   private lastGatewayError = '';
   private handshakeTimeout: NodeJS.Timeout | null = null;
-  private yieldClearedHandler: ((data: { desktopId: string }) => void) | null = null;
 
   constructor(options: KeepAliveWorkerOptions) {
     this.options = options;
@@ -55,35 +53,10 @@ export class KeepAliveWorker {
     this.options.onLog?.(level, `[${this.logPrefix}] ${msg}`);
   }
 
-  private bindYieldCleared(): void {
-    if (this.yieldClearedHandler) return;
-    const dId = String(this.options.desktop.desktopId);
-    this.yieldClearedHandler = ({ desktopId }) => {
-      if (String(desktopId) === dId && this.isRunning && !this.isPaused) {
-        if (this.reconnectTimer) {
-          clearTimeout(this.reconnectTimer);
-          this.reconnectTimer = null;
-        }
-        this.isReconnecting = false;
-        this.log('info', '外部客户端避让期已解除，立即尝试恢复保活长连接');
-        this.connect();
-      }
-    };
-    DesktopSessionArbiter.getInstance().on('yield:cleared', this.yieldClearedHandler);
-  }
-
-  private unbindYieldCleared(): void {
-    if (this.yieldClearedHandler) {
-      DesktopSessionArbiter.getInstance().off('yield:cleared', this.yieldClearedHandler);
-      this.yieldClearedHandler = null;
-    }
-  }
-
   public start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
     this.isPaused = false;
-    this.bindYieldCleared();
     this.connect();
   }
 
@@ -94,7 +67,6 @@ export class KeepAliveWorker {
     this.consecutiveFailures = 0;
     this.needsFreshTicket = false;
     this.lastGatewayError = '';
-    this.unbindYieldCleared();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -218,19 +190,6 @@ export class KeepAliveWorker {
     }
 
     this.cleanupSocket();
-
-    const dId = String(this.options.desktop.desktopId);
-    const yieldStatus = DesktopSessionArbiter.getInstance().getYieldStatus(dId);
-    if (yieldStatus.yielding) {
-      this.isReconnecting = true;
-      this.options.onStatusChange?.('reconnecting');
-      this.reconnectTimer = setTimeout(() => {
-        this.reconnectTimer = null;
-        this.isReconnecting = false;
-        this.connect();
-      }, Math.max(1000, yieldStatus.remainingSeconds * 1000));
-      return;
-    }
 
     // 凭据有效性前置防御检查
     if (!this.isCertValid(this.options.desktopInfo?.clientCert)) {
@@ -512,7 +471,7 @@ export class KeepAliveWorker {
             // 声明为桌面合法拥有者并激活在席 Session，彻底根除网关因空占位触发的 light thread 僵尸回收
             try {
               const msg112 = Protocol.buildMainClientLoginInfo(
-                dId,
+                String(desktop.desktopId),
                 desktopInfo.token || '',
                 '60',
                 this.options.deviceCode || '',

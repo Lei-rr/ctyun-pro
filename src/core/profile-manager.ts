@@ -6,7 +6,6 @@ import { KeepaliveService, type ManagedDesktopState } from '../modules/keepalive
 import { Logger, type LogItem } from './logger.js';
 import { TaskScheduler, PointsTask, AiChatTask, type PointsSummary } from '../modules/tasks/index.js';
 import { RewardRedeemService, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../modules/reward/index.js';
-import { DesktopSessionArbiter } from '../modules/arbiter/desktop-session-arbiter.js';
 import { safeWriteFileSync, sendWebhookNotification, getCstDateString, getCstDateTimeString } from './utils.js';
 import type { DesktopInstanceSummary } from '../types/index.js';
 
@@ -66,73 +65,6 @@ export class ProfileManager {
     this.loadFromDisk();
     this.taskScheduler.start();
 
-    // 租约释放协同：当前台直连释放桌面租约时，自动唤醒保活通道无缝恢复
-    const arbiter = DesktopSessionArbiter.getInstance();
-    arbiter.setLogger(this.logger);
-    arbiter.setResolver((identifier: string) => {
-      const matched = this.findDesktopByCode(identifier);
-      if (matched) {
-        const canonicalCode = matched.desktop.desktopCode || String(matched.desktop.desktopId);
-        const dName = matched.desktop.desktopName || matched.desktop.computerName || matched.desktop.name || canonicalCode;
-        const displayName = `${matched.accountName} - ${dName}`;
-        return {
-          canonicalCode,
-          displayName,
-          accountName: matched.accountName,
-          desktopName: dName,
-        };
-      }
-      return undefined;
-    });
-
-    // 注册真实状态探测器：在避让期满前，主动向天翼云官方发起轻量状态查询
-    arbiter.setStateChecker(async (identifier: string) => {
-      const matched = this.findDesktopByCode(identifier);
-      if (!matched) return null;
-      const client = this.clients.get(matched.accountName);
-      if (!client) return null;
-      try {
-        const objType = typeof matched.desktop.objType === 'number' ? matched.desktop.objType : 0;
-        const state = await client.getDesktopState(matched.desktop.desktopId, objType);
-        if (!state) return null;
-        // 天翼云标准：useStatus 为 '25' 表示外部客户端连接使用中；'20' 为运行中空闲
-        const isOccupied = String(state.useStatus) === '25';
-        return {
-          occupied: isOccupied,
-          useStatus: state.useStatus,
-        };
-      } catch {
-        return null;
-      }
-    });
-
-    arbiter.on('lease:released', ({ purpose, ownerId }) => {
-      if (purpose === 'web_direct') {
-        const acc = this.accounts.get(ownerId);
-        if (acc && acc.autoStart !== false) {
-          this.keepaliveService.resumeWorkers(ownerId);
-        }
-      }
-    });
-
-    // 外部避让期结束协同：当外部客户端避让期自然过期或被主动清除时，唤醒保活通道安全恢复
-    const onYieldEnded = async (desktopId: string) => {
-      const matched = this.findDesktopByCode(desktopId);
-      if (matched?.accountName) {
-        const acc = this.accounts.get(matched.accountName);
-        if (acc && acc.autoStart !== false) {
-          await this.keepaliveService.resumeWorkerForDesktop(matched.accountName, desktopId);
-        }
-      }
-      this.notifyStatusChange();
-    };
-
-    arbiter.on('yield:expired', ({ desktopId }) => onYieldEnded(desktopId));
-    arbiter.on('yield:cleared', ({ desktopId }) => onYieldEnded(desktopId));
-    arbiter.on('yield:triggered', () => {
-      this.notifyStatusChange();
-    });
-
     // 监听保活服务派发的桌面进入 paused 事件，启动轻量 HTTP 休眠自愈看门狗
     this.keepaliveService.on('desktop:paused', ({ accountName, desktopId }) => {
       this.startPauseWatchdog(accountName, desktopId);
@@ -180,7 +112,7 @@ export class ProfileManager {
 
   private webReleaseTimers = new Map<string, NodeJS.Timeout>();
 
-  public touchWebUserActive(accountName: string, desktopCode: string, durationSec: number = 60): void {
+  public touchWebUserActive(accountName: string, desktopCode: string, _durationSec: number = 60): void {
     const matched = this.findDesktopByCode(desktopCode);
     const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopCode(desktopCode);
     if (!matchedAccount) return;
@@ -199,11 +131,6 @@ export class ProfileManager {
     if (matched?.desktop?.desktopCode) {
       this.clearPauseWatchdog(matchedAccount, String(matched.desktop.desktopCode));
     }
-
-    // 2. 仲裁器注册 Web 直连高优先级租约（带 TTL 自动防死锁），驱逐后台长连接
-    const arbiter = DesktopSessionArbiter.getInstance();
-    const ttlMs = Math.max(30, Number(durationSec) || 60) * 1000;
-    arbiter.acquireLease(canonicalKey, 'web_direct', matchedAccount, async () => {}, ttlMs).catch(() => {});
   }
 
   public releaseWebUserActive(accountName: string, desktopCode: string, delaySec: number = WEB_RELEASE_DEFAULT_DELAY_SEC): void {
@@ -224,9 +151,6 @@ export class ProfileManager {
     // 宽限期到期后，精准恢复该单台云电脑的保活 Worker
     const timer = setTimeout(async () => {
       this.webReleaseTimers.delete(canonicalKey);
-
-      const arbiter = DesktopSessionArbiter.getInstance();
-      arbiter.releaseLease(canonicalKey, 'web_direct', matchedAccount).catch(() => {});
 
       // 关键恢复：前台直连关闭且宽限期到期后，精准恢复单台云电脑保活 Worker 运行
       const acc = this.accounts.get(matchedAccount);
@@ -455,19 +379,8 @@ export class ProfileManager {
         state.todayPoints = (pts && pts.date === todayStr) ? (pts.todayPoints ?? 0) : 0;
       }
     }
-    const arbiter = DesktopSessionArbiter.getInstance();
     return Array.from(this.accountStates.values()).map((state) => {
-      const sanitized = this.sanitizeAccount(state);
-      if (sanitized.desktops && Array.isArray(sanitized.desktops)) {
-        sanitized.desktops = sanitized.desktops.map((d: ManagedDesktopState) => {
-          const yieldStatus = arbiter.getYieldStatus(d.desktopCode || String(d.desktopId));
-          return {
-            ...d,
-            yieldStatus: yieldStatus.yielding ? yieldStatus : undefined,
-          };
-        });
-      }
-      return sanitized;
+      return this.sanitizeAccount(state);
     });
   }
 
@@ -591,7 +504,6 @@ export class ProfileManager {
       clearTimeout(timer);
     }
     this.webReleaseTimers.clear();
-    DesktopSessionArbiter.getInstance().clearAll();
     this.saveToDisk(true);
   }
 
