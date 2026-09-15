@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { toast } from '@/shared/lib/toast';
 import { useAppStore, type Account } from '@/stores/app';
 import {
@@ -18,9 +18,17 @@ import {
   RotateCw,
   ExternalLink,
   Loader2,
+  Cpu,
+  Zap,
+  Gift,
+  ShieldCheck,
+  AlertCircle
 } from 'lucide-vue-next';
 import { Button } from '@/shared/ui/button';
 import { Badge } from '@/shared/ui/badge';
+import StatCard from '@/components/common/StatCard.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
+import ManagementBar from '@/components/common/ManagementBar.vue';
 import AccountRenameDialog from '@/components/dialogs/AccountRenameDialog.vue';
 import PointsTaskDialog from '@/components/dialogs/PointsTaskDialog.vue';
 import PowerOperateDialog, { type PowerTarget } from '@/components/dialogs/PowerOperateDialog.vue';
@@ -43,6 +51,33 @@ import {
 } from '@/shared/ui/empty';
 
 const store = useAppStore();
+
+const searchQuery = ref('');
+const statusFilter = ref('all');
+
+// 过滤后的账号列表
+const filteredAccounts = computed(() => {
+  let list = store.accounts;
+  const q = searchQuery.value.trim().toLowerCase();
+  if (q) {
+    list = list.filter((a) => {
+      const matchName = a.name?.toLowerCase().includes(q);
+      const matchPhone = (a.loginInfo?.mobilephone || a.user)?.toLowerCase().includes(q);
+      const matchDesktops = a.desktops?.some(
+        (d) =>
+          d.desktopName?.toLowerCase().includes(q) ||
+          d.desktopCode?.toLowerCase().includes(q)
+      );
+      return matchName || matchPhone || matchDesktops;
+    });
+  }
+  return list;
+});
+
+// 今日总积分统计
+const totalTodayPoints = computed(() => {
+  return store.accounts.reduce((sum, a) => sum + (a.todayPoints || 0), 0);
+});
 
 // 账号备注重命名
 const showRenameModal = ref(false);
@@ -93,8 +128,6 @@ async function openDirectDesktop(desktopCode: string) {
 
   directUrlLoading.value = desktopCode;
   try {
-    // 顶级 RESTful 直连视窗 (标准 /desktop/:desktopCode 直连推流，符合全局 Desktops 架构标准)
-    // 采用浏览器同源 Cookie 鉴权，地址栏严禁泄露 Token
     const adminToken = store.adminToken || localStorage.getItem('ctyun_admin_token') || '';
     if (adminToken) {
       try {
@@ -131,8 +164,13 @@ function getRedeemScheduleText(account: Account): string {
 const showPointsModal = ref(false);
 const pointsAccountName = ref('');
 
-function openPointsModal(account: Account) {
-  pointsAccountName.value = account.name || account.user;
+function openPointsModal(account?: Account) {
+  if (account) {
+    pointsAccountName.value = account.name || account.user;
+  } else {
+    // 默认打开第一个账号或全局
+    pointsAccountName.value = store.accounts[0]?.name || '';
+  }
   showPointsModal.value = true;
 }
 
@@ -161,7 +199,6 @@ onMounted(() => {
     for (const acc of store.accounts) {
       if (acc.desktops && Array.isArray(acc.desktops)) {
         for (const dt of acc.desktops) {
-          // 1. 远程桌面主动避让倒计时
           if (dt.yieldStatus?.yielding) {
             if (dt.yieldStatus.remainingSeconds > 1) {
               dt.yieldStatus.remainingSeconds -= 1;
@@ -170,7 +207,6 @@ onMounted(() => {
               dt.yieldStatus.remainingSeconds = 0;
             }
           }
-          // 2. 官方客户端探针（看门狗）下次探测倒计时平滑推演
           if (dt.watchdog?.active && dt.watchdog.nextProbeSec !== undefined) {
             if (dt.watchdog.nextProbeSec > 1) {
               dt.watchdog.nextProbeSec -= 1;
@@ -193,86 +229,99 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex flex-1 flex-col gap-6">
-    <!-- 1. 统计指标卡片 (完全对齐 dns-pro Dashboard 样式：bg-muted/40 hover:bg-muted/60 transition-colors rounded-xl px-4 py-3) -->
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <div class="bg-muted/40 hover:bg-muted/60 transition-colors rounded-xl px-4 py-3">
-        <div class="text-xs font-medium text-muted-foreground">天翼云账号</div>
-        <div class="text-2xl font-bold tracking-tight tabular-nums mt-0.5">{{ store.totalAccounts }}</div>
-      </div>
-      <div class="bg-muted/40 hover:bg-muted/60 transition-colors rounded-xl px-4 py-3">
-        <div class="text-xs font-medium text-muted-foreground">云电脑总数</div>
-        <div class="text-2xl font-bold tracking-tight tabular-nums mt-0.5">{{ store.totalDesktops }}</div>
-      </div>
-      <div class="bg-muted/40 hover:bg-muted/60 transition-colors rounded-xl px-4 py-3">
-        <div class="text-xs font-medium text-muted-foreground">保活在线</div>
-        <div class="text-2xl font-bold tracking-tight tabular-nums text-emerald-500 mt-0.5">{{ store.onlineDesktops }}</div>
-      </div>
-      <div class="bg-muted/40 hover:bg-muted/60 transition-colors rounded-xl px-4 py-3">
-        <div class="text-xs font-medium text-muted-foreground">今日已获积分</div>
-        <div class="text-2xl font-bold tracking-tight tabular-nums text-amber-500 mt-0.5">
-          +{{ store.accounts.reduce((sum, a) => sum + (a.todayPoints || 0), 0) }}
-        </div>
-      </div>
-    </div>
-
-    <!-- 2. 页面标题栏与操作按钮 -->
-    <div class="flex flex-col gap-3 min-[360px]:flex-row min-[360px]:items-center min-[360px]:justify-between">
-      <div class="min-w-0 space-y-0.5">
-        <h1 class="text-2xl font-bold tracking-tight">天翼云账号管理</h1>
-        <p class="text-muted-foreground text-sm">
-          <template v-if="store.totalAccounts === 0">暂未配置任何天翼云账号</template>
-          <template v-else>已接入 {{ store.totalAccounts }} 个天翼云账号，自动发现并保持长连防休眠</template>
-        </p>
-      </div>
-
+  <div class="flex flex-1 flex-col gap-6 pb-20 sm:pb-8">
+    <!-- 1. 顶部标头 (WorkBuddy 经典 PageHeader 风格) -->
+    <PageHeader
+      title="控制台"
+      :description="store.totalAccounts === 0 ? '暂未配置任何天翼云账号' : `已接入 ${store.totalAccounts} 个天翼云账号，自动发现并保持长连防休眠`"
+    >
       <div class="flex items-center gap-2">
         <Button
           size="sm"
-          class="gap-1.5 cursor-pointer shadow-xs"
+          class="h-8.5 rounded-full px-4 gap-1.5 text-xs font-medium bg-foreground text-background hover:bg-foreground/90 cursor-pointer shadow-xs"
           @click="store.openAddModal()"
         >
-          <Plus class="size-4" />
-          添加账号
+          <Plus class="size-3.5" />
+          <span>添加账号</span>
         </Button>
       </div>
+    </PageHeader>
+
+    <!-- 2. 四大核心指标卡片 (WorkBuddy / LINUX DO 极简质感) -->
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <StatCard
+        title="天翼云账号"
+        :value="store.totalAccounts"
+        description="活跃纳管账号"
+        :icon="User"
+        tone="neutral"
+      />
+      <StatCard
+        title="云电脑总数"
+        :value="store.totalDesktops"
+        description="全部绑定实例"
+        :icon="Monitor"
+        tone="neutral"
+      />
+      <StatCard
+        title="保活在线"
+        :value="store.onlineDesktops"
+        description="长连接平稳保活"
+        :icon="Zap"
+        tone="success"
+      />
+      <StatCard
+        title="今日积分"
+        :value="`+${totalTodayPoints}`"
+        description="AI对话与任务产出"
+        :icon="Coins"
+        tone="warning"
+      />
     </div>
 
-    <!-- 3. 空状态 (完全采用 dns-pro Empty 组件) -->
-    <Empty v-if="store.accounts.length === 0" class="border border-dashed border-border/70 rounded-2xl py-12">
+    <!-- 3. 搜索与快捷管理栏 (WorkBuddy ManagementBar 风格) -->
+    <ManagementBar
+      v-model:search="searchQuery"
+      v-model:status="statusFilter"
+      @add-account="store.openAddModal()"
+      @open-points-task="openPointsModal()"
+    />
+
+    <!-- 4. 空状态 -->
+    <Empty v-if="filteredAccounts.length === 0" class="border border-dashed border-border/70 rounded-[22px] py-14 bg-card/40">
       <EmptyHeader>
         <EmptyMedia variant="icon">
-          <Monitor class="size-6 text-muted-foreground" />
+          <Monitor class="size-7 text-muted-foreground" />
         </EmptyMedia>
-        <EmptyTitle>暂无天翼云账号</EmptyTitle>
+        <EmptyTitle>{{ store.accounts.length === 0 ? '暂无天翼云账号' : '未匹配到相关账号' }}</EmptyTitle>
         <EmptyDescription>
-          接入天翼云账号后，系统将自动识别验证码、绑定设备并建立云电脑 WebSocket 保活
+          {{ store.accounts.length === 0 ? '接入天翼云账号后，系统将自动识别验证码、绑定设备并建立云电脑 WebSocket 保活' : '请尝试调整搜索关键字' }}
         </EmptyDescription>
       </EmptyHeader>
-      <EmptyContent>
-        <Button size="sm" class="gap-1.5 shadow-xs cursor-pointer" @click="store.openAddModal()">
+      <EmptyContent v-if="store.accounts.length === 0">
+        <Button size="sm" class="rounded-full px-4 gap-1.5 shadow-xs cursor-pointer" @click="store.openAddModal()">
           <Plus class="size-4" />
           立即添加账号
         </Button>
       </EmptyContent>
     </Empty>
 
-    <!-- 4. 账号列表：通透大气的卡片流 (严格遵循 shadcn-vue 极简质感，忌生硬深边框) -->
+    <!-- 5. 账号与云电脑卡片流 (WorkBuddy 20px 圆角毛玻璃卡片) -->
     <div v-else class="space-y-4">
       <div
-        v-for="account in store.accounts"
+        v-for="account in filteredAccounts"
         :key="account.name"
-        class="group rounded-2xl border border-border/40 hover:border-border/80 bg-card p-4 sm:p-5 transition-all space-y-4 shadow-2xs"
+        class="group rounded-[20px] border border-border/50 hover:border-border/90 bg-card p-4 sm:p-5 transition-all space-y-4 shadow-xs hover:shadow-md"
       >
         <!-- 账号头部 -->
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div class="flex items-center gap-3.5 min-w-0">
-            <div class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-muted/60 text-foreground border border-border/40 shadow-2xs">
+            <div class="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-muted/70 text-foreground border border-border/50 shadow-2xs">
               <User class="size-5 text-muted-foreground" />
             </div>
             <div class="min-w-0 space-y-1">
               <div class="flex flex-wrap items-center gap-2">
-                <span class="truncate text-base font-semibold tracking-tight text-foreground">{{ account.name }}</span>
+                <span class="truncate text-[15px] font-semibold tracking-tight text-foreground">{{ account.name }}</span>
                 <button
                   @click="openRename(account.name)"
                   class="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-md cursor-pointer hover:bg-muted/60"
@@ -283,7 +332,7 @@ onUnmounted(() => {
                 <span class="text-xs text-muted-foreground font-mono">({{ account.loginInfo?.mobilephone || account.user }})</span>
                 <Badge
                   variant="outline"
-                  class="gap-1.5 font-normal px-2.5 py-0.5 h-6 shrink-0 transition-colors"
+                  class="gap-1.5 font-normal px-2.5 py-0.5 h-6 shrink-0 rounded-full transition-colors"
                   :class="{
                     'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': account.status === 'online',
                     'bg-muted/80 text-muted-foreground border-border/40': account.status === 'idle',
@@ -304,11 +353,11 @@ onUnmounted(() => {
                   ></span>
                   <span>{{ isAccountPaused(account) ? '暂停探测中' : (account.status === 'online' ? '保活中' : account.status === 'idle' ? '已停止' : account.status === 'error' ? '异常' : '需认证') }}</span>
                 </Badge>
-                <!-- 仅在账号处于保活中且开启 AI 对话任务时显示简约标签 -->
-                <Badge v-if="account.status === 'online' && account.taskConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
-                  AI 对话
+                <!-- AI 对话与自动兑换策略 Badge -->
+                <Badge v-if="account.status === 'online' && account.taskConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 rounded-full text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5">
+                  AI 对��
                 </Badge>
-                <Badge v-if="account.status === 'online' && account.redeemConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
+                <Badge v-if="account.status === 'online' && account.redeemConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 rounded-full text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5">
                   自动兑换 ({{ getRedeemScheduleText(account) }})
                 </Badge>
               </div>
@@ -318,35 +367,35 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- 操作栏：立即做任务、积分查看、策略配置与控制 -->
+          <!-- 操作栏：积分、策略与保活控制 -->
           <div class="flex flex-wrap items-center gap-1.5 sm:self-center">
             <Button
               variant="outline"
               size="sm"
-              class="h-8 px-2.5 text-xs gap-1 cursor-pointer border-border/60 hover:text-emerald-500 hover:border-emerald-500/40"
+              class="h-8 rounded-full px-2.5 text-xs gap-1 cursor-pointer border-border/60 hover:text-amber-500 hover:border-amber-500/40 bg-background/80"
               @click="openPointsModal(account)"
               title="查看积分明细与任务进度"
             >
               <Coins class="size-3.5 text-amber-500" />
-              任务积分
+              <span>任务积分</span>
             </Button>
 
             <Button
               variant="outline"
               size="sm"
-              class="h-8 px-2.5 text-xs gap-1 cursor-pointer border-border/60"
+              class="h-8 rounded-full px-2.5 text-xs gap-1 cursor-pointer border-border/60 bg-background/80"
               @click="store.openPolicyModal(account)"
               title="配置每日任务与自动兑换策略"
             >
               <Settings2 class="size-3.5" />
-              策略设置
+              <span>策略设置</span>
             </Button>
 
             <!-- 认证异常状态 -->
             <Button
               v-if="account.status === 'login_needed' || account.status === 'need_sms'"
               size="sm"
-              class="h-8 px-3 text-xs bg-amber-500 hover:bg-amber-600 text-white cursor-pointer"
+              class="h-8 rounded-full px-3 text-xs bg-amber-500 hover:bg-amber-600 text-white cursor-pointer"
               @click="store.openAddModal(account.name, account.user)"
             >
               去认证
@@ -354,41 +403,39 @@ onUnmounted(() => {
 
             <!-- 三态控制按钮组：开启 / 停止 -->
             <template v-else>
-              <!-- 开启保活按钮 (非 online 状态均可点击开启) -->
               <Button
                 v-if="account.status !== 'online'"
                 variant="secondary"
                 size="sm"
-                class="h-8 px-2.5 text-xs gap-1 cursor-pointer text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
+                class="h-8 rounded-full px-3 text-xs gap-1 cursor-pointer text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20"
                 :disabled="Boolean(store.accountActionLoading[account.name])"
                 @click="store.accountAction(account.name, 'start')"
                 title="开启后台长连接保活"
               >
                 <Loader2 v-if="store.accountActionLoading[account.name] === 'start'" class="size-3.5 animate-spin" />
                 <Play v-else class="size-3.5 fill-current" />
-                开启
+                <span>开启</span>
               </Button>
 
-              <!-- 彻底停止按钮 (当未彻底停止时可点击) -->
               <Button
                 v-if="account.status === 'online' || isAccountPaused(account)"
                 variant="secondary"
                 size="sm"
-                class="h-8 px-2.5 text-xs gap-1 cursor-pointer text-destructive/80 hover:bg-destructive/10"
+                class="h-8 rounded-full px-3 text-xs gap-1 cursor-pointer text-destructive/90 bg-destructive/10 hover:bg-destructive/20 border border-destructive/20"
                 :disabled="Boolean(store.accountActionLoading[account.name])"
                 @click="store.accountAction(account.name, 'stop')"
                 title="彻底停止保活：断开长连接且彻底不发起任何探测，完全静止"
               >
                 <Loader2 v-if="store.accountActionLoading[account.name] === 'stop'" class="size-3.5 animate-spin" />
                 <Square v-else class="size-3.5 fill-current" />
-                停止
+                <span>停止</span>
               </Button>
             </template>
 
             <Button
               variant="ghost"
               size="icon"
-              class="size-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+              class="size-8 rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
               :disabled="Boolean(store.accountActionLoading[account.name])"
               @click="store.accountAction(account.name, 'delete')"
               title="删除账号"
@@ -399,49 +446,47 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 云电脑实例列表：桌面端采用固定列宽表格，文字变化绝不抖动变形 -->
+        <!-- 云电脑实例列表：桌面端固定列宽表格 -->
         <div v-if="account.desktops && account.desktops.length > 0" class="pt-1">
           <!-- 桌面端表格 (sm 以上) -->
-          <div class="hidden sm:block overflow-x-auto">
+          <div class="hidden sm:block overflow-x-auto rounded-xl border border-border/40 bg-muted/20">
             <Table class="table-fixed w-full">
               <TableHeader>
-                <TableRow class="hover:bg-transparent border-border/60">
+                <TableRow class="hover:bg-transparent border-border/50">
                   <TableHead class="h-9 text-xs font-medium w-[22%]">云电脑名称</TableHead>
                   <TableHead class="h-9 text-xs font-medium w-[14%]">硬件规格</TableHead>
                   <TableHead class="h-9 text-xs font-medium w-[18%]">实例代码 / ID</TableHead>
                   <TableHead class="h-9 text-xs font-medium w-[13%]">云端状态</TableHead>
                   <TableHead class="h-9 text-xs font-medium w-[13%]">保活长连</TableHead>
                   <TableHead class="h-9 text-xs font-medium w-[10%] text-right">最近心跳</TableHead>
-                  <TableHead class="h-9 text-xs font-medium w-[10%] text-right pr-2">控制</TableHead>
+                  <TableHead class="h-9 text-xs font-medium w-[10%] text-right pr-3">控制</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 <template v-for="desktop in account.desktops" :key="desktop.desktopCode">
-                  <TableRow class="border-border/30 hover:bg-muted/30 transition-colors">
+                  <TableRow class="border-border/30 hover:bg-muted/40 transition-colors">
                     <TableCell class="py-2.5 font-medium text-foreground truncate">
                       <div class="flex items-center gap-2 min-w-0 group/dtname">
                         <Monitor class="size-4 text-muted-foreground shrink-0" />
-                        <span class="truncate" :title="desktop.desktopName">{{ desktop.desktopName || '云电脑' }}</span>
+                        <span class="truncate text-xs font-medium" :title="desktop.desktopName">{{ desktop.desktopName || '云电脑' }}</span>
                         <Button
                           variant="ghost"
                           size="icon"
-                          class="size-5 rounded-sm p-0 opacity-0 group-hover/dtname:opacity-100 transition-opacity text-muted-foreground hover:text-foreground shrink-0"
+                          class="size-5 rounded-sm p-0 opacity-0 group-hover/dtname:opacity-100 transition-opacity text-muted-foreground hover:text-foreground shrink-0 cursor-pointer"
                           title="修改云电脑名称"
                           @click="openDesktopRename(desktop.desktopCode, desktop.desktopName)"
                         >
                           <Pencil class="size-3" />
                         </Button>
-                        <Badge v-if="desktop.isPool || (desktop.desktopName && desktop.desktopName.includes('桌面池'))" variant="outline" class="h-4 px-1 text-[9px] font-normal border-amber-500/30 text-amber-500 shrink-0">
+                        <Badge v-if="desktop.isPool || (desktop.desktopName && desktop.desktopName.includes('桌面池'))" variant="outline" class="h-4 px-1 rounded-sm text-[9px] font-normal border-amber-500/30 text-amber-500 shrink-0">
                           政企桌面池
                         </Badge>
                       </div>
                     </TableCell>
                     <TableCell class="py-2.5 whitespace-nowrap">
-                      <div class="flex items-center gap-1.5">
-                        <Badge variant="outline" class="h-5 px-1.5 text-[10px] font-mono border-primary/30 text-primary">
-                           {{ parseDesktopSpec(desktop) }}
-                        </Badge>
-                      </div>
+                      <Badge variant="outline" class="h-5 px-1.5 rounded-sm text-[10px] font-mono border-primary/30 text-primary">
+                         {{ parseDesktopSpec(desktop) }}
+                      </Badge>
                     </TableCell>
                     <TableCell class="py-2.5 font-mono text-xs text-muted-foreground truncate">
                       <span class="truncate block" :title="desktop.desktopCode">{{ desktop.desktopCode }}</span>
@@ -449,7 +494,7 @@ onUnmounted(() => {
                     <TableCell class="py-2.5 whitespace-nowrap">
                       <Badge
                         variant="secondary"
-                        class="h-5 px-2 text-[11px] font-normal"
+                        class="h-5 px-2 rounded-full text-[11px] font-normal"
                         :class="{
                           'bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20': desktop.yieldStatus?.yielding,
                           'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': !desktop.yieldStatus?.yielding && (desktop.useStatusText === '运行中' || desktop.status === 'connected'),
@@ -475,13 +520,12 @@ onUnmounted(() => {
                     <TableCell class="py-2.5 font-mono text-xs text-muted-foreground text-right tabular-nums whitespace-nowrap">
                       {{ desktop.lastHeartbeat || '-' }}
                     </TableCell>
-                    <TableCell class="py-2.5 text-right whitespace-nowrap pr-2">
+                    <TableCell class="py-2.5 text-right whitespace-nowrap pr-3">
                       <div class="inline-flex items-center gap-1 justify-end">
-                        <!-- 远程桌面直通按钮 (新标签页打开官方视窗) -->
                         <Button
                           variant="ghost"
                           size="icon"
-                          class="size-7 text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer"
+                          class="size-7 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer"
                           :title="desktop.useStatusText === '运行中' ? '进入远程桌面 (官方Web直连)' : '获取免密直连 (若未开机需先开机)'"
                           :disabled="directUrlLoading === desktop.desktopCode"
                           @click="openDirectDesktop(desktop.desktopCode)"
@@ -492,23 +536,21 @@ onUnmounted(() => {
                           />
                           <ExternalLink v-else class="size-3.5" />
                         </Button>
-                        <!-- 关机状态：显示开机图标 -->
                         <Button
                           v-if="!(desktop.useStatusText === '运行中' && desktop.status === 'connected')"
                           variant="ghost"
                           size="icon"
-                          class="size-7 text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10 cursor-pointer"
+                          class="size-7 rounded-md text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10 cursor-pointer"
                           title="开机"
                           @click="openPowerConfirm(account.name, desktop.desktopCode, 'on', desktop.desktopName || desktop.desktopCode)"
                         >
                           <Power class="size-3.5" />
                         </Button>
-                        <!-- 运行中状态：并列显示 重启 与 关机 图标 -->
                         <template v-else>
                           <Button
                             variant="ghost"
                             size="icon"
-                            class="size-7 text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 cursor-pointer"
+                            class="size-7 rounded-md text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 cursor-pointer"
                             title="重启"
                             @click="openPowerConfirm(account.name, desktop.desktopCode, 'reset', desktop.desktopName || desktop.desktopCode)"
                           >
@@ -517,7 +559,7 @@ onUnmounted(() => {
                           <Button
                             variant="ghost"
                             size="icon"
-                            class="size-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                            class="size-7 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
                             title="关机"
                             @click="openPowerConfirm(account.name, desktop.desktopCode, 'shutdown', desktop.desktopName || desktop.desktopCode)"
                           >
@@ -537,10 +579,10 @@ onUnmounted(() => {
             <div
               v-for="desktop in account.desktops"
               :key="desktop.desktopCode"
-              class="p-3 rounded-xl bg-muted/30 border border-border/40 space-y-2"
+              class="p-3 rounded-xl bg-muted/40 border border-border/40 space-y-2"
             >
               <div class="flex items-center justify-between">
-                <div class="flex items-center gap-2 font-medium text-sm text-foreground min-w-0">
+                <div class="flex items-center gap-2 font-medium text-xs text-foreground min-w-0">
                   <Monitor class="size-4 text-muted-foreground shrink-0" />
                   <span class="truncate">{{ desktop.desktopName || '云电脑' }}</span>
                   <Button
@@ -552,13 +594,13 @@ onUnmounted(() => {
                   >
                     <Pencil class="size-3" />
                   </Button>
-                  <Badge variant="outline" class="h-4 px-1.5 text-[10px] font-mono border-primary/40 text-primary shrink-0">
+                  <Badge variant="outline" class="h-4 px-1 text-[9px] font-mono border-primary/40 text-primary shrink-0">
                      {{ parseDesktopSpec(desktop) }}
                   </Badge>
                 </div>
                 <Badge
                   variant="secondary"
-                  class="h-5 px-1.5 text-[11px] font-normal"
+                  class="h-5 px-1.5 rounded-full text-[10px] font-normal"
                   :class="{
                     'bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20': desktop.yieldStatus?.yielding,
                     'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': !desktop.yieldStatus?.yielding && (desktop.useStatusText === '运行中' || desktop.status === 'connected'),
@@ -570,7 +612,7 @@ onUnmounted(() => {
                   {{ desktop.yieldStatus?.yielding ? `避让中 (${desktop.yieldStatus.remainingSeconds}s)` : (desktop.status === 'paused' ? '暂停探测中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机')))) }}
                 </Badge>
               </div>
-              <div class="flex items-center justify-between text-xs text-muted-foreground font-mono">
+              <div class="flex items-center justify-between text-[11px] text-muted-foreground font-mono">
                 <span class="truncate">ID: {{ desktop.desktopCode }}</span>
                 <span class="shrink-0 ml-2">{{ desktop.lastHeartbeat || '无心跳' }}</span>
               </div>
@@ -585,11 +627,10 @@ onUnmounted(() => {
                   </span>
                 </div>
                 <div class="inline-flex items-center gap-1">
-                  <!-- 远程桌面直通按钮 (新标签页打开官方视窗) -->
                   <Button
                     variant="ghost"
                     size="icon"
-                    class="size-7 text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer"
+                    class="size-7 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 cursor-pointer"
                     :title="desktop.useStatusText === '运行中' ? '进入远程桌面 (官方Web直连)' : '获取免密直连 (若未开机需先开机)'"
                     :disabled="directUrlLoading === desktop.desktopCode"
                     @click="openDirectDesktop(desktop.desktopCode)"
@@ -600,23 +641,21 @@ onUnmounted(() => {
                     />
                     <ExternalLink v-else class="size-3.5" />
                   </Button>
-                  <!-- 关机状态：显示开机图标 -->
                   <Button
                     v-if="!(desktop.useStatusText === '运行中' && desktop.status === 'connected')"
                     variant="ghost"
                     size="icon"
-                    class="size-7 text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10 cursor-pointer"
+                    class="size-7 rounded-md text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10 cursor-pointer"
                     title="开机"
                     @click="openPowerConfirm(account.name, desktop.desktopCode, 'on', desktop.desktopName || desktop.desktopCode)"
                   >
                     <Power class="size-3.5" />
                   </Button>
-                  <!-- 运行中状态：并列显示 重启 与 关机 图标 -->
                   <template v-else>
                     <Button
                       variant="ghost"
                       size="icon"
-                      class="size-7 text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 cursor-pointer"
+                      class="size-7 rounded-md text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 cursor-pointer"
                       title="重启"
                       @click="openPowerConfirm(account.name, desktop.desktopCode, 'reset', desktop.desktopName || desktop.desktopCode)"
                     >
@@ -625,7 +664,7 @@ onUnmounted(() => {
                     <Button
                       variant="ghost"
                       size="icon"
-                      class="size-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                      class="size-7 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
                       title="关机"
                       @click="openPowerConfirm(account.name, desktop.desktopCode, 'shutdown', desktop.desktopName || desktop.desktopCode)"
                     >
@@ -639,7 +678,7 @@ onUnmounted(() => {
         </div>
 
         <div v-else class="text-xs text-muted-foreground py-4 text-center bg-muted/20 rounded-xl border border-dashed border-border/40">
-          暂未同步到名下云电脑实例，点击「保活」即可自动登录拉取
+          暂未同步到名下云电脑实例，点击「开启」即可自动登录拉取
         </div>
       </div>
     </div>

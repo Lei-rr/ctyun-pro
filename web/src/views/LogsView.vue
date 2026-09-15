@@ -5,6 +5,7 @@ import { Button } from '@/shared/ui/button';
 import { Badge } from '@/shared/ui/badge';
 import { Switch } from '@/shared/ui/switch';
 import { Terminal, RotateCcw } from 'lucide-vue-next';
+import PageHeader from '@/components/common/PageHeader.vue';
 
 const store = useAppStore();
 const logBox = ref<HTMLDivElement | null>(null);
@@ -36,7 +37,6 @@ watch(
 onMounted(() => {
   scrollToBottom();
   // 若 WS 尚未连上，开启 SSE 兜底推流
-  // 优先直接使用同源 Cookie 鉴权建立 SSE 连接，避免在 URL 中暴露 token
   if (!store.isWsConnected) {
     es = new EventSource('/api/logs/stream');
     es.onmessage = (event) => {
@@ -59,23 +59,13 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex flex-1 flex-col gap-4">
-    <!-- 顶部状态与工具条 -->
-    <div class="flex flex-col gap-3 min-[480px]:flex-row min-[480px]:items-center min-[480px]:justify-between">
-      <div class="flex items-center gap-2 text-xs text-muted-foreground min-w-0">
-        <span class="relative flex size-2">
-          <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-          <span class="relative inline-flex size-2 rounded-full bg-emerald-500"></span>
-        </span>
-        <span class="font-medium text-foreground">
-          实时日志
-        </span>
-        <Badge variant="secondary" class="h-5 px-1.5 text-[10px] font-mono shrink-0 ml-1">
-           {{ store.logs.length }} / 1000 条
-        </Badge>
-      </div>
-
-      <div class="flex items-center gap-3 self-end min-[480px]:self-auto">
+  <div class="flex flex-1 flex-col gap-6 pb-20 sm:pb-8">
+    <!-- PageHeader 统一风格 -->
+    <PageHeader
+      title="实时日志"
+      description="天翼云电脑 WebSocket 长连接心跳保活、AI对话任务与自动兑换流水"
+    >
+      <div class="flex items-center gap-3">
         <div class="flex items-center gap-2">
           <label for="auto-scroll" class="text-xs text-muted-foreground cursor-pointer select-none">
             自动滚屏
@@ -86,19 +76,19 @@ onUnmounted(() => {
         <Button
           variant="outline"
           size="sm"
-          class="h-8 gap-1.5 text-xs cursor-pointer border-border/60"
+          class="h-8.5 rounded-full px-3.5 gap-1.5 text-xs cursor-pointer border-border/60 bg-background/80"
           @click="store.clearLogs()"
         >
           <RotateCcw class="size-3.5" />
           清空日志
         </Button>
       </div>
-    </div>
+    </PageHeader>
 
-    <!-- 终端视窗 -->
+    <!-- 终端卡片 (WorkBuddy 20px 圆角与暗黑极简边框) -->
     <div
       ref="logBox"
-      class="h-[620px] w-full rounded-2xl bg-card border border-border/40 p-4 sm:p-5 font-mono text-xs overflow-y-auto space-y-1.5 shadow-2xs"
+      class="h-[620px] w-full rounded-[20px] bg-card border border-border/50 p-4 sm:p-5 font-mono text-xs overflow-y-auto space-y-1.5 shadow-xs scroll-slim"
     >
       <div v-if="store.logs.length === 0" class="flex flex-col items-center justify-center h-full text-muted-foreground/60 gap-2">
         <Terminal class="size-8 stroke-[1.5] text-muted-foreground/40" />
@@ -108,7 +98,7 @@ onUnmounted(() => {
       <div
         v-for="log in store.logs"
         :key="log.id"
-        class="leading-relaxed flex items-start gap-2.5 break-all select-text hover:bg-muted/30 px-1.5 py-0.5 rounded transition-colors"
+        class="leading-relaxed flex items-start gap-2.5 break-all select-text hover:bg-muted/40 px-2 py-1 rounded-md transition-colors"
       >
         <span class="text-muted-foreground/60 select-none shrink-0">[{{ log.time }}]</span>
         <span
@@ -121,13 +111,14 @@ onUnmounted(() => {
           }"
         >
           {{ log.message }}
-          <span
-            v-if="log.count && log.count > 1"
-            class="ml-1.5 inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-sky-500/15 text-sky-600 dark:bg-sky-400/20 dark:text-sky-300 border border-sky-500/30 select-none leading-none align-middle"
-          >
-            x{{ log.count }}
-          </span>
         </span>
+        <Badge
+          v-if="log.count && log.count > 1"
+          variant="outline"
+          class="text-[10px] font-mono h-4 px-1.5 rounded-full shrink-0 border-primary/30 text-primary bg-primary/5 select-none"
+        >
+          x{{ log.count }}
+        </Badge>
       </div>
     </div>
   </div>
