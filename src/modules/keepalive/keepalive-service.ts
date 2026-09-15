@@ -367,10 +367,14 @@ export class KeepaliveService extends EventEmitter {
               if (status === 'connected') {
                 state.useStatusText = '运行中';
               }
+              if (status === 'paused') {
+                this.emit('desktop:paused', { accountName, desktopId: d.desktopId, desktopCode: d.desktopCode });
+              }
             }
             this.onStateChange?.();
           },
           onPreempted: (code, reason) => {
+            this.emit('desktop:paused', { accountName, desktopId: d.desktopId, desktopCode: d.desktopCode });
             this.emit('worker:preempted', { accountName, desktopCode: d.desktopCode, desktopId: d.desktopId, code, reason });
           },
           onHeartbeat: () => {

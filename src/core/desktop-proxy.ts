@@ -480,12 +480,12 @@ export function registerDesktopProxyRoutes(
   // 顶级标准 RESTful 直连: /desktop/:desktopCode
   fastify.get('/desktop/:desktopCode', renderDesktopView);
 
-  // 2. 接收前台 Web 用户活跃心跳 (刷新避让时长 30s)
+  // 2. 接收前台 Web 用户活跃心跳 (刷新避让时长 60s)
   fastify.post('/api/desktops/:desktopCode/web-active', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     const { desktopCode } = request.params as { desktopCode: string };
     const targetCode = (desktopCode || '').trim();
-    manager.touchWebUserActive('', targetCode, 30);
+    manager.touchWebUserActive('', targetCode, 60);
     reply.send({ success: true });
   });
 

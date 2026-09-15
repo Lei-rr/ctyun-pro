@@ -16,7 +16,7 @@ const WATCHDOG_PROBE_INTERVAL_MS = 300000; // 暂停状态下的探针周期: 5 
 const POWER_TRACKING_INTERVAL_MS = 20000;  // 电源操作后的轮询追踪周期: 20 秒
 const POWER_TRACKING_MAX_ROUNDS = 15;      // 电源状态轮询最大轮次 (15 * 20s = 5 分钟超时)
 const SAVE_CONFIG_DEBOUNCE_MS = 150;       // 配置落盘防抖延迟: 150 毫秒
-const WEB_RELEASE_DEFAULT_DELAY_SEC = 10;  // Web 直连释放后的默认宽限恢复时间: 10 秒
+const WEB_RELEASE_DEFAULT_DELAY_SEC = 20;  // Web 直连释放后的默认宽限恢复时间: 20 秒 (给页面刷新和前台切换留足缓冲)
 
 export interface ManagedAccount {
   id: string; // 全局唯一不可变 UUID (主键)

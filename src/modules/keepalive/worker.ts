@@ -302,7 +302,7 @@ export class KeepAliveWorker {
         this.isReconnecting = false;
         this.isPaused = true;
         this.needsFreshTicket = true;
-        this.log('warn', `收到官方客户端在线/挤占信令 (${code}, ${reasonStr})，立即断开长连进入暂停状态`);
+        this.log('warn', `检测到官方或前台客户端接入 (${code}, ${reasonStr})，后台保活长连接主动让位暂停`);
         this.options.onStatusChange?.('paused');
         this.options.onPreempted?.(code, reasonStr);
         return;
