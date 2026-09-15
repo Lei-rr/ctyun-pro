@@ -124,6 +124,22 @@ export class WatchdogService {
   }
 
   /**
+   * 获取指定桌面的看门狗运行态指标 (供 Profile 摘要与前端展示)
+   */
+  public getWatchdogInfo(accountName: string, desktopId: string) {
+    const state = this.states.get(`${accountName}:${desktopId}`);
+    if (!state || !state.active) return null;
+
+    const remainingMs = Math.max(0, state.nextProbeTime - Date.now());
+    return {
+      active: true,
+      currentIntervalSec: Math.round(state.currentIntervalMs / 1000),
+      nextProbeSec: Math.round(remainingMs / 1000),
+      failRounds: state.consecutiveBusyCount,
+    };
+  }
+
+  /**
    * 获取所有活跃看门狗数量
    */
   public getActiveWatchdogCount(): number {
