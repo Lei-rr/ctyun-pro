@@ -1198,7 +1198,7 @@ export class ProfileManager {
 
   public exportConfigSafe() {
     return {
-      version: '2.2.0',
+      version: '3.0.0',
       exportedAt: new Date().toISOString(),
       system: {
         keepAliveSeconds: this.keepAliveSeconds,
