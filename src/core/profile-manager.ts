@@ -774,7 +774,9 @@ export class ProfileManager {
     const key = `${accountName}:${desktopId}`;
     if (this.pauseWatchdogTimers.has(key)) return;
 
-    this.logger.addLog('info', `[${accountName}] 启动休眠自愈看门狗探针 (每 5 分钟探测虚拟机电源状态)`);
+    const matched = this.findDesktopByCode(desktopId);
+    const dPrefix = matched?.desktop ? `${accountName} - ${matched.desktop.desktopName || matched.desktop.desktopCode}` : accountName;
+    this.logger.addLog('info', `[${dPrefix}] 官方客户端在线，后台长连接暂停让位 (启动 5 分钟休眠看门狗探针)`);
 
     const timer = setInterval(async () => {
       try {
@@ -1064,7 +1066,6 @@ export class ProfileManager {
     const client = this.getClient(accountName);
     if (!acc || !state || !client.loginInfo) return;
 
-    this.logger.addLog('info', `[${accountName}] 正在查询云电脑列表...`);
     let list: Desktop[] = [];
     try {
       list = await client.getDesktopList();
