@@ -798,50 +798,68 @@ export class ProfileManager {
         const client = this.getClient(accountName);
         if (!client.loginInfo) return;
 
-        // 通过轻量 getDesktopList 查询官方实时 useStatusText
-        const pageRes = await client.getDesktopList();
-        const matched = pageRes?.find(
-          (item: Desktop) => String(item.desktopId) === String(desktopId) || String(item.desktopCode) === String(desktopId),
-        );
-        if (!matched) return;
+        // 通过轻量 getDesktopState / getDesktopList 查询官方实时状态
+        const objType = typeof target?.objType === 'number' ? target.objType : 0;
+        let realStatusText = '';
+        let isSessionActive = true;
 
-        const realStatus = matched.useStatusText || '';
-        target.useStatusText = realStatus;
-        this.notifyStatusChange();
-
-        // 若虚拟机仍处于“运行中”，说明真实用户还在操作，维持静默，绝不打扰
-        if (realStatus.includes('运行') || realStatus.includes('使用')) {
-          return;
-        }
-
-        // 一旦脱离“运行中”（如“已关机”、“休眠中”、“已休眠”等），证明真实用户已退出休眠
-        this.logger.addLog(
-          'info',
-          `[${accountName} - ${target.desktopName || target.desktopCode}] 看门狗检测到云电脑脱离运行态 (${realStatus})，触发自动开机自愈...`,
-        );
-
-        // 清除看门狗定时器
-        this.clearPauseWatchdog(accountName, desktopId);
-
-        // 自动调用开机唤醒
         try {
-          await client.operateDesktop(matched.desktopCode || desktopId, 'on');
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          this.logger.addLog('warn', `[${accountName}] 自愈开机指令提示: ${msg}`);
+          const stateInfo = await client.getDesktopState(desktopId, objType);
+          if (stateInfo) {
+            realStatusText = stateInfo.useStatusText || '';
+            // useStatus 20 表示未连接/无活跃会话
+            if (String(stateInfo.useStatus) === '20' || String(stateInfo.desktopState) === '20') {
+              isSessionActive = false;
+            }
+          }
+        } catch {}
+
+        if (!realStatusText) {
+          const pageRes = await client.getDesktopList();
+          const matched = pageRes?.find(
+            (item: Desktop) => String(item.desktopId) === String(desktopId) || String(item.desktopCode) === String(desktopId),
+          );
+          if (!matched) return;
+          realStatusText = matched.useStatusText || '';
+          if (String(matched.useStatus) === '20' || String(matched.status) === '20') {
+            isSessionActive = false;
+          }
         }
 
-        // 恢复保活状态：将账号 autoStart 标记置为 true 并切回 running，恢复 Worker 长连
-        acc.autoStart = true;
-        this.saveToDisk();
-        state.status = 'online';
-        target.status = 'connecting';
+        target.useStatusText = realStatusText;
         this.notifyStatusChange();
 
-        // 缓冲 3 秒等推流端口就绪后恢复长连
-        setTimeout(() => {
-          this.reloadDesktops(accountName).catch(() => {});
-        }, 3000);
+        // 若云电脑脱离活跃运行态（检测到关机、休眠、状态 20 等），立即自动自愈唤醒并恢复长连
+        const isNotRunning = !realStatusText.includes('运行') && !realStatusText.includes('使用');
+        if (!isSessionActive || isNotRunning) {
+          this.logger.addLog(
+            'info',
+            `[${accountName} - ${target.desktopName || target.desktopCode}] 看门狗检测到云电脑脱离外部活跃占用 (${realStatusText || '无活跃会话'})，触发自动恢复保活...`,
+          );
+
+          // 清除看门狗定时器
+          this.clearPauseWatchdog(accountName, desktopId);
+
+          // 自动调用开机唤醒（若关机/休眠）
+          try {
+            await client.operateDesktop(target.desktopCode || desktopId, 'on');
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            this.logger.addLog('warn', `[${accountName}] 自愈开机指令提示: ${msg}`);
+          }
+
+          // 恢复保活状态并唤醒 Worker 长连
+          acc.autoStart = true;
+          this.saveToDisk();
+          state.status = 'online';
+          target.status = 'connecting';
+          this.notifyStatusChange();
+
+          // 缓冲 3 秒等端口就绪后精准恢复长连
+          setTimeout(async () => {
+            await this.keepaliveService.resumeWorkerForDesktop(accountName, target.desktopCode || desktopId);
+          }, 3000);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.addLog('warn', `[${accountName}] 看门狗探针检测异常: ${msg}`);
