@@ -31,7 +31,7 @@ import PolicyConfigDialog from '@/components/dialogs/PolicyConfigDialog.vue';
 import SystemConfigDialog from '@/components/dialogs/SystemConfigDialog.vue';
 
 declare const __APP_VERSION__: string;
-const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'v1.3.4';
+const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'v3.0.0';
 
 const store = useAppStore();
 const route = useRoute();
