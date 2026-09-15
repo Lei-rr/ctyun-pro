@@ -1,7 +1,7 @@
 import type { AccountConfig } from '../../config.js';
 import { getRandomScheduleTime } from '../../config.js';
 import type { Logger } from '../../core/logger.js';
-import { TaskRunner } from '../task/index.js';
+import { TaskRunner } from './task-runner.js';
 import { RewardRedeemService } from '../reward/reward-service.js';
 import { sendWebhookNotification } from '../../core/utils.js';
 import type { ProfileManager } from '../../core/profile-manager.js';

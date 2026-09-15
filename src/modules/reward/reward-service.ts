@@ -1,6 +1,6 @@
 import type { CtYunClient } from '../../core/client.js';
 import { safeFetch } from '../../core/utils.js';
-import { SignTask } from '../task/sign.js';
+import { SignTask } from '../tasks/sign.js';
 
 export interface RewardItem {
   prodId: number;

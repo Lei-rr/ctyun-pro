@@ -4,8 +4,7 @@ import { Config, getRandomScheduleTime, DEFAULT_REDEEM_CONFIG, type AccountConfi
 import { CtYunClient, type Desktop, type DesktopInfo, type LoginInfo } from './client.js';
 import { KeepaliveService, type ManagedDesktopState } from '../modules/keepalive/index.js';
 import { Logger, type LogItem } from './logger.js';
-import { TaskScheduler } from '../modules/strategy/index.js';
-import { SignTask, AiChatTask, type PointsSummary } from '../modules/task/index.js';
+import { TaskScheduler, SignTask, AiChatTask, type PointsSummary } from '../modules/tasks/index.js';
 import { RewardRedeemService, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardItem } from '../modules/reward/index.js';
 import { DesktopSessionArbiter } from '../modules/arbiter/desktop-session-arbiter.js';
 import { safeWriteFileSync, sendWebhookNotification, getCstDateString, getCstDateTimeString } from './utils.js';
