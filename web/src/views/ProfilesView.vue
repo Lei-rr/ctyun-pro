@@ -112,6 +112,10 @@ async function openDirectDesktop(desktopCode: string) {
   }
 }
 
+function isAccountPaused(account: Account): boolean {
+  return Boolean(account.desktops && account.desktops.some(d => d.status === 'paused'));
+}
+
 function getRedeemScheduleText(account: Account): string {
   const r = account.redeemConfig;
   if (!r || !r.enabled) return '';
@@ -268,13 +272,13 @@ onUnmounted(() => {
                 </button>
                 <span class="text-xs text-muted-foreground font-mono">({{ account.loginInfo?.mobilephone || account.user }})</span>
                 <Badge
-                  variant="secondary"
-                  class="h-5 shrink-0 px-2 text-[11px] font-normal flex items-center gap-1.5"
+                  variant="outline"
+                  class="gap-1.5 font-normal px-2.5 py-0.5 h-6 shrink-0 transition-colors"
                   :class="{
                     'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20': account.status === 'online',
-                    'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': account.status === 'login_needed' || account.status === 'need_sms' || (account.desktops && account.desktops.some(d => d.status === 'paused')),
+                    'bg-muted/80 text-muted-foreground border-border/40': account.status === 'idle',
                     'bg-destructive/10 text-destructive border border-destructive/20': account.status === 'error',
-                    'bg-muted text-muted-foreground border border-border/40': account.status === 'idle',
+                    'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20': account.status === 'login_needed' || account.status === 'need_sms' || isAccountPaused(account),
                   }"
                 >
                   <span
@@ -285,10 +289,10 @@ onUnmounted(() => {
                     <span class="relative inline-flex size-1.5 rounded-full bg-emerald-500"></span>
                   </span>
                   <span
-                    v-else-if="account.desktops && account.desktops.some(d => d.status === 'paused')"
+                    v-else-if="isAccountPaused(account)"
                     class="size-1.5 rounded-full bg-amber-500 shrink-0"
                   ></span>
-                  <span>{{ (account.desktops && account.desktops.some(d => d.status === 'paused')) ? '暂停探测中' : (account.status === 'online' ? '保活中' : account.status === 'idle' ? '已停止' : account.status === 'error' ? '异常' : '需认证') }}</span>
+                  <span>{{ isAccountPaused(account) ? '暂停探测中' : (account.status === 'online' ? '保活中' : account.status === 'idle' ? '已停止' : account.status === 'error' ? '异常' : '需认证') }}</span>
                 </Badge>
                 <!-- 仅在账号处于保活中且开启 AI 对话任务时显示简约标签 -->
                 <Badge v-if="account.status === 'online' && account.taskConfig?.enabled" variant="outline" class="h-5 shrink-0 px-2 text-[11px] font-normal border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
@@ -355,7 +359,7 @@ onUnmounted(() => {
 
               <!-- 彻底停止按钮 (当未彻底停止时可点击) -->
               <Button
-                v-if="account.status === 'online' || (account.desktops && account.desktops.some(d => d.status === 'paused'))"
+                v-if="account.status === 'online' || isAccountPaused(account)"
                 variant="secondary"
                 size="sm"
                 class="h-8 px-2.5 text-xs gap-1 cursor-pointer text-destructive/80 hover:bg-destructive/10"

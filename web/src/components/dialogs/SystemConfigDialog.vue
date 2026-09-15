@@ -15,7 +15,6 @@ const emit = defineEmits<{
 }>();
 
 const store = useAppStore();
-const sysKeepAlive = ref(60);
 const sysAdminPassword = ref('');
 const sysWebhookUrl = ref('');
 const sysLoading = ref(false);
@@ -25,7 +24,6 @@ watch(
   () => props.open,
   (val) => {
     if (val) {
-      sysKeepAlive.value = store.keepAliveSeconds || 60;
       sysAdminPassword.value = '';
       sysWebhookUrl.value = store.webhookUrl || '';
     }
@@ -62,7 +60,6 @@ async function saveSystemConfig() {
   sysLoading.value = true;
   try {
     const payload: any = {
-      keepAliveSeconds: Number(sysKeepAlive.value),
       webhookUrl: sysWebhookUrl.value.trim(),
     };
     if (sysAdminPassword.value.trim()) {
