@@ -99,31 +99,12 @@ export function requestIpv4(
 }
 
 /**
- * 原子化安全写入文件 (先写临时文件再 rename 替换，并自动轮转保留最多 3 份历史快照 .bak 防止损毁)
+ * 原子化安全写入文件 (先写临时文件再 rename 替换)
  */
 export function safeWriteFileSync(filePath: string, content: string | Buffer): void {
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
-  }
-
-  // 若原文件已存在且有效，创建带轮转的快照备份 (最多保留 3 份 .bak)
-  if (fs.existsSync(filePath)) {
-    try {
-      const stats = fs.statSync(filePath);
-      if (stats.size > 0) {
-        const bak1 = `${filePath}.bak1`;
-        const bak2 = `${filePath}.bak2`;
-        const bak3 = `${filePath}.bak3`;
-        if (fs.existsSync(bak2)) {
-          fs.copyFileSync(bak2, bak3);
-        }
-        if (fs.existsSync(bak1)) {
-          fs.copyFileSync(bak1, bak2);
-        }
-        fs.copyFileSync(filePath, bak1);
-      }
-    } catch {}
   }
 
   const tmpPath = `${filePath}.${Date.now()}.${Math.random().toString(36).substring(2, 8)}.tmp`;
