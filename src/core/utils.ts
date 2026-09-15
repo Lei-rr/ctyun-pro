@@ -1,33 +1,46 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import https from 'node:https';
+import { globalApiGate } from './api-gate.js';
 
 /**
- * 带有超时保护的安全 fetch (默认 60s 超时，防止官方接口异常导致整个事件循环挂起)
+ * 带有超时保护与全局错峰并发门禁的安全 fetch
+ * 默认 60s 超时，并在底层受控于全局请求并发门禁 (防范多账号并发冲击天翼云官方 API)
  */
-export async function safeFetch(url: string | URL | Request, options: RequestInit & { timeoutMs?: number } = {}): Promise<Response> {
-  const { timeoutMs = 60000, ...fetchOpts } = options;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+export async function safeFetch(
+  url: string | URL | Request,
+  options: RequestInit & { timeoutMs?: number; skipGate?: boolean } = {},
+): Promise<Response> {
+  const { timeoutMs = 60000, skipGate = false, ...fetchOpts } = options;
 
-  // 若外部已提供 signal，进行联动
-  const onAbort = () => controller.abort();
-  if (fetchOpts.signal) {
-    fetchOpts.signal.addEventListener('abort', onAbort);
-  }
+  const executeFetch = async (): Promise<Response> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-  try {
-    const res = await fetch(url, {
-      ...fetchOpts,
-      signal: controller.signal,
-    });
-    return res;
-  } finally {
-    clearTimeout(timeoutId);
+    // 若外部已提供 signal，进行联动
+    const onAbort = () => controller.abort();
     if (fetchOpts.signal) {
-      fetchOpts.signal.removeEventListener('abort', onAbort);
+      fetchOpts.signal.addEventListener('abort', onAbort);
     }
+
+    try {
+      const res = await fetch(url, {
+        ...fetchOpts,
+        signal: controller.signal,
+      });
+      return res;
+    } finally {
+      clearTimeout(timeoutId);
+      if (fetchOpts.signal) {
+        fetchOpts.signal.removeEventListener('abort', onAbort);
+      }
+    }
+  };
+
+  if (skipGate) {
+    return executeFetch();
   }
+  return globalApiGate.schedule(executeFetch);
 }
 
 /**

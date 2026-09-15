@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import type { ProfileManager } from '../core/index.js';
+import { globalApiGate, type ProfileManager } from '../core/index.js';
 import type { AuthContext } from './auth.js';
 import { sendWebhookNotification, getCstDateTimeString } from '../core/utils.js';
 
@@ -29,6 +29,7 @@ export const systemRoutes: FastifyPluginAsync<{
 
     const activeWatchdogs = manager.getWatchdogService().getActiveWatchdogCount();
     const memUsage = process.memoryUsage();
+    const apiGateMetrics = globalApiGate.getMetrics();
 
     return {
       status: 'healthy',
@@ -40,6 +41,7 @@ export const systemRoutes: FastifyPluginAsync<{
         onlineDesktops,
         pausedDesktops,
         activeWatchdogs,
+        apiGate: apiGateMetrics,
         memory: {
           rssMb: Math.round(memUsage.rss / 1024 / 1024),
           heapUsedMb: Math.round(memUsage.heapUsed / 1024 / 1024),

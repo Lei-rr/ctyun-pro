@@ -1407,15 +1407,20 @@ export class ProfileManager {
     this.saveToDisk();
     this.logger.addLog('info', `已加载本地配置文件 (${this.accounts.size} 个账号)`);
 
+      let delayMs = 0;
       for (const [name, acc] of this.accounts.entries()) {
         if (acc.loginInfo && acc.autoStart !== false) {
-          this.reloadDesktops(name).catch((err) => {
-            this.logger.addLog('warn', `[${name}] 自启动保活提示: ${err.message}`);
-          });
-          // 服务启动加载时自动拉取一次今日积分数据
-          this.getPointsAndTasks(name)
-            .then(() => this.notifyStatusChange())
-            .catch(() => {});
+          const staggerDelay = delayMs;
+          delayMs += 800; // 每个账号错峰 800ms 启动，防止瞬时并发冲击天翼云接口
+          setTimeout(() => {
+            this.reloadDesktops(name).catch((err) => {
+              this.logger.addLog('warn', `[${name}] 自启动保活提示: ${err.message}`);
+            });
+            // 服务启动加载时自动拉取一次今日积分数据
+            this.getPointsAndTasks(name)
+              .then(() => this.notifyStatusChange())
+              .catch(() => {});
+          }, staggerDelay);
         }
       }
     } catch (err) {

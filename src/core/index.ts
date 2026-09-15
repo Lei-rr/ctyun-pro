@@ -12,3 +12,4 @@ export {
   getCstDateString,
   getCstDateTimeString,
 } from './utils.js';
+export { RequestConcurrencyGate, globalApiGate } from './api-gate.js';
