@@ -5,6 +5,7 @@ import type { AuthContext } from './auth.js';
 import type { ChallengeData } from '../core/client.js';
 import type { TaskConfig, RedeemConfig } from '../config.js';
 import { getRandomScheduleTime, DEFAULT_REDEEM_CONFIG } from '../config.js';
+import { sendSuccess, sendError } from '../common/response.js';
 
 export const profileRoutes: FastifyPluginAsync<{
   manager: ProfileManager;
@@ -13,13 +14,13 @@ export const profileRoutes: FastifyPluginAsync<{
 }> = async (fastify, { manager, authContext, smsSessionCache }) => {
   const { verifyAuth } = authContext;
 
-  // Profiles 列表 (所有身份档案及所属云实例快照)
+  // 1. Profiles 列表 (所有身份档案及所属云实例快照)
   fastify.get('/api/profiles', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
-    return { success: true, data: manager.getAccountsSummary() };
+    return sendSuccess(reply, manager.getAccountsSummary());
   });
 
-  // 新建 Profile 档案
+  // 2. 新建 Profile 档案
   fastify.post(
     '/api/profiles',
     async (
@@ -39,7 +40,7 @@ export const profileRoutes: FastifyPluginAsync<{
       const name = (body.name || body.user || '').trim();
       const user = (body.user || body.name || '').trim();
       if (!name || !user) {
-        return reply.code(400).send({ success: false, msg: '档案名称与手机号不能为空' });
+        return sendError(reply, '档案名称与手机号不能为空');
       }
       await manager.addOrUpdateAccount({
         name,
@@ -57,11 +58,11 @@ export const profileRoutes: FastifyPluginAsync<{
         },
       });
       manager.addLog('info', `[${name}] 档案已创建`);
-      return { success: true, msg: 'Profile 创建成功', data: manager.getAccountState(name) };
+      return sendSuccess(reply, manager.getAccountState(name), 'Profile 创建成功');
     },
   );
 
-  // 生成扫码登录二维码
+  // 3. 生成扫码登录二维码
   fastify.post(
     '/api/profiles/qrcode/create',
     async (
@@ -84,11 +85,11 @@ export const profileRoutes: FastifyPluginAsync<{
         margin: 1,
         color: { dark: '#000000', light: '#ffffff' },
       });
-      return { success: true, data: { accountName, qrCodeId, qrUrl, qrImage } };
+      return sendSuccess(reply, { accountName, qrCodeId, qrUrl, qrImage });
     },
   );
 
-  // 轮询扫码状态并自动完成登录授权
+  // 4. 轮询扫码状态并自动完成登录授权
   fastify.get(
     '/api/profiles/qrcode/status',
     async (
@@ -103,7 +104,7 @@ export const profileRoutes: FastifyPluginAsync<{
       if (!verifyAuth(request, reply)) return;
       const query = request.query || {};
       if (!query.qrCodeId) {
-        return reply.code(400).send({ success: false, msg: '缺少 qrCodeId 参数' });
+        return sendError(reply, '缺少 qrCodeId 参数');
       }
       const accountName = (query.accountName || '').trim() || 'default';
       const client = manager.getClient(accountName);
@@ -124,19 +125,17 @@ export const profileRoutes: FastifyPluginAsync<{
         manager.startAccount(finalAccountName).catch((e) => {
           manager.addLog('warn', `[${finalAccountName}] 启动保活提示: ${e.message}`);
         });
-        return {
-          success: true,
+        return sendSuccess(reply, {
           codeStatus: 'authorize',
           accountName: finalAccountName,
           loginInfo: manager.sanitizeLoginInfo(loginInfo),
-          msg: '登录成功',
-        };
+        }, '登录成功');
       }
-      return { success: true, codeStatus: statusData.codeStatus };
+      return sendSuccess(reply, { codeStatus: statusData.codeStatus });
     },
   );
 
-  // 单个 Profile 详情
+  // 5. 单个 Profile 详情
   fastify.get(
     '/api/profiles/:id',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
@@ -145,13 +144,13 @@ export const profileRoutes: FastifyPluginAsync<{
       const acc = manager.getAccount(id);
       const state = manager.getAccountState(id);
       if (!acc && !state) {
-        return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+        return sendError(reply, 'Profile 不存在', 404);
       }
-      return { success: true, data: state || manager.sanitizeAccount(acc) };
+      return sendSuccess(reply, state || manager.sanitizeAccount(acc));
     },
   );
 
-  // 删除 Profile
+  // 6. 删除 Profile
   fastify.delete(
     '/api/profiles/:id',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
@@ -159,7 +158,7 @@ export const profileRoutes: FastifyPluginAsync<{
       const { id } = request.params;
       const acc = manager.getAccount(id);
       if (!acc) {
-        return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+        return sendError(reply, 'Profile 不存在', 404);
       }
       manager.removeAccount(acc.name);
       if (acc.name) {
@@ -168,11 +167,11 @@ export const profileRoutes: FastifyPluginAsync<{
       if (acc.id) {
         smsSessionCache.delete(acc.id);
       }
-      return { success: true, msg: 'Profile 已成功注销' };
+      return sendSuccess(reply, null, 'Profile 已成功注销');
     },
   );
 
-  // 重命名 Profile 备注名
+  // 7. 重命名 Profile 备注名
   const handleProfileRename = async (
     request: FastifyRequest<{
       Params: { id: string };
@@ -185,19 +184,19 @@ export const profileRoutes: FastifyPluginAsync<{
     const body = request.body || {};
     const targetName = (body.newName || body.name || '').trim();
     if (!targetName) {
-      return reply.code(400).send({ success: false, msg: '名称不能为空' });
+      return sendError(reply, '名称不能为空');
     }
     const acc = manager.getAccount(id);
     if (!acc) {
-      return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+      return sendError(reply, 'Profile 不存在', 404);
     }
     manager.updateAccountName(acc.name, targetName);
-    return { success: true, msg: '重命名成功' };
+    return sendSuccess(reply, null, '重命名成功');
   };
 
   fastify.post('/api/profiles/:id/rename', handleProfileRename);
 
-  // 触发指定 Profile 的实例列表同步与本地落盘
+  // 8. 触发指定 Profile 的实例列表同步与本地落盘
   fastify.post(
     '/api/profiles/:id/sync',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
@@ -205,14 +204,14 @@ export const profileRoutes: FastifyPluginAsync<{
       const { id } = request.params;
       const acc = manager.getAccount(id);
       if (!acc) {
-        return reply.code(404).send({ success: false, msg: 'Profile 不存在' });
+        return sendError(reply, 'Profile 不存在', 404);
       }
       await manager.reloadDesktops(acc.name);
-      return { success: true, data: manager.getAccountState(acc.name) };
+      return sendSuccess(reply, manager.getAccountState(acc.name));
     },
   );
 
-  // 获取图形验证码与 challenge
+  // 9. 获取图形验证码与 challenge
   fastify.get(
     '/api/profiles/:id/captcha',
     async (
@@ -230,20 +229,17 @@ export const profileRoutes: FastifyPluginAsync<{
       const client = manager.getClient(acc?.name || id);
       const challenge = await client.getChallengeData();
       const imgBuffer = await client.getLoginCaptcha(user);
-      return {
-        success: true,
-        data: {
-          image: `data:image/jpeg;base64,${imgBuffer.toString('base64')}`,
-          challenge: {
-            challengeId: challenge.challengeId,
-            challengeCode: challenge.challengeCode,
-          },
+      return sendSuccess(reply, {
+        image: `data:image/jpeg;base64,${imgBuffer.toString('base64')}`,
+        challenge: {
+          challengeId: challenge.challengeId,
+          challengeCode: challenge.challengeCode,
         },
-      };
+      });
     },
   );
 
-  // 密码登录
+  // 10. 密码登录
   fastify.post(
     '/api/profiles/:id/login',
     async (
@@ -277,7 +273,7 @@ export const profileRoutes: FastifyPluginAsync<{
         try {
           challenge = await client.getChallengeData();
         } catch {
-          return reply.code(400).send({ success: false, msg: '请先刷新验证码' });
+          return sendError(reply, '请先刷新验证码');
         }
       }
 
@@ -293,20 +289,20 @@ export const profileRoutes: FastifyPluginAsync<{
         });
         if (!loginInfo.bondedDevice) {
           manager.addLog('warn', `[${name}] 设备未绑定，需要短信验证码确认`);
-          return { success: true, needSms: true, msg: '登录成功，但当前设备未绑定，需要输入短信验证码' };
+          return sendSuccess(reply, { needSms: true }, '登录成功，但当前设备未绑定，需要输入短信验证码');
         }
         manager.addLog('success', `[${name}] 登录成功！正在启动云电脑保活...`);
         manager.startAccount(name).catch((e) => manager.addLog('error', `[${name}] 启动保活失败: ${e.message}`));
-        return { success: true, needSms: false, msg: '登录成功并已启动保活', data: manager.getAccountState(name) };
+        return sendSuccess(reply, manager.getAccountState(name), '登录成功并已启动保活');
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         manager.addLog('error', `[${name}] 登录验证失败: ${msg}`);
-        return reply.code(400).send({ success: false, msg });
+        return sendError(reply, msg);
       }
     },
   );
 
-  // 短信图形验证码
+  // 11. 短信图形验证码
   fastify.get(
     '/api/profiles/:id/sms-captcha',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
@@ -326,7 +322,7 @@ export const profileRoutes: FastifyPluginAsync<{
     },
   );
 
-  // 发送短信验证码
+  // 12. 发送短信验证码
   fastify.post(
     '/api/profiles/:id/send-sms',
     async (
@@ -343,7 +339,7 @@ export const profileRoutes: FastifyPluginAsync<{
       const name = acc?.name || id;
       const user = body.user || acc?.user;
       if (!user || !body.captchaCode) {
-        return reply.code(400).send({ success: false, msg: '参数不完整' });
+        return sendError(reply, '参数不完整');
       }
       const client = manager.getClient(name);
       const cachedKey = smsSessionCache.get(name)?.captchaKey || '';
@@ -356,16 +352,16 @@ export const profileRoutes: FastifyPluginAsync<{
           smsSessionCache.set(name, cur);
         }
         manager.addLog('info', `[${name}] 短信验证码已发送至手机号 ${user}`);
-        return { success: true };
+        return sendSuccess(reply, null, '验证码已发送');
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         manager.addLog('error', `[${name}] 发送短信失败: ${msg}`);
-        return reply.code(400).send({ success: false, msg });
+        return sendError(reply, msg);
       }
     },
   );
 
-  // 二次校验设备绑定
+  // 13. 二次校验设备绑定
   fastify.post(
     '/api/profiles/:id/bind-device',
     async (
@@ -381,7 +377,7 @@ export const profileRoutes: FastifyPluginAsync<{
       const acc = manager.getAccount(id);
       const name = acc?.name || id;
       if (!body.smsCode) {
-        return reply.code(400).send({ success: false, msg: '请填写短信验证码' });
+        return sendError(reply, '请填写短信验证码');
       }
       const client = manager.getClient(name);
       const cachedSmsKey = smsSessionCache.get(name)?.smsKey || '';
@@ -394,16 +390,16 @@ export const profileRoutes: FastifyPluginAsync<{
         manager.saveToDisk();
         manager.addLog('success', `[${name}] 设备绑定成功！正在启动保活...`);
         manager.startAccount(name).catch((e) => manager.addLog('error', `[${name}] 启动保活失败: ${e.message}`));
-        return { success: true, msg: '绑定成功并已启动保活' };
+        return sendSuccess(reply, null, '绑定成功并已启动保活');
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         manager.addLog('error', `[${name}] 设备绑定失败: ${msg}`);
-        return reply.code(400).send({ success: false, msg });
+        return sendError(reply, msg);
       }
     },
   );
 
-  // 策略配置更新
+  // 14. 策略配置更新
   fastify.post(
     '/api/profiles/:id/policy',
     async (
@@ -420,7 +416,7 @@ export const profileRoutes: FastifyPluginAsync<{
       const { id } = request.params;
       const body = request.body || {};
       const acc = manager.getAccount(id);
-      if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+      if (!acc) return sendError(reply, 'Profile 未找到', 404);
       const currentTaskConfig = acc.taskConfig || {
         enabled: true,
         scheduleTime: getRandomScheduleTime(),
@@ -434,20 +430,20 @@ export const profileRoutes: FastifyPluginAsync<{
         redeemConfig: body.redeemConfig !== undefined ? { ...currentRedeemConfig, ...body.redeemConfig } : acc.redeemConfig,
       });
       manager.addLog('info', `[${acc.name}] 策略配置已更新并落盘`);
-      return { success: true, data: manager.getAccountState(acc.name) };
+      return sendSuccess(reply, manager.getAccountState(acc.name));
     },
   );
 
-  // 保活控制：启动 / 停止 / 暂停
+  // 15. 保活控制：启动 / 停止
   fastify.post(
     '/api/profiles/:id/start',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const acc = manager.getAccount(id);
-      if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+      if (!acc) return sendError(reply, 'Profile 未找到', 404);
       await manager.startAccount(acc.name);
-      return { success: true, msg: `账号 [${acc.name}] 保活已启动` };
+      return sendSuccess(reply, null, `账号 [${acc.name}] 保活已启动`);
     },
   );
 
@@ -457,9 +453,9 @@ export const profileRoutes: FastifyPluginAsync<{
       if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const acc = manager.getAccount(id);
-      if (!acc) return reply.code(404).send({ success: false, msg: 'Profile 未找到' });
+      if (!acc) return sendError(reply, 'Profile 未找到', 404);
       manager.stopAccount(acc.name);
-      return { success: true, msg: `账号 [${acc.name}] 保活已停止` };
+      return sendSuccess(reply, null, `账号 [${acc.name}] 保活已停止`);
     },
   );
 };

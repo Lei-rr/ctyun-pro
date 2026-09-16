@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import type { ProfileManager } from '../core/index.js';
 import type { AuthContext } from './auth.js';
+import { sendSuccess } from '../common/response.js';
 
 export const logRoutes: FastifyPluginAsync<{
   manager: ProfileManager;
@@ -8,7 +9,7 @@ export const logRoutes: FastifyPluginAsync<{
 }> = async (fastify, { manager, authContext }) => {
   const { verifyAuth, isValidToken, parseCookieToken } = authContext;
 
-  // SSE 实时日志推流 (带 token 验证，兼容同源 Cookie 鉴权)
+  // 1. SSE 实时日志推流 (带 token 验证，兼容同源 Cookie 鉴权)
   fastify.get('/api/logs/stream', (request: FastifyRequest<{ Querystring: { token?: string } }>, reply) => {
     const cookieToken = parseCookieToken(request.headers?.cookie);
     const token = (request.query?.token as string) || cookieToken;
@@ -43,16 +44,16 @@ export const logRoutes: FastifyPluginAsync<{
     });
   });
 
-  // 获取历史日志快照
+  // 2. 获取历史日志快照
   fastify.get('/api/logs', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
-    return { success: true, data: manager.getRecentLogs() };
+    return sendSuccess(reply, manager.getRecentLogs());
   });
 
-  // 清空服务端日志
+  // 3. 清空服务端日志
   fastify.post('/api/logs/clear', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     manager.clearLogs();
-    return { success: true };
+    return sendSuccess(reply, null, '日志已清空');
   });
 };

@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { Config, getRandomScheduleTime, DEFAULT_REDEEM_CONFIG, type AccountConfig, type TaskConfig, type RedeemConfig } from '../config.js';
 import { CtYunClient, type Desktop, type DesktopInfo, type LoginInfo } from './client.js';
@@ -10,26 +9,11 @@ import { RewardRedeemService, DEFAULT_LOCAL_REWARDS, sortRewards, type RewardIte
 import { safeWriteFileSync, sendWebhookNotification, getCstDateString, getCstDateTimeString } from './utils.js';
 import type { DesktopInstanceSummary } from '../types/index.js';
 
-// 核心常量规范定义
-const POWER_TRACKING_INTERVAL_MS = 20000;  // 电源操作后的轮询追踪周期: 20 秒
-const POWER_TRACKING_MAX_ROUNDS = 15;      // 电源状态轮询最大轮次 (15 * 20s = 5 分钟超时)
-const SAVE_CONFIG_DEBOUNCE_MS = 150;       // 配置落盘防抖延迟: 150 毫秒
-const WEB_RELEASE_DEFAULT_DELAY_SEC = 20;  // Web 直连释放后的默认宽限恢复时间: 20 秒 (给页面刷新和前台切换留足缓冲)
+import { AccountRepository, AccountSanitizer } from '../modules/account/index.js';
+import { WebActiveTracker, DesktopPowerTracker } from '../modules/desktop/index.js';
 
-export interface ManagedAccount {
-  id: string; // 全局唯一不可变 UUID (主键)
-  name: string; // 展示备注名
-  user: string;
-  deviceCode: string;
-  status: 'idle' | 'login_needed' | 'need_sms' | 'online' | 'error';
-  lastError?: string;
-  loginInfo?: LoginInfo;
-  autoStart?: boolean;
-  taskConfig?: TaskConfig;
-  redeemConfig?: RedeemConfig;
-  todayPoints?: number;
-  desktops: ManagedDesktopState[];
-}
+export { type ManagedAccount } from '../types/index.js';
+import type { ManagedAccount } from '../types/index.js';
 
 /**
  * 账号与系统顶层业务管理者
@@ -37,7 +21,6 @@ export interface ManagedAccount {
  */
 export class ProfileManager {
   private accounts: Map<string, AccountConfig> = new Map();
-  private saveDebounceTimer: NodeJS.Timeout | null = null;
   private clients: Map<string, CtYunClient> = new Map();
   private accountStates: Map<string, ManagedAccount> = new Map();
   private logger: Logger = new Logger();
@@ -55,8 +38,10 @@ export class ProfileManager {
   private manualShutdownDesktops: Set<string> = new Set();
   // 账号云电脑同步互斥锁 (按账号 Promise 排重，防止并发多重触发)
   private reloadDesktopsPromises: Map<string, Promise<void>> = new Map();
-  // 电源操作异步状态轮询定时器追踪 (按 desktopCode 跟踪，防止重复轮询及账户卸载后野定时器)
-  private powerTrackingTimers: Map<string, NodeJS.Timeout> = new Map();
+
+  private repository = new AccountRepository();
+  private webActiveTracker = new WebActiveTracker();
+  private powerTracker: DesktopPowerTracker;
 
   constructor() {
     this.keepaliveService = new KeepaliveService(this.logger, () => this.notifyStatusChange());
@@ -65,6 +50,23 @@ export class ProfileManager {
       logger: this.logger,
     });
     this.taskScheduler = new TaskScheduler(this, this.logger);
+    this.powerTracker = new DesktopPowerTracker(this.logger, {
+      getClient: (name) => this.getClient(name),
+      hasAccount: (name) => this.accounts.has(name),
+      getDesktopState: (name, dId) => {
+        const state = this.accountStates.get(name);
+        return state?.desktops.find((d) => String(d.desktopCode) === String(dId) || String(d.desktopId) === String(dId));
+      },
+      notifyStatusChange: () => this.notifyStatusChange(),
+      onPowerOnSuccess: (name) => {
+        setTimeout(() => {
+          this.reloadDesktops(name).catch(() => {});
+        }, 2000);
+      },
+      onPowerTimeout: (name) => {
+        this.reloadDesktops(name).catch(() => {});
+      },
+    });
     this.loadFromDisk();
     this.taskScheduler.start();
 
@@ -117,56 +119,34 @@ export class ProfileManager {
     return undefined;
   }
 
-  private webReleaseTimers = new Map<string, NodeJS.Timeout>();
-
   public touchWebUserActive(accountName: string, desktopCode: string, _durationSec: number = 60): void {
     const matched = this.findDesktopByCode(desktopCode);
     const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopCode(desktopCode);
     if (!matchedAccount) return;
     
-    // 如果存在待延迟释放的计时器（例如用户刷新网页），立即取消该释放任务
     const canonicalKey = matched?.desktop?.desktopCode || desktopCode;
-    if (this.webReleaseTimers.has(canonicalKey)) {
-      clearTimeout(this.webReleaseTimers.get(canonicalKey)!);
-      this.webReleaseTimers.delete(canonicalKey);
-    }
-
-    // 1. 立即暂停该单台云电脑的后台保活长连接，并清理看门狗（若存在）
-    this.keepaliveService.pauseWorkerForDesktop(matchedAccount, canonicalKey);
-    const matchedId = matched?.desktop?.desktopId || canonicalKey;
-    this.watchdogService.stopWatchdog(matchedAccount, String(matchedId));
-    if (matched?.desktop?.desktopCode) {
-      this.watchdogService.stopWatchdog(matchedAccount, String(matched.desktop.desktopCode));
-    }
+    this.webActiveTracker.touchWebActive(canonicalKey, () => {
+      this.keepaliveService.pauseWorkerForDesktop(matchedAccount, canonicalKey);
+      const matchedId = matched?.desktop?.desktopId || canonicalKey;
+      this.watchdogService.stopWatchdog(matchedAccount, String(matchedId));
+      if (matched?.desktop?.desktopCode) {
+        this.watchdogService.stopWatchdog(matchedAccount, String(matched.desktop.desktopCode));
+      }
+    });
   }
 
-  public releaseWebUserActive(accountName: string, desktopCode: string, delaySec: number = WEB_RELEASE_DEFAULT_DELAY_SEC): void {
+  public releaseWebUserActive(accountName: string, desktopCode: string, delaySec: number = 20): void {
     const matched = this.findDesktopByCode(desktopCode);
     const matchedAccount = accountName || matched?.accountName || this.getAccountNameByDesktopCode(desktopCode);
     if (!matchedAccount) return;
     
     const canonicalKey = matched?.desktop?.desktopCode || desktopCode;
-
-    // 清理可能存在的旧延迟释放任务
-    if (this.webReleaseTimers.has(canonicalKey)) {
-      clearTimeout(this.webReleaseTimers.get(canonicalKey)!);
-      this.webReleaseTimers.delete(canonicalKey);
-    }
-
-    // 引入延迟释放宽限期（默认 20 秒）：
-    // 浏览器用户刷新网页时会触发 beforeunload 发送 web-close，但 1~2 秒后新页面就会加载并发送 web-active。
-    // 宽限期到期后，精准恢复该单台云电脑的保活 Worker
-    const timer = setTimeout(async () => {
-      this.webReleaseTimers.delete(canonicalKey);
-
-      // 关键恢复：前台直连关闭且宽限期到期后，精准恢复单台云电脑保活 Worker 运行
+    this.webActiveTracker.releaseWebActive(canonicalKey, delaySec, async () => {
       const acc = this.accounts.get(matchedAccount);
       if (acc && acc.autoStart !== false) {
         await this.keepaliveService.resumeWorkerForDesktop(matchedAccount, canonicalKey);
       }
-    }, Math.max(1, delaySec) * 1000);
-
-    this.webReleaseTimers.set(canonicalKey, timer);
+    });
   }
 
   public isManualShutdown(desktopCode: string): boolean {
@@ -280,46 +260,14 @@ export class ProfileManager {
     return acc;
   }
 
-  /**
-   * 凭证对外脱敏处理 (剔除 secretKey, password, clientKey 等高敏字段)
-   */
   public sanitizeLoginInfo(info?: LoginInfo): LoginInfo | undefined {
-    if (!info) return undefined;
-    const clone = { ...info } as Record<string, unknown>;
-    delete clone.secretKey;
-    delete clone.clientKey;
-    delete clone.caCert;
-    delete clone.clientCert;
-    delete clone.password;
-    delete clone.rawPassword;
-    return clone as unknown as LoginInfo;
+    return AccountSanitizer.sanitizeLoginInfo(info);
   }
 
-  /**
-   * 账号对外脱敏只读视图 (完全深拷贝隔离内部引用，杜绝污染与凭证泄露)
-   */
   public sanitizeAccount(accountOrState: ManagedAccount | AccountConfig): ManagedAccount;
   public sanitizeAccount(accountOrState?: ManagedAccount | AccountConfig): ManagedAccount | undefined;
   public sanitizeAccount(accountOrState?: ManagedAccount | AccountConfig): ManagedAccount | undefined {
-    if (!accountOrState) return undefined;
-    let clone: Record<string, unknown>;
-    try {
-      clone = structuredClone(accountOrState) as unknown as Record<string, unknown>;
-    } catch {
-      clone = JSON.parse(JSON.stringify(accountOrState)) as unknown as Record<string, unknown>;
-    }
-    if ('password' in clone) delete clone.password;
-    if ('rawPassword' in clone) delete clone.rawPassword;
-    if (clone.loginInfo && typeof clone.loginInfo === 'object') {
-      const li = clone.loginInfo as Record<string, unknown>;
-      delete li.secretKey;
-      delete li.clientKey;
-      delete li.caCert;
-      delete li.clientCert;
-      if ('password' in li) delete li.password;
-      if ('rawPassword' in li) delete li.rawPassword;
-    }
-    return clone as unknown as ManagedAccount;
+    return AccountSanitizer.sanitizeAccount(accountOrState);
   }
 
   public getAccountState(keyOrId: string): ManagedAccount | undefined {
@@ -519,14 +467,8 @@ export class ProfileManager {
     this.taskScheduler.stop();
     this.keepaliveService.stopAll();
     this.watchdogService.stopAll();
-    for (const [, timer] of this.powerTrackingTimers.entries()) {
-      clearInterval(timer);
-    }
-    this.powerTrackingTimers.clear();
-    for (const [, timer] of this.webReleaseTimers.entries()) {
-      clearTimeout(timer);
-    }
-    this.webReleaseTimers.clear();
+    this.powerTracker.clearAll();
+    this.webActiveTracker.clearAll();
     this.saveToDisk(true);
   }
 
@@ -604,7 +546,7 @@ export class ProfileManager {
       this.logger.addLog('info', `[${dPrefix}] ${message}`);
       // 后台轮询跟踪云电脑电源状态，直至真正开机或关机完成
       const trackTarget: 'on' | 'shutdown' | 'reset' = isShutdown ? 'shutdown' : isReset ? 'reset' : 'on';
-      this.trackDesktopStatusAfterPower(accountName, canonicalDesktopCode, trackTarget);
+      this.powerTracker.trackDesktopStatusAfterPower(accountName, canonicalDesktopCode, trackTarget);
       return message;
     } catch (error) {
       desktop.status = 'stopped';
@@ -695,99 +637,6 @@ export class ProfileManager {
     return { url: directUrl, desktopCode: code, accountName };
   }
 
-  /**
-   * 电源操作（开机/关机/重启）后异步轮询官方最新真实状态
-   */
-  private trackDesktopStatusAfterPower(
-    accountName: string,
-    desktopId: string,
-    operation: 'on' | 'shutdown' | 'reset',
-  ): void {
-    const trackingKey = `${accountName}:${desktopId}`;
-    const existingTimer = this.powerTrackingTimers.get(trackingKey);
-    if (existingTimer) {
-      clearInterval(existingTimer);
-      this.powerTrackingTimers.delete(trackingKey);
-    }
-
-    const client = this.getClient(accountName);
-    let attempts = 0;
-    const maxAttempts = POWER_TRACKING_MAX_ROUNDS; // 官方标准: 20s 一次轮询，最长 5 分钟 (15 次)
-
-    const timer = setInterval(async () => {
-      attempts++;
-      try {
-        if (!this.accounts.has(accountName)) {
-          clearInterval(timer);
-          this.powerTrackingTimers.delete(trackingKey);
-          return;
-        }
-
-        const state = this.accountStates.get(accountName);
-        const target = state?.desktops.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
-
-        // 优先使用官方轻量级毫秒级接口 getDesktopState 查询最新真实运行状态 (避免全量列表延迟)
-        const objType = typeof target?.objType === 'number' ? target.objType : 0;
-        const stateInfo = await client.getDesktopState(desktopId, objType);
-        let realStatusText = stateInfo?.useStatusText;
-
-        if (!realStatusText) {
-          const list = await client.getDesktopList();
-          const current = list.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
-          realStatusText = current?.useStatusText;
-        }
-
-        if (realStatusText && target) {
-          const dName = target.desktopName || target.computerName || target.name || desktopId;
-          const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
-          target.useStatusText = realStatusText;
-
-          if (operation === 'on' || operation === 'reset') {
-            if (realStatusText === '运行中') {
-              clearInterval(timer);
-              this.powerTrackingTimers.delete(trackingKey);
-              target.status = 'connecting';
-              this.logger.addLog('success', `[${dPrefix}] 云电脑已成功开机，正在接入保活...`);
-              this.notifyStatusChange();
-              // 云电脑开机成功后，若账号处于保活状态，缓冲 2 秒后接入 WebSocket 保活，确保官方推流端口与网关完全就绪
-              setTimeout(() => {
-                this.reloadDesktops(accountName).catch(() => {});
-              }, 2000);
-              return;
-            }
-          } else if (operation === 'shutdown') {
-            if (realStatusText === '已关机' || realStatusText === '关机') {
-              clearInterval(timer);
-              this.powerTrackingTimers.delete(trackingKey);
-              target.status = 'stopped';
-              this.logger.addLog('info', `[${dPrefix}] 云电脑已安全关机，已锁定保活防止误唤醒`);
-              this.notifyStatusChange();
-              return;
-            }
-          }
-          this.notifyStatusChange();
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.logger.addLog('warn', `[${accountName}] 电源状态轮询跟踪网络异常: ${msg}`);
-      }
-
-      if (attempts >= maxAttempts) {
-        clearInterval(timer);
-        this.powerTrackingTimers.delete(trackingKey);
-        const state = this.accountStates.get(accountName);
-        const target = state?.desktops.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId));
-        const dName = target?.desktopName || target?.computerName || target?.name || desktopId;
-        const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
-        this.logger.addLog('warn', `[${dPrefix}] 电源操作追踪已达 5 分钟上限，已结束实时追踪`);
-        // 超时后执行一次全量刷新校准
-        this.reloadDesktops(accountName).catch(() => {});
-      }
-    }, POWER_TRACKING_INTERVAL_MS);
-
-    this.powerTrackingTimers.set(trackingKey, timer);
-  }
-
   public updateAccountName(oldName: string, newName: string): void {
     const trimmed = newName.trim();
     if (!trimmed || trimmed === oldName) return;
@@ -826,14 +675,7 @@ export class ProfileManager {
       this.todayPointsCache.set(trimmed, pts);
     }
 
-    // 迁移该账号正在跟踪的电源状态轮询定时器键名
-    for (const [key, timer] of Array.from(this.powerTrackingTimers.entries())) {
-      if (key.startsWith(`${realOldName}:`)) {
-        const desktopId = key.slice(realOldName.length + 1);
-        this.powerTrackingTimers.delete(key);
-        this.powerTrackingTimers.set(`${trimmed}:${desktopId}`, timer);
-      }
-    }
+    this.powerTracker.renameAccount(realOldName, trimmed);
 
     this.saveToDisk();
     this.notifyStatusChange();
@@ -1041,13 +883,7 @@ export class ProfileManager {
   }
 
   public removeAccount(name: string): void {
-    // 1. 清理该账号正在跟踪的电源状态轮询定时器
-    for (const [key, timer] of this.powerTrackingTimers.entries()) {
-      if (key.startsWith(`${name}:`)) {
-        clearInterval(timer);
-        this.powerTrackingTimers.delete(key);
-      }
-    }
+    this.powerTracker.clearForAccount(name);
     // 2. 停止该账号下的所有保活信道与心跳 Worker
     this.keepaliveService.stopWorkers(name);
     // 3. 清理该账号下的休眠自愈看门狗定时器
@@ -1197,204 +1033,64 @@ export class ProfileManager {
   }
 
   public exportConfigSafe() {
-    return {
-      version: '3.0.0',
-      exportedAt: new Date().toISOString(),
-      system: {
-        keepAliveSeconds: this.keepAliveSeconds,
-        webhookUrl: this.webhookUrl,
-      },
-      accounts: Array.from(this.accounts.values()).map((acc) => {
-        const sanitized = { ...acc };
-        delete sanitized.password;
-        delete sanitized.rawPassword;
-        return sanitized;
-      }),
+    const sysData = {
+      adminPassword: this.adminPassword,
+      keepAliveSeconds: this.keepAliveSeconds,
+      webhookUrl: this.webhookUrl,
     };
+    return this.repository.exportConfigSafe(sysData, this.accounts);
   }
 
   public importConfigSafe(data: unknown): { importedAccounts: number } {
-    if (!data || typeof data !== 'object') {
-      throw new Error('导入的配置文件格式非法');
+    const sysData = {
+      adminPassword: this.adminPassword,
+      keepAliveSeconds: this.keepAliveSeconds,
+      webhookUrl: this.webhookUrl,
+    };
+    const res = this.repository.importConfigSafe(data, sysData, this.accounts);
+    if (res.updatedSystem.keepAliveSeconds !== undefined) {
+      this.keepAliveSeconds = res.updatedSystem.keepAliveSeconds;
     }
-    const cfg = data as Record<string, unknown>;
-    if (cfg.system && typeof cfg.system === 'object') {
-      const sys = cfg.system as Record<string, unknown>;
-      if (typeof sys.keepAliveSeconds === 'number' && sys.keepAliveSeconds >= 10) {
-        this.keepAliveSeconds = sys.keepAliveSeconds;
-      }
-      if (typeof sys.webhookUrl === 'string') {
-        this.webhookUrl = sys.webhookUrl.trim();
-      }
-    }
-    let importedAccounts = 0;
-    if (Array.isArray(cfg.accounts)) {
-      for (const rawAcc of cfg.accounts) {
-        if (!rawAcc || typeof rawAcc !== 'object') continue;
-        const acc = rawAcc as Record<string, unknown>;
-        if (typeof acc.name !== 'string' || !acc.name) continue;
-        const sanitized: AccountConfig = {
-          ...(acc as unknown as AccountConfig),
-        };
-        delete sanitized.password;
-        delete sanitized.rawPassword;
-        this.accounts.set(sanitized.name, sanitized);
-        importedAccounts++;
-      }
+    if (res.updatedSystem.webhookUrl !== undefined) {
+      this.webhookUrl = res.updatedSystem.webhookUrl;
     }
     this.saveToDisk();
-    return { importedAccounts };
+    return { importedAccounts: res.importedAccounts };
   }
 
   public saveToDisk(immediate = false): void {
-    if (immediate) {
-      if (this.saveDebounceTimer) {
-        clearTimeout(this.saveDebounceTimer);
-        this.saveDebounceTimer = null;
-      }
-      this.executeSaveToDisk();
-      return;
-    }
-
-    if (this.saveDebounceTimer) return;
-    this.saveDebounceTimer = setTimeout(() => {
-      this.saveDebounceTimer = null;
-      this.executeSaveToDisk();
-    }, SAVE_CONFIG_DEBOUNCE_MS);
-  }
-
-  private executeSaveToDisk(): void {
-    Config.initDirs();
-
-    // 1. 保存 config.json (系统设置)
     const sysData = {
-      system: {
-        adminPassword: this.adminPassword,
-        keepAliveSeconds: this.keepAliveSeconds,
-        webhookUrl: this.webhookUrl,
-      },
+      adminPassword: this.adminPassword,
+      keepAliveSeconds: this.keepAliveSeconds,
+      webhookUrl: this.webhookUrl,
     };
-    safeWriteFileSync(Config.configFile, JSON.stringify(sysData, null, 2));
-
-    // 2. 保存 accounts.json (账号与各账号独立策略配置，严禁任何明文密码或敏感凭据落盘)
-    const list: AccountConfig[] = Array.from(this.accounts.values()).map((acc) => {
-      const sanitized = { ...acc };
-      delete sanitized.password;
-      delete sanitized.rawPassword;
-      return sanitized;
-    });
-    safeWriteFileSync(Config.accountsFile, JSON.stringify(list, null, 2));
-
-    // 3. 保存 rewards.json (商品目录本地化独立存储)
-    if (this.rewardsCache && this.rewardsCache.length > 0) {
-      safeWriteFileSync(Config.rewardsFile, JSON.stringify(this.rewardsCache, null, 2));
-    }
+    this.repository.saveToDisk(sysData, this.accounts, this.rewardsCache, immediate);
   }
 
   public loadFromDisk(): void {
-    Config.initDirs();
+    const data = this.repository.loadConfig();
+    this.adminPassword = data.system.adminPassword || '';
+    this.keepAliveSeconds = data.system.keepAliveSeconds || 60;
+    this.webhookUrl = data.system.webhookUrl || '';
+    this.rewardsCache = data.rewards;
+    this.accounts = data.accounts;
 
-    // 1. 加载 config.json (系统设置)
-    if (fs.existsSync(Config.configFile)) {
-      try {
-        const sysContent = fs.readFileSync(Config.configFile, 'utf8');
-        const sysJson = JSON.parse(sysContent);
-        const sys = sysJson.system || sysJson;
-        if (sys.adminPassword !== undefined) this.adminPassword = sys.adminPassword;
-        if (sys.keepAliveSeconds) this.keepAliveSeconds = sys.keepAliveSeconds;
-        if (sys.webhookUrl !== undefined) this.webhookUrl = sys.webhookUrl;
-      } catch {}
-    }
-
-    if (process.env.ADMIN_PASSWORD && !this.adminPassword) {
-      this.adminPassword = process.env.ADMIN_PASSWORD;
-    }
-
-    // 2. 加载 rewards.json (独立商品数据)
-    if (fs.existsSync(Config.rewardsFile)) {
-      try {
-        const rewContent = fs.readFileSync(Config.rewardsFile, 'utf8');
-        const rewJson = JSON.parse(rewContent);
-        if (Array.isArray(rewJson) && rewJson.length > 0) {
-          this.rewardsCache = sortRewards(rewJson);
-        }
-      } catch {}
-    } else {
-      // 首次自动写入默认本地化商品目录到 rewards.json
-      try {
-        this.rewardsCache = sortRewards([...DEFAULT_LOCAL_REWARDS]);
-        safeWriteFileSync(Config.rewardsFile, JSON.stringify(this.rewardsCache, null, 2));
-      } catch {}
-    }
-
-    try {
-      // 3. 加载 accounts.json (优先加载独立 accounts.json，亦兼容旧版 config.json 内 accounts 字段迁移)
-      let rawAccounts: Partial<AccountConfig>[] = [];
-    if (fs.existsSync(Config.accountsFile)) {
-      try {
-        const accContent = fs.readFileSync(Config.accountsFile, 'utf8');
-        const accJson = JSON.parse(accContent);
-        if (Array.isArray(accJson)) {
-          rawAccounts = accJson;
-        } else if (Array.isArray(accJson.accounts)) {
-          rawAccounts = accJson.accounts;
-        }
-      } catch {}
-    }
-
-    // 兼容历史遗留：若 accounts.json 为空，检查 config.json 是否含有 accounts
-    if (rawAccounts.length === 0 && fs.existsSync(Config.configFile)) {
-      try {
-        const legacyCfg = JSON.parse(fs.readFileSync(Config.configFile, 'utf8'));
-        if (Array.isArray(legacyCfg.accounts)) {
-          rawAccounts = legacyCfg.accounts;
-        }
-        // 兼容历史 legacy rewardsCache
-        if (legacyCfg.system?.rewardsCache && (!this.rewardsCache || this.rewardsCache.length === 0)) {
-          this.rewardsCache = legacyCfg.system.rewardsCache;
-        }
-      } catch {}
-    }
-
-    for (const acc of rawAccounts) {
-      const user = String(acc.loginInfo?.mobilephone || acc.user || '').trim();
-      if (!user) continue;
-      let name = String(acc.name || user).trim();
-      // 如果此前自动生成的默认名称形如 '用户0130824707'，自动纠偏为手机号码
-      if ((name === acc.user || /^用户\d+$/.test(name)) && acc.loginInfo?.mobilephone) {
-        name = acc.loginInfo.mobilephone;
-      }
-      const deviceCode = Config.resolveDeviceCode(name, acc.deviceCode);
-      const taskConfig = acc.taskConfig || {
-        enabled: true,
-        aiChat: true,
-        scheduleTime: getRandomScheduleTime(),
-      };
-      if (!taskConfig.scheduleTime) {
-        taskConfig.scheduleTime = getRandomScheduleTime();
-      }
-      const redeemConfig = acc.redeemConfig || { ...DEFAULT_REDEEM_CONFIG };
-      const id = acc.id || crypto.randomUUID();
-      const desktops = Array.isArray(acc.desktops) ? acc.desktops : [];
-      const fullAcc: AccountConfig = { ...acc, id, name, user, deviceCode, taskConfig, redeemConfig, desktops };
-      delete fullAcc.password;
-      delete fullAcc.rawPassword;
-      this.accounts.set(name, fullAcc);
-
+    for (const [name, acc] of this.accounts.entries()) {
       const client = this.getClient(name);
       if (acc.loginInfo) {
         client.loginInfo = acc.loginInfo;
       }
 
+      const desktops = Array.isArray(acc.desktops) ? acc.desktops : [];
       const state: ManagedAccount = {
-        id,
+        id: acc.id || crypto.randomUUID(),
         name,
-        user,
+        user: acc.user,
         deviceCode: acc.deviceCode || client.getDeviceCode(),
         status: acc.loginInfo ? 'online' : 'login_needed',
         loginInfo: acc.loginInfo,
-        taskConfig,
-        redeemConfig,
+        taskConfig: acc.taskConfig,
+        redeemConfig: acc.redeemConfig,
         desktops: desktops.map((d: ManagedDesktopState) => ({
           desktopId: d.desktopId,
           desktopName: d.desktopName,
@@ -1412,25 +1108,21 @@ export class ProfileManager {
     this.saveToDisk();
     this.logger.addLog('info', `已加载本地配置文件 (${this.accounts.size} 个账号)`);
 
-      let delayMs = 0;
-      for (const [name, acc] of this.accounts.entries()) {
-        if (acc.loginInfo && acc.autoStart !== false) {
-          const staggerDelay = delayMs;
-          delayMs += 800; // 每个账号错峰 800ms 启动，防止瞬时并发冲击天翼云接口
-          setTimeout(() => {
-            this.reloadDesktops(name).catch((err) => {
-              this.logger.addLog('warn', `[${name}] 自启动保活提示: ${err.message}`);
-            });
-            // 服务启动加载时自动拉取一次今日积分数据
-            this.getPointsAndTasks(name)
-              .then(() => this.notifyStatusChange())
-              .catch(() => {});
-          }, staggerDelay);
-        }
+    let delayMs = 0;
+    for (const [name, acc] of this.accounts.entries()) {
+      if (acc.loginInfo && acc.autoStart !== false) {
+        const staggerDelay = delayMs;
+        delayMs += 800; // 每个账号错峰 800ms 启动，防止瞬时并发冲击天翼云接口
+        setTimeout(() => {
+          this.reloadDesktops(name).catch((err) => {
+            this.logger.addLog('warn', `[${name}] 自启动保活提示: ${err.message}`);
+          });
+          // 服务启动加载时自动拉取一次今日积分数据
+          this.getPointsAndTasks(name)
+            .then(() => this.notifyStatusChange())
+            .catch(() => {});
+        }, staggerDelay);
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.logger.addLog('error', `加载配置文件 config.json 失败: ${msg}`);
     }
   }
 }

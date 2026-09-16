@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { globalApiGate, type ProfileManager } from '../core/index.js';
 import type { AuthContext } from './auth.js';
 import { sendWebhookNotification, getCstDateTimeString } from '../core/utils.js';
+import { sendSuccess, sendError } from '../common/response.js';
 
 export const systemRoutes: FastifyPluginAsync<{
   manager: ProfileManager;
@@ -55,16 +56,13 @@ export const systemRoutes: FastifyPluginAsync<{
   // 1. 获取系统状态 & 账号列表
   fastify.get('/api/status', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
-    return {
-      success: true,
-      data: {
-        version: '3.0.0',
-        needAuth: Boolean(manager.adminPassword),
-        webhookUrl: manager.webhookUrl,
-        keepAliveSeconds: manager.keepAliveSeconds,
-        accounts: manager.getAccountsSummary(),
-      },
-    };
+    return sendSuccess(reply, {
+      version: '3.0.0',
+      needAuth: Boolean(manager.adminPassword),
+      webhookUrl: manager.webhookUrl,
+      keepAliveSeconds: manager.keepAliveSeconds,
+      accounts: manager.getAccountsSummary(),
+    });
   });
 
   // 1.1 更新系统全局配置 (直接回写 data/config.json)
@@ -93,7 +91,7 @@ export const systemRoutes: FastifyPluginAsync<{
       }
       manager.saveToDisk();
       manager.addLog('info', '系统全局配置已持久化至 data/config.json');
-      return { success: true };
+      return sendSuccess(reply, null, '系统配置已保存');
     },
   );
 
@@ -112,7 +110,7 @@ export const systemRoutes: FastifyPluginAsync<{
       const body = request.body || {};
       const targetUrl = (body.webhookUrl || manager.webhookUrl || '').trim();
       if (!targetUrl) {
-        return reply.send({ success: false, msg: '请先填写 Webhook 推送地址' });
+        return sendError(reply, '请先填写 Webhook 推送地址');
       }
 
       const nowStr = getCstDateTimeString();
@@ -123,33 +121,30 @@ export const systemRoutes: FastifyPluginAsync<{
       );
 
       if (success) {
-        return reply.send({ success: true, msg: '测试消息已成功送达，请前往对应渠道查收！' });
+        return sendSuccess(reply, null, '测试消息已成功送达，请前往对应渠道查收！');
       } else {
-        return reply.send({
-          success: false,
-          msg: '测试推送失败，请检查 Webhook 地址格式或宿主机网络连通性',
-        });
+        return sendError(reply, '测试推送失败，请检查 Webhook 地址格式或宿主机网络连通性');
       }
     },
   );
 
-  // 2.4 导出安全配置备份
+  // 1.3 导出安全配置备份
   fastify.get('/api/config/export', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
-    return { success: true, data: manager.exportConfigSafe() };
+    return sendSuccess(reply, manager.exportConfigSafe());
   });
 
-  // 2.5 导入配置备份
+  // 1.4 导入配置备份
   fastify.post('/api/config/import', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     try {
       const body = request.body;
       const res = manager.importConfigSafe(body);
       manager.addLog('info', `配置导入成功，已恢复 ${res.importedAccounts} 个账号配置`);
-      return { success: true, msg: `配置恢复成功，已导入 ${res.importedAccounts} 个账号配置`, data: res };
+      return sendSuccess(reply, res, `配置恢复成功，已导入 ${res.importedAccounts} 个账号配置`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return reply.code(400).send({ success: false, msg: `配置导入失败: ${msg}` });
+      return sendError(reply, `配置导入失败: ${msg}`);
     }
   });
 };
