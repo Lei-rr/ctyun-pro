@@ -213,7 +213,7 @@ export class KeepAliveWorker {
         const msg = e instanceof Error ? e.message : String(e);
         this.log('warn', `换取长连接凭据提示: ${msg}`);
         this.isReconnecting = false;
-        const retryDelay = Math.min(5000 * Math.max(1, this.consecutiveFailures), 30000);
+        const retryDelay = 30000;
         this.reconnectTimer = setTimeout(() => {
           this.connect();
         }, retryDelay);
