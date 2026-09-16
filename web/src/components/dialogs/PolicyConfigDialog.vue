@@ -17,12 +17,12 @@ const store = useAppStore();
     content-class="sm:max-w-md"
   >
     <div class="space-y-4">
-      <!-- 模块 1: 每日自动 AI 对话任务 (02:00~06:00 随机错峰执行) -->
+      <!-- 模块 1: 每日自动 AI 对话任务 (06:00~08:00 随机错峰执行) -->
       <div class="p-4 rounded-xl bg-muted/40 border border-border/40 space-y-3.5">
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm font-medium text-foreground">每日自动 AI 对话</div>
-            <div class="text-xs text-muted-foreground">每日 02:00~06:00 随机错峰自动与 AI 对话 (+100 积分)</div>
+            <div class="text-xs text-muted-foreground">每日 06:00~08:00 随机错峰自动与 AI 对话 (+100 积分)</div>
           </div>
           <Switch v-model:checked="store.policyTaskEnabled" />
         </div>
