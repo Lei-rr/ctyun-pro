@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import type { ProfileManager } from '../core/index.js';
 import type { AuthContext } from './auth.js';
 import type { PowerActionOptions } from '../types/index.js';
+import { sendSuccess, sendError } from '../common/response.js';
 
 export const desktopRoutes: FastifyPluginAsync<{
   manager: ProfileManager;
@@ -25,7 +26,7 @@ export const desktopRoutes: FastifyPluginAsync<{
         }
       }
     }
-    return { success: true, data: allDesktops };
+    return sendSuccess(reply, allDesktops);
   });
 
   // 获取免密全屏直连视窗的签名 URL
@@ -39,8 +40,13 @@ export const desktopRoutes: FastifyPluginAsync<{
     ) => {
       if (!verifyAuth(request, reply)) return;
       const { desktopCode } = request.params;
-      const res = await manager.getDesktopDirectUrlByDesktopCode(desktopCode);
-      return { success: true, data: res };
+      try {
+        const res = await manager.getDesktopDirectUrlByDesktopCode(desktopCode);
+        return sendSuccess(reply, res);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return sendError(reply, msg);
+      }
     },
   );
 
@@ -59,7 +65,7 @@ export const desktopRoutes: FastifyPluginAsync<{
       const body = request.body || {};
       const res = manager.findDesktopByCode(desktopCode);
       if (!res) {
-        return reply.code(404).send({ success: false, msg: '云电脑未找到' });
+        return sendError(reply, '云电脑未找到', 404);
       }
       let op: 'on' | 'awake' | 'shutdown' | 'reset' | 'force_off' | 'force_reboot' = 'on';
       if (body.action === 'shutdown' || body.action === 'off' || body.action === 'stop') op = 'shutdown';
@@ -68,8 +74,13 @@ export const desktopRoutes: FastifyPluginAsync<{
       else if (body.action === 'force_reboot') op = 'force_reboot';
       else if (body.action === 'awake' || body.action === 'wake') op = 'awake';
 
-      const msg = await manager.operateDesktop(res.accountName, desktopCode, op);
-      return { success: true, msg };
+      try {
+        const msg = await manager.operateDesktop(res.accountName, desktopCode, op);
+        return sendSuccess(reply, null, msg);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return sendError(reply, msg);
+      }
     },
   );
 
@@ -86,10 +97,15 @@ export const desktopRoutes: FastifyPluginAsync<{
     const body = request.body || {};
     const newName = (body.desktopName || body.newName || body.nickName || '').trim();
     if (!newName) {
-      return reply.code(400).send({ success: false, msg: '云电脑名称不能为空' });
+      return sendError(reply, '云电脑名称不能为空');
     }
-    await manager.renameDesktop(desktopCode, newName);
-    return { success: true, msg: '修改成功' };
+    try {
+      await manager.renameDesktop(desktopCode, newName);
+      return sendSuccess(reply, null, '修改成功');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return sendError(reply, msg);
+    }
   };
 
   fastify.post('/api/desktops/:desktopCode/rename', handleDesktopRename);

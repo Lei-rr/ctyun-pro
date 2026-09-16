@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import type { ProfileManager } from '../core/index.js';
 import { safeWriteFileSync } from '../core/utils.js';
 import { Config } from '../config.js';
+import { timingSafeEqualString } from '../common/crypto.js';
+import { sendSuccess, sendError } from '../common/response.js';
 
 export interface AuthContext {
   sessions: Set<string>;
@@ -12,15 +14,6 @@ export interface AuthContext {
   isValidToken: (token?: string) => boolean;
   verifyAuth: (request: FastifyRequest, reply: FastifyReply) => boolean;
   parseCookieToken: (cookieHeader?: string) => string;
-}
-
-// 安全时间比对辅助函数 (防止时序攻击 Timing Attack)
-export function timingSafeEqualString(a?: string, b?: string): boolean {
-  if (typeof a !== 'string' || typeof b !== 'string') return false;
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
 }
 
 // 登录防暴力破解内存速率限制器
@@ -142,7 +135,7 @@ export function createAuthContext(manager: ProfileManager): AuthContext {
       (headers.authorization ? headers.authorization.replace(/^Bearer\s+/i, '') : '') ||
       parseCookieToken(headers.cookie);
     if (!token || !isValidToken(token)) {
-      reply.code(401).send({ success: false, msg: '未授权或登录已过期' });
+      sendError(reply, '未授权或登录已过期', 401);
       return false;
     }
     return true;
@@ -163,8 +156,8 @@ export const authRoutes: FastifyPluginAsync<{
 }> = async (fastify, { manager, authContext }) => {
   const { sessions, saveSessions, isValidToken, verifyAuth, parseCookieToken } = authContext;
 
-  // 0. 系统鉴权状态与登录接口
-  fastify.get('/api/auth/status', async (request: FastifyRequest) => {
+  // 1. 系统鉴权状态与登录接口
+  fastify.get('/api/auth/status', async (request: FastifyRequest, reply: FastifyReply) => {
     const needAuth = Boolean(manager.adminPassword);
     let authenticated = !needAuth;
     if (needAuth) {
@@ -174,33 +167,28 @@ export const authRoutes: FastifyPluginAsync<{
         (headers.authorization ? headers.authorization.replace(/^Bearer\s+/i, '') : '');
       authenticated = isValidToken(token);
     }
-    return {
-      success: true,
-      data: {
-        needAuth,
-        authenticated,
-      },
-    };
+    return sendSuccess(reply, {
+      needAuth,
+      authenticated,
+    });
   });
 
+  // 2. 管理员登录
   fastify.post('/api/auth/login', async (request: FastifyRequest<{ Body: { password?: string } }>, reply: FastifyReply) => {
     const ip = request.ip || 'unknown';
     const rateCheck = checkLoginRateLimit(ip);
     if (!rateCheck.allowed) {
-      return reply.code(429).send({
-        success: false,
-        msg: `尝试次数过多，请等待 ${rateCheck.waitSeconds} 秒后再试`,
-      });
+      return sendError(reply, `尝试次数过多，请等待 ${rateCheck.waitSeconds} 秒后再试`, 429);
     }
 
     const body = request.body || {};
     if (!manager.adminPassword) {
       recordLoginAttempt(ip, true);
-      return { success: true, token: 'no-auth' };
+      return sendSuccess(reply, { token: 'no-auth' });
     }
     if (!body || !timingSafeEqualString(body.password, manager.adminPassword)) {
       recordLoginAttempt(ip, false);
-      return reply.code(401).send({ success: false, msg: '管理密码错误' });
+      return sendError(reply, '管理密码错误', 401);
     }
     recordLoginAttempt(ip, true);
     const ts = Date.now().toString();
@@ -212,10 +200,10 @@ export const authRoutes: FastifyPluginAsync<{
     sessions.add(token);
     saveSessions();
     reply.header('Set-Cookie', `ctyun_admin_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 3600}`);
-    return { success: true, token };
+    return sendSuccess(reply, { token });
   });
 
-  // 0.2 注销登录 (作废服务端 Token 并清除客户端 Cookie)
+  // 3. 注销登录 (作废服务端 Token 并清除客户端 Cookie)
   fastify.post('/api/auth/logout', async (request: FastifyRequest, reply: FastifyReply) => {
     const headers = request.headers as Record<string, string | undefined>;
     const token =
@@ -230,9 +218,10 @@ export const authRoutes: FastifyPluginAsync<{
       'Set-Cookie',
       'ctyun_admin_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
     );
-    return { success: true, msg: '已安全退出登录' };
+    return sendSuccess(reply, null, '已安全退出登录');
   });
 
+  // 4. 修改管理员密码
   fastify.post('/api/auth/password', async (request: FastifyRequest<{ Body: { newPassword?: string } }>, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     const body = request.body || {};
@@ -241,6 +230,6 @@ export const authRoutes: FastifyPluginAsync<{
     sessions.clear();
     saveSessions();
     manager.addLog('info', manager.adminPassword ? '已更新控制台管理密码' : '已取消控制台管理密码');
-    return { success: true };
+    return sendSuccess(reply, null, manager.adminPassword ? '管理密码已更新' : '已取消管理密码');
   });
 };

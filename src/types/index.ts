@@ -63,25 +63,21 @@ export interface ManagedDesktopState extends DesktopModel {
   };
 }
 
-export interface LoginInfo {
-  token?: string;
-  authToken?: string;
-  userToken?: string;
-  userId?: string;
-  userName?: string;
-  userAccount?: string;
-  userEid?: string;
-  mobilephone?: string;
-  tenantId?: string;
-  secretKey?: string;
-  commonLoginReqHeader?: string;
-  bondedDevice?: boolean;
-  [key: string]: unknown;
-}
+import type { LoginInfo } from '../core/client.js';
 
-export interface ChallengeData {
-  challengeId: string;
-  challengeCode: string;
+export interface ManagedAccount {
+  id: string;
+  name: string;
+  user: string;
+  deviceCode: string;
+  status: 'idle' | 'login_needed' | 'need_sms' | 'online' | 'error';
+  lastError?: string;
+  loginInfo?: LoginInfo;
+  autoStart?: boolean;
+  taskConfig?: import('../config.js').TaskConfig;
+  redeemConfig?: import('../config.js').RedeemConfig;
+  todayPoints?: number;
+  desktops: ManagedDesktopState[];
 }
 
 export interface PowerActionOptions {
