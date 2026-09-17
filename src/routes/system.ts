@@ -34,7 +34,7 @@ export const systemRoutes: FastifyPluginAsync<{
 
     return {
       status: 'healthy',
-      version: '3.0.0',
+      version: '3.0.1',
       uptime: Math.floor(process.uptime()),
       timestamp: getCstDateTimeString(),
       metrics: {
@@ -57,7 +57,7 @@ export const systemRoutes: FastifyPluginAsync<{
   fastify.get('/api/status', async (request: FastifyRequest, reply: FastifyReply) => {
     if (!verifyAuth(request, reply)) return;
     return sendSuccess(reply, {
-      version: '3.0.0',
+      version: '3.0.1',
       needAuth: Boolean(manager.adminPassword),
       webhookUrl: manager.webhookUrl,
       keepAliveSeconds: manager.keepAliveSeconds,

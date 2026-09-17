@@ -180,7 +180,7 @@ export class AccountRepository {
     accounts: Map<string, AccountConfig>,
   ) {
     return {
-      version: '3.0.0',
+      version: '3.0.1',
       exportedAt: new Date().toISOString(),
       system: {
         keepAliveSeconds: system.keepAliveSeconds,
