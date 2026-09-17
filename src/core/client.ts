@@ -175,12 +175,13 @@ export class CtYunClient {
 
   /**
    * 3. 提交登录
+   * 对齐官方行为：首次提交不传 captchaCode，仅在服务端返回 51040/51030/51031 时才需要携带
    */
   public async login(
     userPhone: string,
     passwordPlain: string,
     challenge: ChallengeData,
-    captchaCode: string,
+    captchaCode?: string,
   ): Promise<LoginInfo> {
     const pwdSha = Protocol.sha256(passwordPlain);
     const passwordHashed = Protocol.sha256(passwordPlain + challenge.challengeCode);
@@ -191,7 +192,9 @@ export class CtYunClient {
     formData.append('password', passwordHashed);
     formData.append('sha256Password', sha256Password);
     formData.append('challengeId', challenge.challengeId);
-    formData.append('captchaCode', captchaCode);
+    if (captchaCode && captchaCode.trim()) {
+      formData.append('captchaCode', captchaCode.trim());
+    }
     formData.append('deviceCode', this.deviceCode);
     formData.append('deviceName', 'Chrome浏览器');
     formData.append('deviceType', CtYunClient.DEVICE_TYPE);
@@ -211,7 +214,13 @@ export class CtYunClient {
 
     const json = (await res.json()) as { code: number; msg?: string; data: LoginInfo };
     if (json.code !== 0 && json.code !== 200) {
-      throw new Error(json.msg || '登录失败');
+      const err = new Error(json.msg || '登录失败') as Error & { code?: number; needCaptcha?: boolean };
+      err.code = json.code;
+      // 51040: NEED_CAPTCHA, 51030: INVALID_CAPTCHA, 51031: EXPIRE_CAPTCHA
+      if ([51040, 51030, 51031].includes(json.code)) {
+        err.needCaptcha = true;
+      }
+      throw err;
     }
 
     this.loginInfo = json.data;

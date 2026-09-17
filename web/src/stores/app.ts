@@ -332,6 +332,7 @@ export const useAppStore = defineStore('app', () => {
   const formName = ref('');
   const formPassword = ref('');
   const formCaptcha = ref('');
+  const needCaptcha = ref(false);
   const captchaImgUrl = ref('');
   const modalLoading = ref(false);
   const captchaLoading = ref(false);
@@ -432,22 +433,17 @@ export const useAppStore = defineStore('app', () => {
       }
     } else {
       stopQrPolling();
-      if (!captchaImgUrl.value && formUser.value.trim().length >= 11) {
+      if (needCaptcha.value && !captchaImgUrl.value && formUser.value.trim()) {
         refreshLoginCaptcha();
       }
     }
   }
 
-  let lastFetchedPhone = '';
   function onPhoneInput() {
-    const clean = formUser.value.trim();
-    if (clean.length === 11) {
-      if (clean !== lastFetchedPhone) {
-        lastFetchedPhone = clean;
-        refreshLoginCaptcha(clean);
-      }
-    } else if (clean.length < 11 && lastFetchedPhone) {
-      lastFetchedPhone = '';
+    // 对齐官方机制：首次默认免验证码直登，不需要输入11位后自动预加载验证码
+    // 若之前因密码错误已触发 needCaptcha，当手机号被修改时重置 needCaptcha 状态
+    if (needCaptcha.value) {
+      needCaptcha.value = false;
       captchaImgUrl.value = '';
       formCaptcha.value = '';
       currentChallenge.value = null;
@@ -461,19 +457,15 @@ export const useAppStore = defineStore('app', () => {
     formName.value = accName || '';
     formPassword.value = '';
     formCaptcha.value = '';
+    needCaptcha.value = false;
     captchaImgUrl.value = '';
     currentChallenge.value = null;
     modalError.value = '';
-    lastFetchedPhone = '';
     smsSentSuccess.value = false;
     smsVerificationCode.value = '';
     smsCaptchaCode.value = '';
     showModal.value = true;
     initQrLogin();
-    if (formUser.value.trim().length >= 11) {
-      lastFetchedPhone = formUser.value.trim();
-      refreshLoginCaptcha();
-    }
   }
 
   async function refreshLoginCaptcha(forceUser?: string) {
@@ -508,45 +500,63 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function submitLogin() {
-      if (!formUser.value || !formCaptcha.value) {
-        modalError.value = '请填写手机号和图形验证码';
-        return;
-      }
-      modalLoading.value = true;
-      modalError.value = '';
-      const name = formName.value.trim() || formUser.value.trim();
-
-      try {
-        const res = await fetch(`/api/profiles/${encodeURIComponent(name)}/login`, {
-          method: 'POST',
-          headers: getHeaders(),
-          body: JSON.stringify({
-            name,
-            user: formUser.value.trim(),
-            password: formPassword.value,
-            captchaCode: formCaptcha.value.trim(),
-            challenge: currentChallenge.value,
-          }),
-        });
-        const data = await res.json();
-        if (!data.success) throw new Error(data.msg || '登录失败');
-
-        if (data.needSms) {
-          modalStep.value = 'sms';
-          refreshSmsCaptcha();
-        } else {
-          showModal.value = false;
-          toast.success(`账号 [${name}] 登录并保活成功`);
-          fetchStatus();
-        }
-      } catch (err: any) {
-        modalError.value = err.message;
-        toast.error(err.message || '登录失败');
-        refreshLoginCaptcha();
-      } finally {
-        modalLoading.value = false;
-      }
+    const user = formUser.value.trim();
+    const pwd = formPassword.value;
+    if (!user || !pwd) {
+      modalError.value = '请填写账号和密码';
+      return;
     }
+    if (needCaptcha.value && !formCaptcha.value.trim()) {
+      modalError.value = '请输入图形验证码';
+      return;
+    }
+    modalLoading.value = true;
+    modalError.value = '';
+    const name = formName.value.trim() || user;
+
+    try {
+      const payload: Record<string, any> = {
+        name,
+        user,
+        password: pwd,
+      };
+      if (needCaptcha.value && formCaptcha.value.trim()) {
+        payload.captchaCode = formCaptcha.value.trim();
+        if (currentChallenge.value) {
+          payload.challenge = currentChallenge.value;
+        }
+      }
+
+      const res = await fetch(`/api/profiles/${encodeURIComponent(name)}/login`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        if (data.needCaptcha) {
+          needCaptcha.value = true;
+          formCaptcha.value = '';
+          await refreshLoginCaptcha();
+        }
+        throw new Error(data.msg || '登录失败');
+      }
+
+      if (data.needSms) {
+        modalStep.value = 'sms';
+        refreshSmsCaptcha();
+      } else {
+        showModal.value = false;
+        toast.success(`账号 [${name}] 登录并保活成功`);
+        fetchStatus();
+      }
+    } catch (err: any) {
+      modalError.value = err.message;
+      toast.error(err.message || '登录失败');
+    } finally {
+      modalLoading.value = false;
+    }
+  }
 
     function refreshSmsCaptcha() {
       const name = formName.value.trim() || formUser.value.trim();
@@ -969,6 +979,7 @@ export const useAppStore = defineStore('app', () => {
     formName,
     formPassword,
     formCaptcha,
+    needCaptcha,
     currentChallenge,
     captchaImgUrl,
     modalLoading,

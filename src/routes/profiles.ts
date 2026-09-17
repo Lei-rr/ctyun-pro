@@ -272,7 +272,7 @@ export const profileRoutes: FastifyPluginAsync<{
         try {
           challenge = await client.getChallengeData();
         } catch {
-          return sendError(reply, '请先刷新验证码');
+          return sendError(reply, '获取登录安全挑战失败，请重试');
         }
       }
 
@@ -293,10 +293,14 @@ export const profileRoutes: FastifyPluginAsync<{
         manager.addLog('success', `[${name}] 登录成功！正在启动云电脑保活...`);
         manager.startAccount(name).catch((e) => manager.addLog('error', `[${name}] 启动保活失败: ${e.message}`));
         return sendSuccess(reply, manager.getAccountState(name), '登录成功并已启动保活');
-      } catch (err) {
+      } catch (err: any) {
         const msg = err instanceof Error ? err.message : String(err);
         manager.addLog('error', `[${name}] 登录验证失败: ${msg}`);
-        return sendError(reply, msg);
+        const needCaptcha = !!err?.needCaptcha;
+        return sendError(reply, msg, 400, {
+          needCaptcha,
+          errorCode: err?.code,
+        });
       }
     },
   );

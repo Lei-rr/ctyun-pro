@@ -176,8 +176,8 @@ const store = useAppStore();
           />
         </div>
 
-        <!-- 图形验证码：官方直连看图直填 -->
-        <div class="space-y-1">
+        <!-- 图形验证码：对齐官方机制，仅在密码错误/需要验证码(needCaptcha)时平滑展开 -->
+        <div v-if="store.needCaptcha" class="space-y-1 animate-in fade-in slide-in-from-top-1 duration-200">
           <div class="flex items-center justify-between">
             <label class="text-xs font-medium text-foreground">图形验证码</label>
             <span class="text-[11px] text-muted-foreground">
@@ -189,7 +189,7 @@ const store = useAppStore();
               type="text"
               v-model="store.formCaptcha"
               placeholder="输入 4 位字符"
-              required
+              :required="store.needCaptcha"
               class="flex-1 h-9 min-w-0 font-medium tracking-wider"
             />
             <div
