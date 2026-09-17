@@ -117,11 +117,12 @@ export const useAppStore = defineStore('app', () => {
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.msg || '密码错误');
-      adminToken.value = json.token;
-      localStorage.setItem('ctyun_admin_token', json.token);
+      const token = json.data?.token || json.token;
+      adminToken.value = token;
+      localStorage.setItem('ctyun_admin_token', token);
       // 显式写入客户端同源 Cookie，保障新标签页直连与子页面始终能获取同源凭证 (30天长效)
       try {
-        document.cookie = `ctyun_admin_token=${encodeURIComponent(json.token)}; path=/; max-age=${30 * 24 * 3600}; SameSite=Lax`;
+        document.cookie = `ctyun_admin_token=${encodeURIComponent(token)}; path=/; max-age=${30 * 24 * 3600}; SameSite=Lax`;
       } catch (e) {}
       adminPasswordInput.value = '';
       toast.success('登录成功');
