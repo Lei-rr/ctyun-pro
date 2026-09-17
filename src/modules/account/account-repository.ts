@@ -100,11 +100,7 @@ export class AccountRepository {
       const taskConfig = acc.taskConfig || {
         enabled: true,
         aiChat: true,
-        scheduleTime: getRandomScheduleTime(),
       };
-      if (!taskConfig.scheduleTime) {
-        taskConfig.scheduleTime = getRandomScheduleTime();
-      }
       const redeemConfig = acc.redeemConfig || { ...DEFAULT_REDEEM_CONFIG };
       const id = acc.id || crypto.randomUUID();
       const desktops = Array.isArray(acc.desktops) ? acc.desktops : [];
@@ -160,11 +156,15 @@ export class AccountRepository {
     };
     safeWriteFileSync(Config.configFile, JSON.stringify(sysData, null, 2));
 
-    // 2. accounts.json (脱敏安全落盘)
+    // 2. accounts.json (脱敏安全落盘，彻底移除 scheduleTime 本地存储)
     const list: AccountConfig[] = Array.from(accounts.values()).map((acc) => {
       const sanitized = { ...acc };
       delete sanitized.password;
       delete sanitized.rawPassword;
+      if (sanitized.taskConfig) {
+        sanitized.taskConfig = { ...sanitized.taskConfig };
+        delete (sanitized.taskConfig as unknown as Record<string, unknown>).scheduleTime;
+      }
       return sanitized;
     });
     safeWriteFileSync(Config.accountsFile, JSON.stringify(list, null, 2));
@@ -190,6 +190,10 @@ export class AccountRepository {
         const sanitized = { ...acc };
         delete sanitized.password;
         delete sanitized.rawPassword;
+        if (sanitized.taskConfig) {
+          sanitized.taskConfig = { ...sanitized.taskConfig };
+          delete (sanitized.taskConfig as unknown as Record<string, unknown>).scheduleTime;
+        }
         return sanitized;
       }),
     };

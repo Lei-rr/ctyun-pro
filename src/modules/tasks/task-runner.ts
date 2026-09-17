@@ -7,7 +7,7 @@ import { Logger } from '../../core/logger.js';
 /**
  * 每日任务统一调度执行器
  * 极简纯净设计：
- * 1. 与 AI 助手对话（纯 HTTP，06:00 ~ 08:00 随机错峰执行）
+ * 1. 与 AI 助手对话（纯 HTTP，03:00 ~ 06:00 随机错峰执行）
  * 2. 挂机与活跃状态由常驻静默保活 Worker 自动跑满
  */
 export interface TaskExecutionSummary {

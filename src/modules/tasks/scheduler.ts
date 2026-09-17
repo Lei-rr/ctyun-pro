@@ -19,6 +19,20 @@ export class TaskScheduler {
   private lastMidnightResetDate = '';
   private taskRetryStats = new Map<string, { date: string; attempts: number; nextRetryTime: number }>();
   private redeemRetryStats = new Map<string, { date: string; attempts: number; nextRetryTime: number }>();
+  private dailyScheduleTimes = new Map<string, { date: string; time: string }>();
+
+  /**
+   * 获取账号当天的随机执行时间 (03:00~06:00)，纯内存维护，绝不持久化到本地文件
+   */
+  private getTodayScheduleTime(name: string, today: string): string {
+    const existing = this.dailyScheduleTimes.get(name);
+    if (existing && existing.date === today) {
+      return existing.time;
+    }
+    const newTime = getRandomScheduleTime();
+    this.dailyScheduleTimes.set(name, { date: today, time: newTime });
+    return newTime;
+  }
 
   constructor(profileManager: ProfileManager, logger: Logger) {
     this.profileManager = profileManager;
@@ -88,7 +102,8 @@ export class TaskScheduler {
       if (!tConf || tConf.enabled === false) {
         // 用户未开启或关闭了每日任务总开关，绝不自动执行
       } else {
-        const targetTime = tConf.scheduleTime || getRandomScheduleTime();
+        // 每日任务执行时间纯内存动态生成 (03:00~06:00)，绝不持久化到本地文件
+        const targetTime = this.getTodayScheduleTime(name, today);
         const retryStat = this.taskRetryStats.get(name);
         const nextTime = tConf.retryDate === today ? (tConf.nextRetryTime || retryStat?.nextRetryTime || 0) : (retryStat?.nextRetryTime || 0);
         const isInCooldown = (tConf.retryDate === today || retryStat?.date === today) && Date.now() < nextTime;
