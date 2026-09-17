@@ -320,10 +320,7 @@ export class ProfileManager {
           acc.taskConfig = {
             enabled: true,
             aiChat: true,
-            scheduleTime: getRandomScheduleTime(),
           };
-        } else if (!acc.taskConfig.scheduleTime) {
-          acc.taskConfig.scheduleTime = getRandomScheduleTime();
         }
         state.autoStart = acc.autoStart;
         state.taskConfig = acc.taskConfig;
@@ -821,11 +818,7 @@ export class ProfileManager {
     const taskConfig = config.taskConfig || existingAcc?.taskConfig || {
       enabled: true,
       aiChat: true,
-      scheduleTime: getRandomScheduleTime(),
     };
-    if (!taskConfig.scheduleTime) {
-      taskConfig.scheduleTime = getRandomScheduleTime();
-    }
     const redeemConfig = config.redeemConfig || { ...DEFAULT_REDEEM_CONFIG };
     const fullAcc: AccountConfig = { ...config, id, name, user, deviceCode, taskConfig, redeemConfig };
     delete fullAcc.password;

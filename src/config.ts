@@ -26,7 +26,7 @@ export interface RedeemConfig {
 }
 
 export function getRandomScheduleTime(): string {
-  const hour = Math.floor(Math.random() * 2) + 6; // 06:00 ~ 08:00 (06:00~07:59) 之间随机
+  const hour = Math.floor(Math.random() * 3) + 3; // 03:00 ~ 06:00 (03:00~05:59) 之间随机
   const minute = Math.floor(Math.random() * 60);
   const pad = (n: number) => n.toString().padStart(2, '0');
   return `${pad(hour)}:${pad(minute)}`;
@@ -34,12 +34,11 @@ export function getRandomScheduleTime(): string {
 
 export interface TaskConfig {
   enabled: boolean; // 是否开启自动做任务
-  aiChat?: boolean; // 与 AI 对话 (每日 06:00~08:00 随机错峰执行)
-  scheduleTime?: string; // 每日做任务时间 (如 08:30)
+  aiChat?: boolean; // 与 AI 对话 (每日 03:00~06:00 随机错峰执行)
   lastRunDate?: string; // 上次执行任务日期 YYYY-MM-DD
   retryDate?: string; // 重试日期
-  retryCount?: number; // 当日已重试次数
-  nextRetryTime?: number; // 下次允许重试的时间戳 (退避)
+  retryCount?: number; // 今日重试次数
+  nextRetryTime?: number; // 下次重试时间戳
 }
 
 export interface AccountConfig {

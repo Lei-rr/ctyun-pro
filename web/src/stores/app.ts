@@ -33,7 +33,6 @@ export interface Account {
   lastError?: string;
   taskConfig?: {
     enabled?: boolean;
-    scheduleTime?: string;
     aiChat?: boolean;
     lastRunDate?: string;
   };

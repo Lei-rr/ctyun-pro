@@ -48,7 +48,6 @@ export const profileRoutes: FastifyPluginAsync<{
         autoStart: body.autoStart !== false,
         taskConfig: {
           enabled: body.taskConfig?.enabled ?? true,
-          scheduleTime: body.taskConfig?.scheduleTime || getRandomScheduleTime(),
           aiChat: body.taskConfig?.aiChat ?? true,
         },
         redeemConfig: {
@@ -419,7 +418,6 @@ export const profileRoutes: FastifyPluginAsync<{
       if (!acc) return sendError(reply, 'Profile 未找到', 404);
       const currentTaskConfig = acc.taskConfig || {
         enabled: true,
-        scheduleTime: getRandomScheduleTime(),
         aiChat: true,
       };
       const currentRedeemConfig = acc.redeemConfig || { ...DEFAULT_REDEEM_CONFIG };
