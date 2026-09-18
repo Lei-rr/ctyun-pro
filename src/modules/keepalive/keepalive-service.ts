@@ -222,16 +222,18 @@ export class KeepaliveService extends EventEmitter {
       }
 
       // 开机/唤醒检测与自愈指令
-      const isRunning = d.useStatusText === '运行中' || d.useStatusText === '离线运行';
+      let isRunning = d.useStatusText === '运行中' || d.useStatusText === '离线运行';
       if (!isRunning) {
         const isSleep = (d.useStatusText || '').includes('休眠') || (d.useStatusText || '').includes('睡眠');
         const isOff = (d.useStatusText || '').includes('关机') || (d.useStatusText || '').includes('已停止');
+        let cmdSent = false;
 
         if (isSleep) {
           this.logger.addLog('info', `[${dPrefix}] 云电脑处于休眠状态，正在发送唤醒指令...`);
           try {
             await client.operateDesktop(d.desktopId, 'awake', d.objType);
-            this.logger.addLog('info', `[${dPrefix}] 唤醒指令已发送，等待系统启动就绪`);
+            this.logger.addLog('info', `[${dPrefix}] 唤醒指令已发送，等待系统启动就绪 (最长等待 5 分钟)`);
+            cmdSent = true;
           } catch (e) {
             const err = e instanceof Error ? e.message : String(e);
             this.logger.addLog('error', `[${dPrefix}] 唤醒失败: ${err}`);
@@ -240,10 +242,70 @@ export class KeepaliveService extends EventEmitter {
           this.logger.addLog('info', `[${dPrefix}] 云电脑处于关机状态，正在发送开机指令...`);
           try {
             await client.operateDesktop(d.desktopId, 'on', d.objType);
-            this.logger.addLog('info', `[${dPrefix}] 开机指令已发送，等待系统启动就绪`);
+            this.logger.addLog('info', `[${dPrefix}] 开机指令已发送，等待系统启动就绪 (最长等待 5 分钟)`);
+            cmdSent = true;
           } catch (e) {
             const err = e instanceof Error ? e.message : String(e);
             this.logger.addLog('error', `[${dPrefix}] 开机失败: ${err}`);
+          }
+        }
+
+        if (cmdSent) {
+          if (state) {
+            state.status = 'connecting';
+            state.useStatusText = isSleep ? '唤醒中' : '启动中';
+            this.onStateChange?.();
+          }
+
+          const MAX_ATTEMPTS = 10;
+          const POLL_INTERVAL = 30000;
+          let ready = false;
+
+          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+            try {
+              const stateRes = await client.getDesktopState(d.desktopId, d.objType);
+              let statusText = stateRes?.useStatusText || '';
+              const desktopState = (stateRes?.desktopState || '').toUpperCase();
+              const useStatusCode = String(stateRes?.useStatus || '');
+
+              if (!statusText && !desktopState) {
+                const list = await client.getDesktopList();
+                const current = list.find((item) => String(item.desktopCode) === String(d.desktopCode) || String(item.desktopId) === String(d.desktopId));
+                statusText = current?.useStatusText || '';
+              }
+
+              const isReady =
+                statusText === '运行中' ||
+                statusText === '离线运行' ||
+                desktopState === 'RUNNING' ||
+                useStatusCode === '20' ||
+                useStatusCode === '25';
+
+              if (isReady) {
+                ready = true;
+                if (statusText) d.useStatusText = statusText;
+                if (state) {
+                  state.useStatusText = statusText || '运行中';
+                  this.onStateChange?.();
+                }
+                this.logger.addLog('info', `[${dPrefix}] 云电脑已启动就绪 (状态: ${statusText || '运行中'})，开始建立保活长连接`);
+                break;
+              } else {
+                this.logger.addLog(
+                  'info',
+                  `[${dPrefix}] 云电脑启动中 (第 ${attempt}/${MAX_ATTEMPTS} 次检测，当前状态: ${statusText || desktopState || '开机中'})，等待 30s 后复测...`
+                );
+              }
+            } catch (pollErr) {
+              const errMsg = pollErr instanceof Error ? pollErr.message : String(pollErr);
+              this.logger.addLog('warn', `[${dPrefix}] 状态轮询检测异常 (第 ${attempt}/${MAX_ATTEMPTS} 次): ${errMsg}`);
+            }
+          }
+
+          if (!ready) {
+            this.logger.addLog('warn', `[${dPrefix}] 云电脑启动等待超时 (已等待 5 分钟)，稍后看门狗探针将自动重新巡检`);
+            continue;
           }
         }
       }
