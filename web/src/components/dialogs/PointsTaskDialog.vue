@@ -7,6 +7,7 @@ import {
   Play,
   Gift,
   History,
+  RefreshCw,
 } from 'lucide-vue-next';
 import { Button } from '@/shared/ui/button';
 import { Badge } from '@/shared/ui/badge';
@@ -65,6 +66,17 @@ interface PointDetailItem {
   remark?: string;
 }
 
+interface DetailCache {
+  list: PointDetailItem[];
+  hasMore: boolean;
+  page: number;
+  filter: string;
+}
+
+// 模块级内存缓存：重开弹窗秒显，后台静默刷新
+const pointsCache = new Map<string, PointsData>();
+const detailCache = new Map<string, DetailCache>();
+
 const pointsData = ref<PointsData | null>(null);
 const detailList = ref<PointDetailItem[]>([]);
 const detailLoading = ref(false);
@@ -72,38 +84,70 @@ const detailNoMore = ref(false);
 const detailPage = ref(1);
 const detailFilter = ref<'' | '1' | '2' | '3'>('');
 
-async function loadPoints() {
+async function loadPoints(force = false) {
   if (!props.accountName) return;
-  loading.value = true;
+  const cached = pointsCache.get(props.accountName);
+  if (cached && !force) {
+    pointsData.value = cached;
+    loading.value = false;
+  } else if (!cached) {
+    loading.value = true;
+  }
   try {
-    pointsData.value = await store.fetchPointsAndTasks(props.accountName);
+    const data = await store.fetchPointsAndTasks(props.accountName);
+    pointsData.value = data;
+    pointsCache.set(props.accountName, data);
   } catch {
-    pointsData.value = null;
+    if (!cached) pointsData.value = null;
   } finally {
     loading.value = false;
   }
 }
 
+async function fetchDetailPage(pageNum: number, reset: boolean) {
+  const res = await store.fetchPointDetailList(props.accountName, {
+    pageNum,
+    pageSize: 10,
+    msgType: detailFilter.value ? Number(detailFilter.value) : undefined,
+  });
+  if (reset) {
+    detailList.value = res.list || [];
+  } else {
+    detailList.value = [...detailList.value, ...(res.list || [])];
+  }
+  detailNoMore.value = !res.hasMore;
+  detailPage.value = reset ? 2 : pageNum + 1;
+  detailCache.set(props.accountName, {
+    list: detailList.value,
+    hasMore: res.hasMore,
+    page: detailPage.value,
+    filter: detailFilter.value,
+  });
+}
+
 async function loadDetail(reset = false) {
   if (!props.accountName || detailLoading.value) return;
+
   if (reset) {
+    const cached = detailCache.get(props.accountName);
+    // 仅当筛选条件一致时复用缓存，避免显示旧筛选结果
+    if (cached && cached.filter === detailFilter.value && cached.list.length > 0) {
+      detailList.value = cached.list;
+      detailNoMore.value = !cached.hasMore;
+      detailPage.value = cached.page;
+      return;
+    }
     detailPage.value = 1;
     detailList.value = [];
     detailNoMore.value = false;
   }
   if (detailNoMore.value) return;
+
   detailLoading.value = true;
   try {
-    const res = await store.fetchPointDetailList(props.accountName, {
-      pageNum: detailPage.value,
-      pageSize: 10,
-      msgType: detailFilter.value ? Number(detailFilter.value) : undefined,
-    });
-    detailList.value = [...detailList.value, ...(res.list || [])];
-    detailNoMore.value = !res.hasMore;
-    detailPage.value += 1;
+    await fetchDetailPage(detailPage.value, reset);
   } catch {
-    detailNoMore.value = true;
+    if (!detailList.value.length) detailNoMore.value = true;
   } finally {
     detailLoading.value = false;
   }
@@ -114,21 +158,17 @@ watch(
   (val) => {
     if (val) {
       activeTab.value = 'tasks';
+      // 打开弹窗即并行预取积分与明细，切换 Tab 零等待
       loadPoints();
+      loadDetail(true);
     }
   },
 );
 
-watch(activeTab, (tab) => {
-  if (tab === 'detail' && detailList.value.length === 0 && !detailLoading.value) {
-    loadDetail(true);
-  }
-});
-
+let filterTimer: ReturnType<typeof setTimeout> | null = null;
 watch(detailFilter, () => {
-  if (activeTab.value === 'detail') {
-    loadDetail(true);
-  }
+  if (filterTimer) clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => loadDetail(true), 150);
 });
 
 /** 平台任务 = 含通用(1)/专属(10)积分的任务；九江(20)积分的任务/明细不展示 */
@@ -219,7 +259,7 @@ function detailTypeLabel(msgType: number): string {
     :description="`账号 [${accountName}] 当前可用积分与每日任务进度`"
     content-class="sm:max-w-md"
   >
-    <div v-if="loading" class="py-10 text-center text-xs text-muted-foreground">
+    <div v-if="loading && !pointsData" class="py-10 text-center text-xs text-muted-foreground">
       正在拉取天翼云最新积分与每日任务进度...
     </div>
 
@@ -258,7 +298,8 @@ function detailTypeLabel(msgType: number): string {
         </Badge>
       </div>
 
-      <!-- Tab 切换 -->
+      <!-- Tab 切换 + 刷新 -->
+      <div class="flex items-center justify-between gap-2">
       <div class="flex items-center gap-1 p-0.5 rounded-lg bg-muted/50 w-fit">
         <button
           class="px-3 h-7 text-xs rounded-md transition-colors cursor-pointer"
@@ -275,6 +316,18 @@ function detailTypeLabel(msgType: number): string {
           <History class="size-3" />
           积分明细
         </button>
+      </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          class="h-7 px-2 text-[10px] gap-1 cursor-pointer text-muted-foreground hover:text-foreground"
+          :disabled="loading || detailLoading"
+          title="刷新积分与任务数据"
+          @click="loadPoints(true); loadDetail(true);"
+        >
+          <RefreshCw class="size-3" :class="{ 'animate-spin': loading || detailLoading }" />
+          刷新
+        </Button>
       </div>
 
       <!-- 任务明细 -->
@@ -401,7 +454,7 @@ function detailTypeLabel(msgType: number): string {
           </button>
         </div>
 
-        <div class="space-y-1.5 max-h-[320px] overflow-y-auto pr-0.5">
+        <div class="space-y-1.5">
           <div
             v-for="(item, idx) in detailList"
             :key="idx"
@@ -424,7 +477,11 @@ function detailTypeLabel(msgType: number): string {
           </div>
         </div>
 
-        <div v-if="detailList.length === 0 && !detailLoading" class="py-6 text-center text-xs text-muted-foreground">
+        <div v-if="detailLoading && detailList.length === 0" class="py-6 text-center text-xs text-muted-foreground">
+          正在加载积分明细...
+        </div>
+
+        <div v-else-if="detailList.length === 0" class="py-6 text-center text-xs text-muted-foreground">
           暂无积分明细记录
         </div>
 
