@@ -269,8 +269,10 @@ export class KeepaliveService extends EventEmitter {
                 statusText = current?.useStatusText || '';
               }
 
-              // 就绪判定依据官方 desktopState 枚举: ACTIVE 为实例运行态
-              const isReady = statusText === '运行中' || statusText === '离线运行' || normalizeDesktopState(desktopState) === 'running';
+              // 就绪判定: desktopState 枚举 ACTIVE 或 useStatusText 归一化为运行态
+              const isReady =
+                normalizeDesktopState(desktopState) === 'running' ||
+                normalizeUseStatusText(statusText) === 'running';
 
               if (isReady) {
                 ready = true;

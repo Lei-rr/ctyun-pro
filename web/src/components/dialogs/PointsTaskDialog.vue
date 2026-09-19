@@ -60,8 +60,9 @@ interface PointsData {
 interface PointDetailItem {
   msgType: number;
   pointsList: TaskPointItem[];
-  createTime?: string;
+  createDate?: number;
   remark?: string;
+  desktopName?: string | null;
 }
 
 interface DetailCache {
@@ -230,6 +231,23 @@ function formatDetailPoints(item: PointDetailItem): string {
   const sum = (item.pointsList || []).reduce((acc, p) => acc + (Number(p.value) || 0), 0);
   const prefix = item.msgType === 1 ? '+' : '-';
   return `${prefix}${Math.abs(sum)}`;
+}
+
+function formatDetailTime(ts?: number): string {
+  if (!ts) return '';
+  try {
+    return new Date(Number(ts)).toLocaleString('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  } catch {
+    return '';
+  }
 }
 
 function detailTypeLabel(msgType: number): string {
@@ -426,7 +444,7 @@ function detailTypeLabel(msgType: number): string {
                 {{ item.remark || detailTypeLabel(item.msgType) }}
               </div>
               <div class="text-[10px] text-muted-foreground mt-0.5">
-                {{ item.createTime || '' }}
+                {{ formatDetailTime(item.createDate) }}
               </div>
             </div>
             <div

@@ -133,10 +133,13 @@ export function isDailyTask(task: Pick<TaskItem, 'calendarType' | 'taskDefId'>):
 }
 
 export interface PointDetailItem {
+  logId?: number;
   msgType: number;
   pointsList: Array<{ type: number; typeDesc: string; value: number }>;
-  createTime?: string;
+  /** 官方字段: 记录时间 (epoch 毫秒) */
+  createDate?: number;
   remark?: string;
+  desktopName?: string | null;
   [key: string]: unknown;
 }
 

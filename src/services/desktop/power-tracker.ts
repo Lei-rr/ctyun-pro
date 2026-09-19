@@ -1,4 +1,4 @@
-import type { CtYunClient } from '../../ctyun/client.js';
+import { normalizeUseStatusText, type CtYunClient } from '../../ctyun/client.js';
 import { errorText } from '../../infra/http.js';
 import type { ManagedDesktopState } from '../../types.js';
 import type { Logger } from '../../infra/logger.js';
@@ -63,9 +63,10 @@ export class DesktopPowerTracker {
           const dName = target.desktopName || target.computerName || target.name || desktopId;
           const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
           target.useStatusText = realStatusText;
+          const statusKind = normalizeUseStatusText(realStatusText);
 
           if (operation === 'on' || operation === 'reset') {
-            if (realStatusText === '运行中') {
+            if (statusKind === 'running') {
               clearInterval(timer);
               this.powerTrackingTimers.delete(trackingKey);
               target.status = 'connecting';
@@ -76,7 +77,7 @@ export class DesktopPowerTracker {
               return;
             }
           } else if (operation === 'shutdown') {
-            if (realStatusText === '已关机' || realStatusText === '关机') {
+            if (statusKind === 'stopped') {
               clearInterval(timer);
               this.powerTrackingTimers.delete(trackingKey);
               target.status = 'stopped';
