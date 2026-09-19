@@ -2,8 +2,9 @@ import { getRandomScheduleTime } from '../../config.js';
 import type { Logger } from '../../infra/logger.js';
 import { TaskRunner } from './runner.js';
 import { RewardRedeemService } from '../reward/service.js';
-import { sendWebhookNotification , errorText } from '../../infra/http.js';
-import type { ProfileManager } from '../../manager.js';
+import { errorText } from '../../infra/http.js';
+import { NotifyService } from '../../infra/notify.js';
+import type { ProfileManager } from '../../core/profile-manager.js';
 
 /**
  * 工业级精准时间点调度器
@@ -16,7 +17,6 @@ export class TaskScheduler {
   private lastCheckedMinute = '';
   private lastDigestDate = '';
   private lastMidnightResetDate = '';
-  private taskRetryStats = new Map<string, { date: string; attempts: number; nextRetryTime: number }>();
   private redeemRetryStats = new Map<string, { date: string; attempts: number; nextRetryTime: number }>();
   private dailyScheduleTimes = new Map<string, { date: string; time: string }>();
 
@@ -103,9 +103,8 @@ export class TaskScheduler {
       } else {
         // 每日任务执行时间纯内存动态生成 (03:00~06:00)，绝不持久化到本地文件
         const targetTime = this.getTodayScheduleTime(name, today);
-        const retryStat = this.taskRetryStats.get(name);
-        const nextTime = tConf.retryDate === today ? (tConf.nextRetryTime || retryStat?.nextRetryTime || 0) : (retryStat?.nextRetryTime || 0);
-        const isInCooldown = (tConf.retryDate === today || retryStat?.date === today) && Date.now() < nextTime;
+        // 退避冷却以持久化的 taskConfig 为唯一状态源，重启后依旧有效
+        const isInCooldown = tConf.retryDate === today && Date.now() < (tConf.nextRetryTime || 0);
 
         // 准点命中判定：到达或超过设定时间且今日未执行且非退避冷却中时触发 (防止服务重启错过固定当分钟)
         if (!isInCooldown && tConf.lastRunDate !== today && currentHHmm >= targetTime) {
@@ -119,13 +118,12 @@ export class TaskScheduler {
           setTimeout(async () => {
             try {
               this.logger.addLog('info', `[${name}] 命中每日做任务定时 (${targetTime}，抖动延时 ${(jitterMs/1000).toFixed(1)}s)，正在按策略自动执行...`);
-              const res = await TaskRunner.executeDailyTasks(client, tConf, this.logger);
+              const res = await TaskRunner.executeDailyTasks(client, tConf);
               tConf.lastRunDate = today;
               delete tConf.retryCount;
               delete tConf.retryDate;
               delete tConf.nextRetryTime;
               acc.taskConfig = tConf;
-              this.taskRetryStats.delete(name);
               this.profileManager.saveToDisk();
               this.logger.addLog('success', `[${name}] 每日任务已执行: ${res.message}`);
 
@@ -147,20 +145,17 @@ export class TaskScheduler {
                 delete tConf.nextRetryTime;
                 acc.taskConfig = tConf;
                 this.profileManager.saveToDisk();
-                this.taskRetryStats.delete(name);
                 this.logger.addLog('warn', `[${name}] 自动任务执行失败（登录凭证已过期/失效，已停止今日重试，请重新登录账号）: ${errMsg}`);
                 if (this.profileManager.webhookUrl) {
-                  sendWebhookNotification(
+                  NotifyService.sendNotification(
                     this.profileManager.webhookUrl,
                     `天翼云电脑 - [${name}] 登录凭证失效`,
                     `自动任务执行失败：登录凭证已过期或失效，已停止今日自动调度，请重新登录账号。\n错误详情: ${errMsg}`,
                   ).catch(() => {});
                 }
               } else {
-                // 偶发网络异常：引入退避重试（每天最多重试 3 次，每次重试至少退避 15 分钟，状态持久化防重启清零）
-                const persistedAttempts = tConf.retryDate === today ? (tConf.retryCount || 0) : 0;
-                const memAttempts = this.taskRetryStats.get(name)?.date === today ? (this.taskRetryStats.get(name)?.attempts || 0) : 0;
-                const currentAttempts = Math.max(persistedAttempts, memAttempts) + 1;
+                // 偶发网络异常：引入退避重试（每天最多重试 3 次，每次重试至少退避 15 分钟）
+                const currentAttempts = (tConf.retryDate === today ? (tConf.retryCount || 0) : 0) + 1;
                 const MAX_ATTEMPTS = 3;
 
                 if (currentAttempts >= MAX_ATTEMPTS) {
@@ -170,10 +165,9 @@ export class TaskScheduler {
                   delete tConf.nextRetryTime;
                   acc.taskConfig = tConf;
                   this.profileManager.saveToDisk();
-                  this.taskRetryStats.delete(name);
                   this.logger.addLog('warn', `[${name}] 自动任务执行失败已达今日上限 (${MAX_ATTEMPTS}次)，停止今日自动任务: ${errMsg}`);
                   if (this.profileManager.webhookUrl) {
-                    sendWebhookNotification(
+                    NotifyService.sendNotification(
                       this.profileManager.webhookUrl,
                       `天翼云电脑 - [${name}] 自动任务重试达上限`,
                       `今日连续重试 ${MAX_ATTEMPTS} 次均失败，停止今日自动调度。\n最后错误: ${errMsg}`,
@@ -187,7 +181,6 @@ export class TaskScheduler {
                   tConf.lastRunDate = '';
                   acc.taskConfig = tConf;
                   this.profileManager.saveToDisk();
-                  this.taskRetryStats.set(name, { date: today, attempts: currentAttempts, nextRetryTime });
                   this.logger.addLog(
                     'warn',
                     `[${name}] 自动任务执行异常（第 ${currentAttempts}/${MAX_ATTEMPTS} 次，将在 15 分钟后退避重试）: ${errMsg}`,
@@ -338,7 +331,7 @@ export class TaskScheduler {
 
               this.logger.addLog('success', `[${name}] 自动兑换成功: ${res.message}${restartNote}`);
               if (this.profileManager.webhookUrl) {
-                sendWebhookNotification(
+                NotifyService.sendNotification(
                   this.profileManager.webhookUrl,
                   `天翼云电脑 - [${name}] 自动兑换成功`,
                   `策略触发: ${reason}\n兑换结果: ${res.message}${restartNote}`,
@@ -395,7 +388,7 @@ export class TaskScheduler {
               this.logger.addLog('error', failTitle);
               // 积分不足属于预期内正常积累状态，不发送 Webhook 骚扰；触发安全风控时推送安全告警
               if (isRiskLimited && this.profileManager.webhookUrl) {
-                sendWebhookNotification(
+                NotifyService.sendNotification(
                   this.profileManager.webhookUrl,
                   `天翼云电脑 - [${name}] 自动兑换触发风控保护`,
                   `策略触发: ${reason}\n状态: 已熔断当日兑换以保护账号\n官方原因: ${lastRedeemMsg}`,
@@ -419,7 +412,7 @@ export class TaskScheduler {
                   `[${name}] 自动兑换退避重试已达上限 (${MAX_REDEEM_ROUNDS} 轮)，停止今日自动兑换调度: ${lastRedeemMsg}`,
                 );
                 if (this.profileManager.webhookUrl) {
-                  sendWebhookNotification(
+                  NotifyService.sendNotification(
                     this.profileManager.webhookUrl,
                     `天翼云电脑 - [${name}] 自动兑换失败达上限`,
                     `策略触发: ${reason}\n今日连续重试 ${MAX_REDEEM_ROUNDS} 轮均遭遇异常，已停止今日调度。\n最后错误: ${lastRedeemMsg}`,
@@ -473,7 +466,7 @@ export class TaskScheduler {
 
         const title = `CTYUN-PRO - 每日运行早报 (${today})`;
         const content = `今日监控概览：\n• 在线账号: ${onlineCount}/${accounts.size}\n• 总积分池: ${totalGeneral} 积分\n• 报告时间: ${currentHHmm}\n\n账号明细：\n${reportLines.join('\n')}\n\n系统已全自动维持保活长连接中。`;
-        sendWebhookNotification(this.profileManager.webhookUrl, title, content).catch(() => {});
+        NotifyService.sendNotification(this.profileManager.webhookUrl, title, content).catch(() => {});
       } catch (err) {
         const msg = errorText(err);
         this.logger.addLog('warn', `每日早报推送异常: ${msg}`);

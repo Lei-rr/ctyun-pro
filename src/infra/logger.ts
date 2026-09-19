@@ -1,3 +1,5 @@
+import { getCstTimeString } from './time.js';
+
 export interface LogItem {
   id: number;
   time: string;
@@ -10,13 +12,6 @@ export class Logger {
   private logs: LogItem[] = [];
   private logId = 0;
   private listeners: Set<(log: LogItem) => void> = new Set();
-
-  public static formatCstTime(date: Date = new Date()): string {
-    return date.toLocaleTimeString('zh-CN', {
-      timeZone: 'Asia/Shanghai',
-      hour12: false,
-    });
-  }
 
   public addLog(level: 'info' | 'warn' | 'error' | 'success', message: string): void {
     // 智能折叠：在当前连续心跳波次（Block）内寻找同账号/同级别心跳折叠；一旦遇到非心跳业务日志立即打断，绝不跨事件回溯
@@ -33,7 +28,7 @@ export class Logger {
           // 匹配成功：从原位置取出，增加计数并更新时间，推入末尾（置底），避免刷屏同时保持最新活跃心跳处于最底端
           const [matched] = this.logs.splice(i, 1);
           matched.count = (matched.count || 1) + 1;
-          matched.time = Logger.formatCstTime();
+          matched.time = getCstTimeString();
           this.logs.push(matched);
           for (const listener of this.listeners) {
             listener({ ...matched });
@@ -45,7 +40,7 @@ export class Logger {
 
     const item: LogItem = {
       id: ++this.logId,
-      time: Logger.formatCstTime(),
+      time: getCstTimeString(),
       level,
       message,
       count: 1,

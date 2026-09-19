@@ -3,7 +3,6 @@ import { errorText } from '../../infra/http.js';
 import { AiChatTask } from './ai-chat.js';
 import { PointsTask, TASK_STATUS, type PointsSummary } from './points.js';
 import type { TaskConfig } from '../../config.js';
-import { Logger } from '../../infra/logger.js';
 
 /**
  * 每日任务统一调度执行器
@@ -26,7 +25,6 @@ export class TaskRunner {
   public static async executeDailyTasks(
     client: CtYunClient,
     taskConfig?: TaskConfig,
-    logger?: Logger,
   ): Promise<{ success: boolean; message: string }> {
     const results: string[] = [];
 
@@ -87,10 +85,4 @@ export class TaskRunner {
     };
   }
 
-  /**
-   * 仅获取积分与任务状态
-   */
-  public static async getPointsAndTasks(client: CtYunClient): Promise<PointsSummary> {
-    return PointsTask.getPointsAndTasks(client);
-  }
 }

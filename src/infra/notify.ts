@@ -1,4 +1,4 @@
-import { getCstDateTimeString } from '../infra/http.js';
+import { getCstDateTimeString } from './time.js';
 
 /**
  * 安全的 HTTP 请求客户端 (带超时控制)

@@ -3,8 +3,8 @@ import { errorText } from '../../infra/http.js';
 import type { ManagedDesktopState } from '../../types.js';
 import type { Logger } from '../../infra/logger.js';
 
-export const POWER_TRACKING_INTERVAL_MS = 20000;  // 电源操作后的轮询追踪周期: 20 秒
-export const POWER_TRACKING_MAX_ROUNDS = 15;      // 电源状态轮询最大轮次 (15 * 20s = 5 分钟超时)
+const TRACK_INTERVAL_MS = 20000; // 电源操作后轮询周期
+const TRACK_MAX_ROUNDS = 15; // 最大轮次 (15 * 20s = 5 分钟超时)
 
 export interface DesktopPowerDelegate {
   getClient(accountName: string): CtYunClient;
@@ -37,7 +37,7 @@ export class DesktopPowerTracker {
 
     const client = this.delegate.getClient(accountName);
     let attempts = 0;
-    const maxAttempts = POWER_TRACKING_MAX_ROUNDS;
+    const maxAttempts = TRACK_MAX_ROUNDS;
 
     const timer = setInterval(async () => {
       attempts++;
@@ -102,7 +102,7 @@ export class DesktopPowerTracker {
         this.logger.addLog('warn', `[${dPrefix}] 电源操作追踪已达 5 分钟上限，已结束实时追踪`);
         this.delegate.onPowerTimeout(accountName);
       }
-    }, POWER_TRACKING_INTERVAL_MS);
+    }, TRACK_INTERVAL_MS);
 
     this.powerTrackingTimers.set(trackingKey, timer);
   }

@@ -1,5 +1,5 @@
 import Fastify, { type FastifyError } from 'fastify';
-import { ProfileManager } from './manager.js';
+import { ProfileManager } from './core/profile-manager.js';
 import { registerDesktopProxyRoutes } from './routes/desktop-proxy.js';
 import {
   authRoutes,
@@ -40,7 +40,7 @@ export async function createServer(managerInstance?: ProfileManager) {
   });
 
   // 支持无 body 的 application/json POST/PUT 请求 (如前端带 Header 的动作触发请求)
-  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
     if (!body || (typeof body === 'string' && body.trim() === '')) {
       done(null, {});
       return;
@@ -55,7 +55,7 @@ export async function createServer(managerInstance?: ProfileManager) {
   });
 
   // 支持所有其他媒体类型直接以 Buffer 透传 (供反向代理等场景直通，防止 415 Unsupported Media Type)
-  fastify.addContentTypeParser('*', { parseAs: 'buffer' }, (req, body, done) => {
+  fastify.addContentTypeParser('*', { parseAs: 'buffer' }, (_req, body, done) => {
     done(null, body);
   });
 

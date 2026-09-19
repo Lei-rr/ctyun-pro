@@ -1,11 +1,11 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { errorText } from '../infra/http.js';
 import QRCode from 'qrcode';
-import type { ProfileManager } from '../manager.js';
+import type { ProfileManager } from '../core/profile-manager.js';
 import type { ChallengeData } from '../ctyun/client.js';
 import type { TaskConfig, RedeemConfig } from '../config.js';
 import { DEFAULT_REDEEM_CONFIG } from '../config.js';
-import { sendSuccess, sendError } from '../common/response.js';
+import { sendSuccess, sendError } from '../infra/reply.js';
 
 export const profileRoutes: FastifyPluginAsync<{
   manager: ProfileManager;
@@ -13,7 +13,7 @@ export const profileRoutes: FastifyPluginAsync<{
 }> = async (fastify, { manager, smsSessionCache }) => {
 
   // 1. Profiles 列表 (所有身份档案及所属云实例快照)
-  fastify.get('/api/profiles', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/api/profiles', async (_request: FastifyRequest, reply: FastifyReply) => {
     return sendSuccess(reply, manager.getAccountsSummary());
   });
 

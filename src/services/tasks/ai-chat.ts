@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import type { CtYunClient } from '../../ctyun/client.js';
-import { safeFetch, requestIpv4 , errorText } from '../../infra/http.js';
-import type { Logger } from '../../infra/logger.js';
+import { safeFetch, errorText } from '../../infra/http.js';
+import { requestIpv4 } from '../../infra/ipv4.js';
 
 const PRESET_MESSAGES = [
   '今天北京天气怎么样？（请用一句话回答）',
@@ -55,10 +55,7 @@ export class AiChatTask {
     return DEFAULT_TEXT_MODELS[0];
   }
 
-  public static async execute(
-    client: CtYunClient,
-    logger?: Logger,
-  ): Promise<{ success: boolean; message: string }> {
+  public static async execute(client: CtYunClient): Promise<{ success: boolean; message: string }> {
     if (!client.loginInfo) {
       return { success: false, message: '未登录无法执行AI对话' };
     }

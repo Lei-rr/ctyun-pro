@@ -1,8 +1,11 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
+import { APP_VERSION } from '../config.js';
 import { globalApiGate } from '../infra/gate.js';
-import type { ProfileManager } from '../manager.js';
-import { sendWebhookNotification, getCstDateTimeString , errorText } from '../infra/http.js';
-import { sendSuccess, sendError } from '../common/response.js';
+import type { ProfileManager } from '../core/profile-manager.js';
+import { errorText } from '../infra/http.js';
+import { getCstDateTimeString } from '../infra/time.js';
+import { NotifyService } from '../infra/notify.js';
+import { sendSuccess, sendError } from '../infra/reply.js';
 
 export const systemRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = async (fastify, { manager }) => {
 
@@ -18,7 +21,8 @@ export const systemRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = asy
       if (acc.desktops) {
         totalDesktops += acc.desktops.length;
         for (const d of acc.desktops) {
-          if (d.status === 'running') onlineDesktops++;
+          // 保活在线 = connected；yielding = paused (前台/官方客户端占用让位)
+          if (d.status === 'connected') onlineDesktops++;
           if (d.status === 'paused') pausedDesktops++;
         }
       }
@@ -30,7 +34,7 @@ export const systemRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = asy
 
     return {
       status: 'healthy',
-      version: '3.0.1',
+      version: APP_VERSION,
       uptime: Math.floor(process.uptime()),
       timestamp: getCstDateTimeString(),
       metrics: {
@@ -50,12 +54,11 @@ export const systemRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = asy
   });
 
   // 1. 获取系统状态 & 账号列表
-  fastify.get('/api/status', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/api/status', async (_request: FastifyRequest, reply: FastifyReply) => {
     return sendSuccess(reply, {
-      version: '3.0.1',
+      version: APP_VERSION,
       needAuth: Boolean(manager.adminPassword),
       webhookUrl: manager.webhookUrl,
-      keepAliveSeconds: manager.keepAliveSeconds,
       accounts: manager.getAccountsSummary(),
     });
   });
@@ -66,7 +69,6 @@ export const systemRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = asy
     async (
       request: FastifyRequest<{
         Body: {
-          keepAliveSeconds?: number;
           adminPassword?: string;
           webhookUrl?: string;
         };
@@ -74,9 +76,6 @@ export const systemRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = asy
       reply: FastifyReply,
     ) => {
       const body = request.body || {};
-      if (body.keepAliveSeconds !== undefined && body.keepAliveSeconds >= 10) {
-        manager.keepAliveSeconds = body.keepAliveSeconds;
-      }
       if (body.adminPassword !== undefined) {
         manager.adminPassword = body.adminPassword.trim();
       }
@@ -107,7 +106,7 @@ export const systemRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = asy
       }
 
       const nowStr = getCstDateTimeString();
-      const success = await sendWebhookNotification(
+      const success = await NotifyService.sendNotification(
         targetUrl,
         'CTYUN-PRO - Webhook 通知测试',
         `Webhook 消息通知已成功连通。\n\n• 测试结果: 通信正常\n• 发送时间: ${nowStr}\n• 推送规则: 严格精简推送，仅在凭证失效、兑换成功、重试熔断及每日早报 (09:00) 时通知，杜绝日常琐碎流水刷屏。`,
@@ -122,7 +121,7 @@ export const systemRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = asy
   );
 
   // 1.3 导出安全配置备份
-  fastify.get('/api/config/export', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/api/config/export', async (_request: FastifyRequest, reply: FastifyReply) => {
     return sendSuccess(reply, manager.exportConfigSafe());
   });
 

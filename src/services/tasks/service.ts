@@ -1,5 +1,6 @@
 import type { CtYunClient } from '../../ctyun/client.js';
-import { errorText, getCstDateString } from '../../infra/http.js';
+import { errorText } from '../../infra/http.js';
+import { getCstDateString } from '../../infra/time.js';
 import type { Logger } from '../../infra/logger.js';
 import type { AccountConfig, RedeemConfig } from '../../config.js';
 import type { ManagedAccount, ManagedDesktopState } from '../../types.js';
@@ -149,7 +150,7 @@ export class TasksService {
   public async getAvailableRewards(accountName?: string, forceRefresh = false): Promise<RewardItem[]> {
     const cache = this.host.rewardsCache;
     const targetAccount =
-      accountName || Array.from(this.getAccountNames()).find((k) => !!this.host.getClient(k).loginInfo);
+      accountName || this.host.getAccountNames().find((k) => !!this.host.getClient(k).loginInfo);
 
     const isStale = Date.now() - this.host.rewardsCacheUpdatedAt > REWARDS_CACHE_TTL_MS;
     if (targetAccount && (forceRefresh || cache.length === 0 || isStale)) {
@@ -200,7 +201,4 @@ export class TasksService {
     return summary;
   }
 
-  private getAccountNames(): string[] {
-    return this.host.getAccountNames();
-  }
 }

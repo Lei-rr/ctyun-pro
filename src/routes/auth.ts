@@ -2,11 +2,11 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest, FastifyReply 
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
-import type { ProfileManager } from '../manager.js';
-import { safeWriteFileSync } from '../infra/http.js';
+import type { ProfileManager } from '../core/profile-manager.js';
+import { safeWriteFileSync } from '../infra/fs.js';
 import { Config } from '../config.js';
-import { timingSafeEqualString } from '../common/crypto.js';
-import { sendSuccess, sendError } from '../common/response.js';
+import { timingSafeEqualString } from '../infra/crypto.js';
+import { sendSuccess, sendError } from '../infra/reply.js';
 
 export interface AuthContext {
   sessions: Set<string>;
@@ -154,7 +154,7 @@ export const authRoutes: FastifyPluginAsync<{
   manager: ProfileManager;
   authContext: AuthContext;
 }> = async (fastify, { manager, authContext }) => {
-  const { sessions, saveSessions, isValidToken, verifyAuth, parseCookieToken } = authContext;
+  const { sessions, saveSessions, isValidToken, parseCookieToken } = authContext;
 
   // 1. 系统鉴权状态与登录接口
   fastify.get('/api/auth/status', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -223,7 +223,6 @@ export const authRoutes: FastifyPluginAsync<{
 
   // 4. 修改管理员密码
   fastify.post('/api/auth/password', async (request: FastifyRequest<{ Body: { newPassword?: string } }>, reply: FastifyReply) => {
-    if (!verifyAuth(request, reply)) return;
     const body = request.body || {};
     manager.adminPassword = body.newPassword ? body.newPassword.trim() : '';
     manager.saveToDisk();
@@ -252,6 +251,7 @@ export function registerAuthGuard(fastify: FastifyInstance, authContext: AuthCon
     const path = (request.url || '').split('?')[0];
     if (!path.startsWith('/api/')) return;
     if (PUBLIC_API_PATHS.has(path)) return;
-    authContext.verifyAuth(request, reply);
+    // 未授权时 verifyAuth 已写入 401 响应，返回 reply 以短路后续处理链
+    if (!authContext.verifyAuth(request, reply)) return reply;
   });
 }

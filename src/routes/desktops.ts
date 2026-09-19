@@ -1,13 +1,14 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { errorText } from '../infra/http.js';
-import type { ProfileManager } from '../manager.js';
+import type { ProfileManager } from '../core/profile-manager.js';
 import type { PowerActionOptions } from '../types.js';
-import { sendSuccess, sendError } from '../common/response.js';
+import type { PowerOperation } from '../ctyun/client.js';
+import { sendSuccess, sendError } from '../infra/reply.js';
 
 export const desktopRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = async (fastify, { manager }) => {
 
   // 云电脑列表 (包含实时运行状态、剩余使用时间等)
-  fastify.get('/api/desktops', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/api/desktops', async (_request: FastifyRequest, reply: FastifyReply) => {
     const allDesktops: Array<Record<string, unknown>> = [];
     const accounts = manager.getAccountsSummary();
     for (const acc of accounts) {
@@ -60,11 +61,9 @@ export const desktopRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = as
       if (!res) {
         return sendError(reply, '云电脑未找到', 404);
       }
-      let op: 'on' | 'awake' | 'shutdown' | 'reset' | 'force_off' | 'force_reboot' = 'on';
+      let op: PowerOperation = 'on';
       if (body.action === 'shutdown' || body.action === 'off' || body.action === 'stop') op = 'shutdown';
-      else if (body.action === 'force_off') op = 'force_off';
       else if (body.action === 'reset' || body.action === 'reboot' || body.action === 'restart') op = 'reset';
-      else if (body.action === 'force_reboot') op = 'force_reboot';
       else if (body.action === 'awake' || body.action === 'wake') op = 'awake';
 
       try {

@@ -1,49 +1,21 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { errorText } from '../infra/http.js';
+import { requestBufferIpv4 } from '../infra/ipv4.js';
 import http from 'node:http';
 import https from 'node:https';
 import { URL } from 'node:url';
-import type { ProfileManager } from '../manager.js';
+import type { ProfileManager } from '../core/profile-manager.js';
 import { CtYunClient } from '../ctyun/client.js';
+
+const PROXY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
 // 官方入口与静态资源全量实时透传代理（不设本地/内存缓存，保障官方前端升级后版本强一致）
 
-/**
- * 基于 Node.js 原生 https 发起 IPv4 请求（规避容器与云厂商环境 IPv6 路由不可达导致 fetch failed / ETIMEDOUT）
- */
-function requestBufferIpv4(urlStr: string, headers: Record<string, string> = {}): Promise<{ buffer: Buffer; contentType: string; status: number }> {
-  return new Promise((resolve, reject) => {
-    const url = new URL(urlStr);
-    const isHttps = url.protocol === 'https:';
-    const clientModule = isHttps ? https : http;
-    const req = clientModule.request(
-      url,
-      {
-        method: 'GET',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-          ...headers,
-        },
-        family: 4,
-        rejectUnauthorized: false,
-        timeout: 15000,
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-        res.on('end', () => {
-          const buffer = Buffer.concat(chunks);
-          const contentType = (res.headers['content-type'] as string) || 'application/octet-stream';
-          resolve({ buffer, contentType, status: res.statusCode || 200 });
-        });
-      },
-    );
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error(`请求超时 (15000ms): ${urlStr}`));
-    });
-    req.on('error', reject);
-    req.end();
+/** 透传官方静态资源，统一注入 PC 端 UA 与 Referer */
+function fetchUpstream(urlStr: string, headers: Record<string, string> = {}) {
+  return requestBufferIpv4(urlStr, {
+    headers: { 'User-Agent': PROXY_UA, ...headers },
+    timeoutMs: 15000,
   });
 }
 
@@ -51,7 +23,7 @@ function requestBufferIpv4(urlStr: string, headers: Record<string, string> = {})
  * 获取天翼云官方 PC 客户端入口 HTML 骨架（全量实时拉取，不设本地 HTML 缓存）
  */
 async function getCtyunIndexHtml(): Promise<string> {
-  const res = await requestBufferIpv4('https://pc.ctyun.cn/');
+  const res = await fetchUpstream('https://pc.ctyun.cn/');
   if (res.status >= 400) {
     throw new Error(`拉取天翼云入口网页失败: HTTP ${res.status}`);
   }
@@ -67,7 +39,7 @@ async function getCtyunIndexHtml(): Promise<string> {
  */
 async function proxyStaticAsset(reply: FastifyReply, targetUrl: string): Promise<void> {
   try {
-    const upstream = await requestBufferIpv4(targetUrl, {
+    const upstream = await fetchUpstream(targetUrl, {
       Referer: 'https://pc.ctyun.cn/',
     });
 
@@ -502,12 +474,12 @@ export function registerDesktopProxyRoutes(
     await proxyStaticAsset(reply, targetUrl);
   });
 
-  fastify.get('/sw.js', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/sw.js', async (_request: FastifyRequest, reply: FastifyReply) => {
     const targetUrl = 'https://pc.ctyun.cn/sw.js';
     await proxyStaticAsset(reply, targetUrl);
   });
 
-  fastify.get('/service-worker.js', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/service-worker.js', async (_request: FastifyRequest, reply: FastifyReply) => {
     const targetUrl = 'https://pc.ctyun.cn/service-worker.js';
     await proxyStaticAsset(reply, targetUrl);
   });
@@ -532,7 +504,7 @@ export function registerDesktopProxyRoutes(
     await proxyStaticAsset(reply, targetUrl);
   });
 
-  fastify.get('/manifest.json', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/manifest.json', async (_request: FastifyRequest, reply: FastifyReply) => {
     const targetUrl = 'https://pc.ctyun.cn/manifest.json';
     await proxyStaticAsset(reply, targetUrl);
   });

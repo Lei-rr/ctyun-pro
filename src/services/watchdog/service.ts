@@ -1,4 +1,4 @@
-import { ProfileManager } from '../../manager.js';
+import { ProfileManager } from '../../core/profile-manager.js';
 import { errorText } from '../../infra/http.js';
 import { Logger } from '../../infra/logger.js';
 import { normalizeDesktopState, normalizeUseStatusText } from '../../ctyun/client.js';

@@ -2,6 +2,10 @@ import path from 'node:path';
 import type { LoginInfo } from './ctyun/client.js';
 import type { ManagedDesktopState } from './types.js';
 import fs from 'node:fs';
+import pkg from '../package.json' with { type: 'json' };
+
+/** 应用版本，直接取自 package.json，避免多处硬编码漂移 */
+export const APP_VERSION: string = pkg.version;
 
 export const DEFAULT_REDEEM_CONFIG: RedeemConfig = {
   enabled: false,
@@ -59,7 +63,6 @@ export interface AccountConfig {
 
 export interface SystemConfig {
   adminPassword?: string;
-  keepAliveSeconds?: number;
   webhookUrl?: string; // 消息推送 (如 Server酱 / Bark / Webhook)
 }
 

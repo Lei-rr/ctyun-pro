@@ -236,7 +236,7 @@ export class KeepAliveWorker {
     }
   }
 
-  private markHandshakeSuccess(ws: WebSocket): void {
+  private markHandshakeSuccess(): void {
     if (this.handshakeTimeout) {
       clearTimeout(this.handshakeTimeout);
       this.handshakeTimeout = null;
@@ -541,7 +541,7 @@ export class KeepAliveWorker {
 
       // B. 收到 REDQ 保活校验帧 -> 动态响应并确认会话成功
       if (buffer.length >= 4 && buffer.subarray(0, 4).toString('ascii') === 'REDQ') {
-        this.markHandshakeSuccess(ws);
+        this.markHandshakeSuccess();
         try {
           const response = Protocol.buildRedqResponse(buffer);
           if (ws.readyState === WebSocket.OPEN) {
@@ -556,7 +556,7 @@ export class KeepAliveWorker {
 
       // C. 收到单字节握手确认帧 (0x01)
       if (buffer.length === 1 && buffer[0] === 1) {
-        this.markHandshakeSuccess(ws);
+        this.markHandshakeSuccess();
         return;
       }
 
@@ -564,7 +564,7 @@ export class KeepAliveWorker {
       try {
         const infos = Protocol.parseSendInfo(buffer);
         if (infos.length > 0) {
-          this.markHandshakeSuccess(ws);
+          this.markHandshakeSuccess();
         }
 
         for (const info of infos) {

@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import type { ProfileManager } from '../manager.js';
+import type { ProfileManager } from '../core/profile-manager.js';
 import type { AuthContext } from './auth.js';
-import { sendSuccess } from '../common/response.js';
+import { sendSuccess } from '../infra/reply.js';
 
 export const logRoutes: FastifyPluginAsync<{
   manager: ProfileManager;
@@ -45,12 +45,12 @@ export const logRoutes: FastifyPluginAsync<{
   });
 
   // 2. 获取历史日志快照
-  fastify.get('/api/logs', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/api/logs', async (_request: FastifyRequest, reply: FastifyReply) => {
     return sendSuccess(reply, manager.getRecentLogs());
   });
 
   // 3. 清空服务端日志
-  fastify.post('/api/logs/clear', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post('/api/logs/clear', async (_request: FastifyRequest, reply: FastifyReply) => {
     manager.clearLogs();
     return sendSuccess(reply, null, '日志已清空');
   });

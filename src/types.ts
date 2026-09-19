@@ -25,20 +25,6 @@ export interface DesktopModel {
   [key: string]: unknown;
 }
 
-export interface DesktopInstanceSummary {
-  id: string;
-  desktopCode: string;
-  desktopName: string;
-  flavorName?: string;
-  imageName?: string;
-  useStatusText: string;
-  status: string;
-  lastHeartbeat?: string;
-  profileId?: string;
-  profileName: string;
-  profileUser: string;
-}
-
 export interface ManagedDesktopState extends DesktopModel {
   status: 'running' | 'stopped' | 'paused' | 'idle' | 'connecting' | 'connected' | 'reconnecting';
   desktopId: string;
@@ -80,17 +66,10 @@ export interface ManagedAccount {
   desktops: ManagedDesktopState[];
 }
 
+/**
+ * 云电脑电源动作 (对齐官方 jb 枚举: ON=1, SHUTDOWN=2, RESET=3, RESTORE=6, AWAKE=18)
+ * 官方协议不存在强制关机(4)/强制重启(5)，故仅保留受支持动作
+ */
 export interface PowerActionOptions {
-  action:
-    | 'on'
-    | 'shutdown'
-    | 'off'
-    | 'stop'
-    | 'reset'
-    | 'reboot'
-    | 'restart'
-    | 'awake'
-    | 'wake'
-    | 'force_off'
-    | 'force_reboot';
+  action: 'on' | 'shutdown' | 'off' | 'stop' | 'reset' | 'reboot' | 'restart' | 'awake' | 'wake';
 }

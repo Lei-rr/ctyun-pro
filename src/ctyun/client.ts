@@ -48,6 +48,9 @@ export interface DesktopInfo {
 /** 官方默认 clink 网关 (与 pc.ctyun.cn getWSHost 对齐) */
 export const DEFAULT_CLINK_WS_HOST = 'wss://deskmsgz.ctyun.cn:9011/clinkProxy';
 
+/** 官方支持的电源操作集合 */
+export type PowerOperation = 'on' | 'start' | 'shutdown' | 'off' | 'stop' | 'reset' | 'reboot' | 'restart' | 'awake' | 'wake';
+
 export interface Desktop {
   desktopId: string;
   desktopName: string;
@@ -851,31 +854,25 @@ export class CtYunClient {
   }
 
   /**
-   * 8.0 模拟官方上报活动事件与桌面进入/电源管理事件
-   * 支持 on (开机, 1), awake (唤醒, 18), shutdown (关机, 2), reset (重启, 3), restore (恢复/开机重置, 6), force_off (强制关机, 4), force_reboot (强制重启, 5)
+   * 云电脑电源操作 (对齐官方 pc_main.js jb 枚举)
+   * on=1 开机 / shutdown=2 关机 / reset=3 重启 / awake=18 唤醒
    */
   public async operateDesktop(
     desktopId: string,
-    operation: 'on' | 'awake' | 'shutdown' | 'reset' | 'restore' | 'off' | 'stop' | 'reboot' | 'restart' | 'force_off' | 'force_reboot',
+    operation: PowerOperation,
     objType = 0,
   ): Promise<string> {
-    const typeMap: Record<string, number> = {
+    const typeMap: Record<PowerOperation, number> = {
       on: 1,
       start: 1,
       shutdown: 2,
       off: 2,
       stop: 2,
-      poweroff: 2,
       reset: 3,
       reboot: 3,
       restart: 3,
-      force_off: 4,
-      force_reboot: 5,
-      restore: 6,
       awake: 18,
       wake: 18,
-      wakeup: 18,
-      resume: 18,
     };
     const opType = typeMap[operation] ?? 1;
     const formData = new URLSearchParams();
@@ -894,9 +891,6 @@ export class CtYunClient {
         18: '唤醒指令已下发，正在从休眠中唤醒...',
         2: '关机指令已下发...',
         3: '重启指令已下发，正在重启...',
-        4: '强制关机指令已下发...',
-        5: '强制重启指令已下发，正在重启...',
-        6: '恢复指令已下发...',
       };
       return opNames[opType] || '电源控制指令已下发';
     }
@@ -908,52 +902,6 @@ export class CtYunClient {
       return '云电脑已在运行中或处于可用状态';
     }
     throw new Error(json.msg || `操作失败 (Code: ${json.code})`);
-  }
-
-  /**
-   * 8.1 官方标准: 会话释放与退出连接上报 (对齐 api/desktop/client/quitConnect)
-   */
-  public async quitConnect(desktopId: string, objType = 0): Promise<boolean> {
-    try {
-      const formData = new URLSearchParams();
-      formData.append('objId', desktopId);
-      formData.append('objType', String(objType));
-      formData.append('osType', '15');
-      formData.append('deviceId', CtYunClient.DEVICE_TYPE);
-      formData.append('deviceCode', this.deviceCode);
-      formData.append('deviceName', 'Chrome浏览器');
-      formData.append('sysVersion', 'Windows NT 10.0; Win64; x64');
-      formData.append('appVersion', '4.0.1');
-      formData.append('hostName', 'pc.ctyun.cn');
-      formData.append('ipAddress', '');
-      formData.append('macAddress', '');
-      formData.append('hardwareFeatureCode', this.deviceCode);
-
-      const json = await this.requestApi<{ code: number; msg?: string }>(
-        '/api/desktop/client/quitConnect',
-        { method: 'POST', formBody: Object.fromEntries(formData.entries()) },
-      );
-      return json.code === 0 || json.code === 200;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * 生成单点登录/免密直通 Token
-   */
-  public async genLoginToken(effectiveSeconds = 300): Promise<string> {
-    if (!this.loginInfo) {
-      throw new Error('账号尚未登录，无法生成登录 Token');
-    }
-    const json = await this.requestApi<{ code: number; msg?: string; data?: { token: string } }>(
-      '/api/auth/client/genLoginToken',
-      { method: 'POST', jsonBody: { authAppModel: 34, effectiveSeconds } },
-    );
-    if (json.code === 0 && json.data?.token) {
-      return json.data.token;
-    }
-    throw new Error(json.msg || `获取免密 Token 失败 (Code: ${json.code})`);
   }
 
   /** 官方积分中心 (selforder SPA) 的接口根地址 (该 SPA 不启用请求体加密) */

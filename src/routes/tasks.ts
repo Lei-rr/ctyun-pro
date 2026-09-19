@@ -1,8 +1,8 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { errorText } from '../infra/http.js';
-import type { ProfileManager } from '../manager.js';
+import type { ProfileManager } from '../core/profile-manager.js';
 import type { AccountConfig } from '../config.js';
-import { sendSuccess, sendError } from '../common/response.js';
+import { sendSuccess, sendError } from '../infra/reply.js';
 
 export const taskRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = async (fastify, { manager }) => {
 

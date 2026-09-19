@@ -1,19 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { Config, DEFAULT_REDEEM_CONFIG, type AccountConfig } from '../../config.js';
-import { safeWriteFileSync } from '../../infra/http.js';
+import { APP_VERSION, Config, DEFAULT_REDEEM_CONFIG, type AccountConfig } from '../../config.js';
+import { safeWriteFileSync } from '../../infra/fs.js';
 
 const SAVE_CONFIG_DEBOUNCE_MS = 150;
 
 export interface SystemConfigData {
   adminPassword: string;
-  keepAliveSeconds: number;
   webhookUrl: string;
 }
 
 export class AccountRepository {
   private saveDebounceTimer: NodeJS.Timeout | null = null;
+  /** 防抖期间仅保留最新一次待写数据，避免闭包持有旧快照导致丢写 */
+  private pendingSave: { system: SystemConfigData; accounts: Map<string, AccountConfig> } | null = null;
 
   public loadConfig(): {
     system: SystemConfigData;
@@ -29,7 +30,6 @@ export class AccountRepository {
 
     // 1. 系统设置
     let adminPassword = '';
-    let keepAliveSeconds = 60;
     let webhookUrl = '';
 
     if (fs.existsSync(Config.configFile)) {
@@ -38,7 +38,6 @@ export class AccountRepository {
         const sysJson = JSON.parse(sysContent);
         const sys = sysJson.system || sysJson;
         if (sys.adminPassword !== undefined) adminPassword = String(sys.adminPassword);
-        if (sys.keepAliveSeconds) keepAliveSeconds = Number(sys.keepAliveSeconds);
         if (sys.webhookUrl !== undefined) webhookUrl = String(sys.webhookUrl);
       } catch {}
     }
@@ -94,7 +93,7 @@ export class AccountRepository {
     }
 
     return {
-      system: { adminPassword, keepAliveSeconds, webhookUrl },
+      system: { adminPassword, webhookUrl },
       accounts,
     };
   }
@@ -109,14 +108,18 @@ export class AccountRepository {
         clearTimeout(this.saveDebounceTimer);
         this.saveDebounceTimer = null;
       }
+      this.pendingSave = null;
       this.executeSave(system, accounts);
       return;
     }
 
+    this.pendingSave = { system, accounts };
     if (this.saveDebounceTimer) return;
     this.saveDebounceTimer = setTimeout(() => {
       this.saveDebounceTimer = null;
-      this.executeSave(system, accounts);
+      const pending = this.pendingSave;
+      this.pendingSave = null;
+      if (pending) this.executeSave(pending.system, pending.accounts);
     }, SAVE_CONFIG_DEBOUNCE_MS);
   }
 
@@ -130,7 +133,6 @@ export class AccountRepository {
     const sysData = {
       system: {
         adminPassword: system.adminPassword,
-        keepAliveSeconds: system.keepAliveSeconds,
         webhookUrl: system.webhookUrl,
       },
     };
@@ -155,10 +157,9 @@ export class AccountRepository {
     accounts: Map<string, AccountConfig>,
   ) {
     return {
-      version: '3.0.1',
+      version: APP_VERSION,
       exportedAt: new Date().toISOString(),
       system: {
-        keepAliveSeconds: system.keepAliveSeconds,
         webhookUrl: system.webhookUrl,
       },
       accounts: Array.from(accounts.values()).map((acc) => {
@@ -176,7 +177,6 @@ export class AccountRepository {
 
   public importConfigSafe(
     data: unknown,
-    currentSystem: SystemConfigData,
     targetAccounts: Map<string, AccountConfig>,
   ): { importedAccounts: number; updatedSystem: Partial<SystemConfigData> } {
     if (!data || typeof data !== 'object') {
@@ -187,9 +187,6 @@ export class AccountRepository {
 
     if (cfg.system && typeof cfg.system === 'object') {
       const sys = cfg.system as Record<string, unknown>;
-      if (typeof sys.keepAliveSeconds === 'number' && sys.keepAliveSeconds >= 10) {
-        updatedSystem.keepAliveSeconds = sys.keepAliveSeconds;
-      }
       if (typeof sys.webhookUrl === 'string') {
         updatedSystem.webhookUrl = sys.webhookUrl.trim();
       }

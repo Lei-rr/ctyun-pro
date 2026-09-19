@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { FastifyInstance } from 'fastify';
-import type { ProfileManager } from '../manager.js';
+import type { ProfileManager } from '../core/profile-manager.js';
 import type { AuthContext } from './auth.js';
 
 export function setupWebSocket(
@@ -21,7 +21,6 @@ export function setupWebSocket(
           type: 'status',
           data: {
             needAuth: Boolean(manager.adminPassword),
-            keepAliveSeconds: manager.keepAliveSeconds,
             accounts: manager.getAccountsSummary(),
           },
         }),
@@ -43,7 +42,6 @@ export function setupWebSocket(
               type: 'status',
               data: {
                 needAuth: Boolean(manager.adminPassword),
-                keepAliveSeconds: manager.keepAliveSeconds,
                 accounts: manager.getAccountsSummary(),
               },
             }),
