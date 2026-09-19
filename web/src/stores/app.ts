@@ -53,22 +53,10 @@ export interface Account {
 
 export type LogLevel = 'info' | 'warn' | 'error' | 'success';
 
-export type LogSource =
-  | 'system'
-  | 'account'
-  | 'keepalive'
-  | 'watchdog'
-  | 'task'
-  | 'redeem'
-  | 'power'
-  | 'proxy'
-  | 'api';
-
 export interface LogItem {
   id: number;
   time: string;
   level: LogLevel;
-  source: LogSource;
   account?: string;
   desktop?: string;
   message: string;

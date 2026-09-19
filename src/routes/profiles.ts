@@ -52,7 +52,7 @@ export const profileRoutes: FastifyPluginAsync<{
           enabled: body.redeemConfig?.enabled ?? true,
         },
       });
-      manager.addLog('info', '档案已创建', { source: 'account', account: name });
+      manager.addLog('info', '档案已创建', { account: name });
       return sendSuccess(reply, manager.getAccountState(name), 'Profile 创建成功');
     },
   );
@@ -103,7 +103,7 @@ export const profileRoutes: FastifyPluginAsync<{
       const client = manager.getClient(accountName);
       const statusData = await client.getQrCodeStatus(query.qrCodeId);
       if (statusData.codeStatus === 'authorize' && statusData.loginToken) {
-        manager.addLog('info', '扫码授权成功，正在换取登录凭证', { source: 'account', account: accountName });
+        manager.addLog('info', '扫码授权成功，正在换取登录凭证', { account: accountName });
         const loginInfo = await client.loginByToken(statusData.loginToken);
         const finalUser = loginInfo.mobilephone || loginInfo.userName || loginInfo.userAccount || accountName;
         const finalAccountName = (query.accountName || '').trim() || finalUser;
@@ -114,9 +114,9 @@ export const profileRoutes: FastifyPluginAsync<{
           loginInfo,
           autoStart: true,
         });
-        manager.addLog('success', '扫码登录成功，已同步积分并启动保活', { source: 'account', account: finalAccountName });
+        manager.addLog('success', '扫码登录成功，已同步积分并启动保活', { account: finalAccountName });
         manager.startAccount(finalAccountName).catch((e) => {
-          manager.addLog('warn', `启动保活提示: ${e.message}`, { source: 'account', account: finalAccountName });
+          manager.addLog('warn', `启动保活提示: ${e.message}`, { account: finalAccountName });
         });
         return sendSuccess(reply, {
           codeStatus: 'authorize',
@@ -265,7 +265,7 @@ export const profileRoutes: FastifyPluginAsync<{
       }
 
       try {
-        manager.addLog('info', '正在验证登录', { source: 'account', account: name });
+        manager.addLog('info', '正在验证登录', { account: name });
         const loginInfo = await client.login(user, body.password || '', challenge, (body.captchaCode || '').trim());
         await manager.addOrUpdateAccount({
           name,
@@ -275,15 +275,15 @@ export const profileRoutes: FastifyPluginAsync<{
           autoStart: true,
         });
         if (!loginInfo.bondedDevice) {
-          manager.addLog('warn', '设备未绑定，需要短信验证码确认', { source: 'account', account: name });
+          manager.addLog('warn', '设备未绑定，需要短信验证码确认', { account: name });
           return sendSuccess(reply, { needSms: true }, '登录成功，但当前设备未绑定，需要输入短信验证码');
         }
-        manager.addLog('success', '登录成功，正在启动保活', { source: 'account', account: name });
-        manager.startAccount(name).catch((e) => manager.addLog('error', `启动保活失败: ${e.message}`, { source: 'account', account: name }));
+        manager.addLog('success', '登录成功，正在启动保活', { account: name });
+        manager.startAccount(name).catch((e) => manager.addLog('error', `启动保活失败: ${e.message}`, { account: name }));
         return sendSuccess(reply, manager.getAccountState(name), '登录成功并已启动保活');
       } catch (err: any) {
         const msg = errorText(err);
-        manager.addLog('error', `登录验证失败: ${msg}`, { source: 'account', account: name });
+        manager.addLog('error', `登录验证失败: ${msg}`, { account: name });
         const needCaptcha = !!err?.needCaptcha;
         return sendError(reply, msg, 400, {
           needCaptcha,
@@ -334,11 +334,11 @@ export const profileRoutes: FastifyPluginAsync<{
       const client = manager.getClient(name);
       try {
         await client.sendSmsCode(user, body.captchaCode.trim());
-        manager.addLog('info', `短信验证码已发送至 ${user}`, { source: 'account', account: name });
+        manager.addLog('info', `短信验证码已发送至 ${user}`, { account: name });
         return sendSuccess(reply, null, '验证码已发送');
       } catch (err) {
         const msg = errorText(err);
-        manager.addLog('error', `发送短信失败: ${msg}`, { source: 'account', account: name });
+        manager.addLog('error', `发送短信失败: ${msg}`, { account: name });
         return sendError(reply, msg);
       }
     },
@@ -369,12 +369,12 @@ export const profileRoutes: FastifyPluginAsync<{
           acc.loginInfo = client.loginInfo;
         }
         manager.saveToDisk();
-        manager.addLog('success', '设备绑定成功，正在启动保活', { source: 'account', account: name });
-        manager.startAccount(name).catch((e) => manager.addLog('error', `启动保活失败: ${e.message}`, { source: 'account', account: name }));
+        manager.addLog('success', '设备绑定成功，正在启动保活', { account: name });
+        manager.startAccount(name).catch((e) => manager.addLog('error', `启动保活失败: ${e.message}`, { account: name }));
         return sendSuccess(reply, null, '绑定成功并已启动保活');
       } catch (err) {
         const msg = errorText(err);
-        manager.addLog('error', `设备绑定失败: ${msg}`, { source: 'account', account: name });
+        manager.addLog('error', `设备绑定失败: ${msg}`, { account: name });
         return sendError(reply, msg);
       }
     },
@@ -408,7 +408,7 @@ export const profileRoutes: FastifyPluginAsync<{
         taskConfig: body.taskConfig !== undefined ? { ...currentTaskConfig, ...body.taskConfig } : acc.taskConfig,
         redeemConfig: body.redeemConfig !== undefined ? { ...currentRedeemConfig, ...body.redeemConfig } : acc.redeemConfig,
       });
-      manager.addLog('info', '策略配置已更新并保存', { source: 'account', account: acc.name });
+      manager.addLog('info', '策略配置已更新并保存', { account: acc.name });
       return sendSuccess(reply, manager.getAccountState(acc.name));
     },
   );

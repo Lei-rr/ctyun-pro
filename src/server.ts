@@ -32,7 +32,7 @@ export async function createServer(managerInstance?: ProfileManager) {
       ? error.statusCode
       : 500;
     const msg = error.message || '系统内部异常';
-    manager.addLog('error', `${request.method} ${request.url} -> ${statusCode}: ${msg}`, { source: 'api' });
+    manager.addLog('error', `${request.method} ${request.url} -> ${statusCode}: ${msg}`, {});
     reply.code(statusCode).send({
       success: false,
       msg,

@@ -222,7 +222,7 @@ export class ProfileManager {
     if (!acc || acc.autoStart === false) return;
     const resumed = await this.keepaliveService.resumeWorkerForDesktop(accountName, desktopCode);
     if (!resumed) {
-      this.logger.addLog('info', '前台操作结束，保活通道不存在，正在重新同步建立', { source: 'keepalive', account: accountName });
+      this.logger.addLog('info', '前台操作结束，保活通道不存在，正在重新同步建立', { account: accountName });
       await this.reloadDesktops(accountName);
     }
   }
@@ -281,7 +281,7 @@ export class ProfileManager {
 
     this.saveToDisk();
     this.notifyStatusChange();
-    this.logger.addLog('info', `云电脑名称已修改 (原名: ${oldName})`, { source: 'account', account: accountName, desktop: trimmed });
+    this.logger.addLog('info', `云电脑名称已修改 (原名: ${oldName})`, { account: accountName, desktop: trimmed });
     return true;
   }
 
@@ -405,7 +405,7 @@ export class ProfileManager {
   /** 0 点跨天重置今日积分缓存 (纯本地归零，不请求官方接口) */
   public resetTodayPointsAtMidnight(): void {
     this.store.resetTodayPoints(getCstDateString());
-    this.logger.addLog('info', '已跨天 00:00，今日积分已归零重置', { source: 'system' });
+    this.logger.addLog('info', '已跨天 00:00，今日积分已归零重置', {});
     this.notifyStatusChange();
   }
 
@@ -431,7 +431,7 @@ export class ProfileManager {
     this.notifyStatusChange();
 
     this.reloadDesktops(accountName).catch((err) => {
-      this.logger.addLog('warn', `同步云电脑列表失败: ${err.message}`, { source: 'account', account: accountName });
+      this.logger.addLog('warn', `同步云电脑列表失败: ${err.message}`, { account: accountName });
     });
     this.getPointsAndTasks(accountName)
       .then(() => this.notifyStatusChange())
@@ -453,7 +453,7 @@ export class ProfileManager {
       state.status = 'idle';
       for (const d of state.desktops) d.status = 'stopped';
     }
-    this.logger.addLog('warn', '保活已手动停止 (静默模式：无探针、无长连)', { source: 'account', account: accountName });
+    this.logger.addLog('warn', '保活已手动停止 (静默模式：无探针、无长连)', { account: accountName });
     this.notifyStatusChange();
   }
 
@@ -528,7 +528,7 @@ export class ProfileManager {
         message = await client.operateDesktop(requestApiDesktopId, operation, targetObjType);
       }
 
-      this.logger.addLog('info', message, { source: 'power', account: accountName, desktop: dName });
+      this.logger.addLog('info', message, { account: accountName, desktop: dName });
       const trackTarget: 'on' | 'shutdown' | 'reset' = isShutdown ? 'shutdown' : isReset ? 'reset' : 'on';
       this.powerTracker.trackDesktopStatusAfterPower(accountName, canonicalDesktopCode, trackTarget);
       return message;
@@ -572,7 +572,7 @@ export class ProfileManager {
 
     this.saveToDisk();
     this.notifyStatusChange();
-    this.logger.addLog('info', `账号备注名称已修改: ${realOldName} → ${trimmed}`, { source: 'account', account: trimmed });
+    this.logger.addLog('info', `账号备注名称已修改: ${realOldName} → ${trimmed}`, { account: trimmed });
 
     if (renamed.loginInfo && client) {
       this.reloadDesktops(trimmed).catch(() => {});
@@ -613,7 +613,7 @@ export class ProfileManager {
       const errMsg = errorText(err);
       state.status = 'error';
       state.lastError = errMsg;
-      this.logger.addLog('error', `拉取云电脑列表失败: ${errMsg}`, { source: 'account', account: accountName });
+      this.logger.addLog('error', `拉取云电脑列表失败: ${errMsg}`, { account: accountName });
 
       const lowerMsg = errMsg.toLowerCase();
       const isAuthFailure =
@@ -640,7 +640,7 @@ export class ProfileManager {
     this.expiredNotifiedAccounts.delete(accountName);
 
     if (!list || list.length === 0) {
-      this.logger.addLog('warn', '该账号下未找到可用云电脑', { source: 'account', account: accountName });
+      this.logger.addLog('warn', '该账号下未找到可用云电脑', { account: accountName });
       state.desktops = [];
       return;
     }
@@ -651,7 +651,7 @@ export class ProfileManager {
       if (isRunning && (this.isManualShutdown(d.desktopCode) || this.isManualShutdown(d.desktopId))) {
         this.setManualShutdown(d.desktopCode, false);
         this.setManualShutdown(d.desktopId, false);
-        this.logger.addLog('info', '检测到实例已在外部开机，自动解除手动关机标记', { source: 'account', account: accountName, desktop: d.desktopName || d.desktopCode });
+        this.logger.addLog('info', '检测到实例已在外部开机，自动解除手动关机标记', { account: accountName, desktop: d.desktopName || d.desktopCode });
       }
     }
 
@@ -686,7 +686,7 @@ export class ProfileManager {
         try {
           await this.getPointsAndTasks(name);
         } catch (e) {
-          this.logger.addLog('warn', `后台同步提示: ${errorText(e)}`, { source: 'account', account: name });
+          this.logger.addLog('warn', `后台同步提示: ${errorText(e)}`, { account: name });
         } finally {
           this.notifyStatusChange();
         }
@@ -703,7 +703,7 @@ export class ProfileManager {
     this.store.remove(name);
     this.saveToDisk();
     this.notifyStatusChange();
-    this.logger.addLog('info', '账号已移除', { source: 'account', account: name });
+    this.logger.addLog('info', '账号已移除', { account: name });
   }
 
   // ---- 任务/积分/兑换代理 ----
@@ -757,7 +757,7 @@ export class ProfileManager {
 
   public loadFromDisk(): void {
     const { autoStartAccountNames } = this.store.loadFromDisk();
-    this.logger.addLog('info', `已加载本地配置文件 (${this.store.accounts.size} 个账号)`, { source: 'system' });
+    this.logger.addLog('info', `已加载本地配置文件 (${this.store.accounts.size} 个账号)`, {});
 
     // 每账号错峰 800ms 启动，避免瞬时并发冲击官方接口
     let delayMs = 0;
@@ -766,7 +766,7 @@ export class ProfileManager {
       delayMs += 800;
       setTimeout(() => {
         this.reloadDesktops(name).catch((err) => {
-          this.logger.addLog('warn', `自启动保活同步失败: ${err.message}`, { source: 'account', account: name });
+          this.logger.addLog('warn', `自启动保活同步失败: ${err.message}`, { account: name });
         });
         this.getPointsAndTasks(name)
           .then(() => this.notifyStatusChange())

@@ -83,7 +83,7 @@ export const systemRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = asy
         manager.webhookUrl = body.webhookUrl.trim();
       }
       manager.saveToDisk();
-      manager.addLog('info', '系统全局配置已保存至 data/config.json', { source: 'system' });
+      manager.addLog('info', '系统全局配置已保存至 data/config.json', {});
       return sendSuccess(reply, null, '系统配置已保存');
     },
   );
@@ -130,7 +130,7 @@ export const systemRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = asy
     try {
       const body = request.body;
       const res = manager.importConfigSafe(body);
-      manager.addLog('info', `配置导入成功，已恢复 ${res.importedAccounts} 个账号配置`, { source: 'system' });
+      manager.addLog('info', `配置导入成功，已恢复 ${res.importedAccounts} 个账号配置`, {});
       return sendSuccess(reply, res, `配置恢复成功，已导入 ${res.importedAccounts} 个账号配置`);
     } catch (err) {
       const msg = errorText(err);

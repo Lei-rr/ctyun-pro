@@ -2,23 +2,10 @@ import { getCstTimeString } from './time.js';
 
 export type LogLevel = 'info' | 'warn' | 'error' | 'success';
 
-/** 日志来源模块 (前端按此着色并支持过滤) */
-export type LogSource =
-  | 'system'
-  | 'account'
-  | 'keepalive'
-  | 'watchdog'
-  | 'task'
-  | 'redeem'
-  | 'power'
-  | 'proxy'
-  | 'api';
-
 export interface LogMeta {
-  source?: LogSource;
   account?: string;
   desktop?: string;
-  /** 相同 foldKey 的相邻日志折叠为一条并累加计数 (如心跳)；遇到其他日志即打断折叠窗口 */
+  /** 相同 foldKey 的相邻日志折叠为一条并累加计数 (如心跳)；遇其他日志即打断折叠窗口 */
   foldKey?: string;
 }
 
@@ -26,36 +13,39 @@ export interface LogItem {
   id: number;
   time: string;
   level: LogLevel;
-  source: LogSource;
   account?: string;
   desktop?: string;
   message: string;
   count?: number;
 }
 
-/** 拼接 [账号 - 桌面] 展示前缀 (仅用于终端文本输出) */
-export function formatLogPrefix(meta?: Pick<LogMeta, 'account' | 'desktop'>): string {
-  if (!meta?.account) return '';
-  return meta.desktop ? `${meta.account} - ${meta.desktop}` : meta.account;
-}
-
 export class Logger {
   private logs: LogItem[] = [];
   private logId = 0;
+  private foldKeys = new Map<number, string>();
   private listeners: Set<(log: LogItem) => void> = new Set();
 
   public addLog(level: LogLevel, message: string, meta: LogMeta = {}): void {
-    const source = meta.source || 'system';
-    const foldKey = meta.foldKey;
+    // 折叠作用域必须包含账号/桌面，否则多账号的相同日志会被错误合并
+    const scope = `${meta.account || ''}\u0000${meta.desktop || ''}`;
+    const baseKey = meta.foldKey;
+    const scopedKey = baseKey ? `${baseKey}\u0000${scope}` : undefined;
 
-    // 折叠窗口: 仅当上一条为相同 foldKey 且中间无其他日志时累计 (不跨事件回溯)
-    if (foldKey) {
-      const last = this.logs[this.logs.length - 1];
-      if (last && last.level === level && last.source === source && last.message === message && this.foldKeys.get(last.id) === foldKey) {
-        last.count = (last.count || 1) + 1;
-        last.time = getCstTimeString();
-        this.emit(last);
-        return;
+    // 折叠窗口: 从末尾回溯同类 foldKey 的连续日志 (中途插入的其他账号/桌面同类日志不打断窗口)，
+    // 一旦遇到不同 foldKey 的业务日志立即停止，绝不跨事件回溯
+    if (baseKey && scopedKey) {
+      for (let i = this.logs.length - 1; i >= 0; i--) {
+        const item = this.logs[i];
+        const itemKey = this.foldKeys.get(item.id);
+        if (!itemKey || !itemKey.startsWith(`${baseKey}\u0000`)) break;
+        if (itemKey === scopedKey && item.level === level && item.message === message) {
+          const [matched] = this.logs.splice(i, 1);
+          matched.count = (matched.count || 1) + 1;
+          matched.time = getCstTimeString();
+          this.logs.push(matched);
+          this.emit(matched);
+          return;
+        }
       }
     }
 
@@ -63,22 +53,19 @@ export class Logger {
       id: ++this.logId,
       time: getCstTimeString(),
       level,
-      source,
       account: meta.account,
       desktop: meta.desktop,
       message,
       count: 1,
     };
     this.logs.push(item);
-    if (foldKey) this.foldKeys.set(item.id, foldKey);
+    if (scopedKey) this.foldKeys.set(item.id, scopedKey);
     if (this.logs.length > 1000) {
       const dropped = this.logs.shift();
       if (dropped) this.foldKeys.delete(dropped.id);
     }
     this.emit(item);
   }
-
-  private foldKeys = new Map<number, string>();
 
   private emit(item: LogItem): void {
     this.mirrorToStdout(item);
@@ -92,7 +79,7 @@ export class Logger {
   /** 镜像到标准输出 (容器环境可用 docker logs 直接查看，不依赖前端) */
   private mirrorToStdout(item: LogItem): void {
     if (process.env.CTYUN_LOG_STDOUT === '0') return;
-    const prefix = item.account ? ` ${item.account}${item.desktop ? '/' + item.desktop : ''}` : '';
+    const prefix = item.account ? ` [${item.account}${item.desktop ? ' - ' + item.desktop : ''}]` : '';
     const fold = item.count && item.count > 1 ? ` (x${item.count})` : '';
     const line = `${item.time}${prefix} ${item.message}${fold}`;
     if (item.level === 'error') console.error(line);
@@ -108,7 +95,7 @@ export class Logger {
     this.logs = [];
     this.foldKeys.clear();
     for (const listener of this.listeners) {
-      listener({ id: 0, time: '', level: 'info', source: 'system', message: '__CLEAR__' });
+      listener({ id: 0, time: '', level: 'info', message: '__CLEAR__' });
     }
   }
 

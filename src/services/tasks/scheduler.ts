@@ -117,7 +117,7 @@ export class TaskScheduler {
           const jitterMs = Math.floor(Math.random() * 22000) + 3000;
           setTimeout(async () => {
             try {
-              this.logger.addLog('info', `命中每日任务定时 (${targetTime}，抖动 ${(jitterMs/1000).toFixed(1)}s)，开始执行`, { source: 'task', account: name });
+              this.logger.addLog('info', `命中每日任务定时 (${targetTime}，抖动 ${(jitterMs/1000).toFixed(1)}s)，开始执行`, { account: name });
               const res = await TaskRunner.executeDailyTasks(client, tConf);
               tConf.lastRunDate = today;
               delete tConf.retryCount;
@@ -125,7 +125,7 @@ export class TaskScheduler {
               delete tConf.nextRetryTime;
               acc.taskConfig = tConf;
               this.profileManager.saveToDisk();
-              this.logger.addLog('success', `每日任务完成: ${res.message}`, { source: 'task', account: name });
+              this.logger.addLog('success', `每日任务完成: ${res.message}`, { account: name });
 
               // 任务完成后异步拉取官方最新积分并刷新看板
               this.profileManager.getPointsAndTasks(name)
@@ -145,7 +145,7 @@ export class TaskScheduler {
                 delete tConf.nextRetryTime;
                 acc.taskConfig = tConf;
                 this.profileManager.saveToDisk();
-                this.logger.addLog('warn', `登录凭证已失效，停止今日重试，请重新登录: ${errMsg}`, { source: 'task', account: name });
+                this.logger.addLog('warn', `登录凭证已失效，停止今日重试，请重新登录: ${errMsg}`, { account: name });
                 if (this.profileManager.webhookUrl) {
                   NotifyService.sendNotification(
                     this.profileManager.webhookUrl,
@@ -165,7 +165,7 @@ export class TaskScheduler {
                   delete tConf.nextRetryTime;
                   acc.taskConfig = tConf;
                   this.profileManager.saveToDisk();
-                  this.logger.addLog('warn', `今日重试已达上限 (${MAX_ATTEMPTS} 次)，停止自动任务: ${errMsg}`, { source: 'task', account: name });
+                  this.logger.addLog('warn', `今日重试已达上限 (${MAX_ATTEMPTS} 次)，停止自动任务: ${errMsg}`, { account: name });
                   if (this.profileManager.webhookUrl) {
                     NotifyService.sendNotification(
                       this.profileManager.webhookUrl,
@@ -184,7 +184,7 @@ export class TaskScheduler {
                   this.logger.addLog(
                     'warn',
                     `任务执行异常 (第 ${currentAttempts}/${MAX_ATTEMPTS} 次，15 分钟后重试): ${errMsg}`,
-                    { source: 'task', account: name },
+                    { account: name },
                   );
                 }
               }
@@ -243,7 +243,7 @@ export class TaskScheduler {
           const redeemJitterMs = Math.floor(Math.random() * 11000) + 1000;
           await new Promise((r) => setTimeout(r, redeemJitterMs));
 
-          this.logger.addLog('info', `${reason} (抖动 ${(redeemJitterMs/1000).toFixed(1)}s)，准备自动兑换`, { source: 'redeem', account: name });
+          this.logger.addLog('info', `${reason} (抖动 ${(redeemJitterMs/1000).toFixed(1)}s)，准备自动兑换`, { account: name });
           let targetDesktopId = rConf.targetDesktopId;
           const state = this.profileManager.getAccountState(name);
           if (!targetDesktopId) {
@@ -271,7 +271,7 @@ export class TaskScheduler {
           // 九江专属积分(20)商品不参与自动兑换
           const redeemPointType = resolvedReward?.costPointType ?? rConf.costPointType ?? 1;
           if (redeemPointType === 20) {
-            this.logger.addLog('info', '目标商品为九江专属积分，跳过自动兑换', { source: 'redeem', account: name });
+            this.logger.addLog('info', '目标商品为九江专属积分，跳过自动兑换', { account: name });
             rConf.lastRedeemDate = today;
             this.profileManager.saveToDisk();
             continue;
@@ -284,7 +284,7 @@ export class TaskScheduler {
           );
 
           if (requiresDesktop && !targetDesktopId) {
-            this.logger.addLog('warn', '商品需绑定云电脑，但名下未找到可用实例，跳过兑换', { source: 'redeem', account: name });
+            this.logger.addLog('warn', '商品需绑定云电脑，但名下未找到可用实例，跳过兑换', { account: name });
             continue;
           }
 
@@ -293,7 +293,7 @@ export class TaskScheduler {
           for (let attempt = 1; attempt <= 3; attempt++) {
             try {
               if (attempt > 1) {
-                this.logger.addLog('info', `正在进行第 ${attempt}/3 次兑换重试`, { source: 'redeem', account: name });
+                this.logger.addLog('info', `正在进行第 ${attempt}/3 次兑换重试`, { account: name });
                 await new Promise((r) => setTimeout(r, 3000));
               }
               const res = await RewardRedeemService.placeOrder(
@@ -322,15 +322,15 @@ export class TaskScheduler {
                   await new Promise((r) => setTimeout(r, 3000));
                   await client.operateDesktop(String(apiDesktopId), 'reset', objType);
                   restartNote = '，已下发重启指令使权益生效';
-                  this.logger.addLog('info', '兑换后重启指令已下发，权益即将生效', { source: 'redeem', account: name });
+                  this.logger.addLog('info', '兑换后重启指令已下发，权益即将生效', { account: name });
                 } catch (restartErr) {
                   const rMsg = errorText(restartErr);
                   restartNote = `；重启指令下发失败(请手动重启生效): ${rMsg}`;
-                  this.logger.addLog('warn', `兑换后重启失败: ${rMsg}`, { source: 'redeem', account: name });
+                  this.logger.addLog('warn', `兑换后重启失败: ${rMsg}`, { account: name });
                 }
               }
 
-              this.logger.addLog('success', `兑换成功: ${res.message}${restartNote}`, { source: 'redeem', account: name });
+              this.logger.addLog('success', `兑换成功: ${res.message}${restartNote}`, { account: name });
               if (this.profileManager.webhookUrl) {
                 NotifyService.sendNotification(
                   this.profileManager.webhookUrl,
@@ -360,14 +360,14 @@ export class TaskScheduler {
                 lastRedeemMsg.includes('库存拦截') ||
                 lastRedeemMsg.includes('实名认证拦截');
               if (isInsufficientPoints || isRiskLimited || isPrecheckBlocked) {
-                this.logger.addLog('warn', `兑换终止 (触发保护，停止重试): ${lastRedeemMsg}`, { source: 'redeem', account: name });
+                this.logger.addLog('warn', `兑换终止 (触发保护，停止重试): ${lastRedeemMsg}`, { account: name });
                 // 积分不足或风控属于当日业务终态，锁定当日标记并清除重试状态
                 rConf.lastRedeemDate = today;
                 this.profileManager.saveToDisk();
                 this.redeemRetryStats.delete(name);
                 break;
               }
-              this.logger.addLog('warn', `第 ${attempt} 次兑换未成功: ${lastRedeemMsg}`, { source: 'redeem', account: name });
+              this.logger.addLog('warn', `第 ${attempt} 次兑换未成功: ${lastRedeemMsg}`, { account: name });
             }
           }
 
@@ -386,7 +386,7 @@ export class TaskScheduler {
               const failTitle = isInsufficientPoints
                 ? '积分不足，跳过本次兑换'
                 : '触发安全风控保护，已熔断当日兑换';
-              this.logger.addLog('error', failTitle, { source: 'redeem', account: name });
+              this.logger.addLog('error', failTitle, { account: name });
               // 积分不足属于预期内正常积累状态，不发送 Webhook 骚扰；触发安全风控时推送安全告警
               if (isRiskLimited && this.profileManager.webhookUrl) {
                 NotifyService.sendNotification(
@@ -411,7 +411,7 @@ export class TaskScheduler {
                 this.logger.addLog(
                   'error',
                   `兑换重试已达上限 (${MAX_REDEEM_ROUNDS} 轮)，停止今日兑换: ${lastRedeemMsg}`,
-                  { source: 'redeem', account: name },
+                  { account: name },
                 );
                 if (this.profileManager.webhookUrl) {
                   NotifyService.sendNotification(
@@ -430,7 +430,7 @@ export class TaskScheduler {
                 this.logger.addLog(
                   'warn',
                   `兑换异常 (第 ${currentAttempts}/${MAX_REDEEM_ROUNDS} 轮，15 分钟后重试): ${lastRedeemMsg}`,
-                  { source: 'redeem', account: name },
+                  { account: name },
                 );
               }
             }
@@ -472,7 +472,7 @@ export class TaskScheduler {
         NotifyService.sendNotification(this.profileManager.webhookUrl, title, content).catch(() => {});
       } catch (err) {
         const msg = errorText(err);
-        this.logger.addLog('warn', `每日早报推送异常: ${msg}`, { source: 'system' });
+        this.logger.addLog('warn', `每日早报推送异常: ${msg}`, {});
       }
     }
   }
