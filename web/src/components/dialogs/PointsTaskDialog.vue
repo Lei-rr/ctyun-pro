@@ -197,6 +197,12 @@ const groupedTasks = computed(() => {
   return groups;
 });
 
+/** 通用积分(1)与云手机(500)已由上方卡片展示，九江(20)不纳入，仅展示其余类型 */
+const extraPointTypes = computed(() => {
+  const list = pointsData.value?.pointList || [];
+  return list.filter((p) => p.pointType !== 1 && p.pointType !== 500 && p.pointType !== 20);
+});
+
 const hasClaimable = computed(() => {
   return displayTasks.value.some((t) => t.status === 1);
 });
@@ -283,13 +289,10 @@ function detailTypeLabel(msgType: number): string {
         </div>
       </div>
 
-      <!-- 积分类型明细 (通用/专属等，九江积分不展示) -->
-      <div
-        v-if="pointsData.pointList && pointsData.pointList.filter(p => p.pointType !== 20).length > 0"
-        class="flex flex-wrap gap-1.5"
-      >
+      <!-- 其他积分类型 (排除上方卡片已展示的通用1/云手机500，及不纳入的九江20) -->
+      <div v-if="extraPointTypes.length > 0" class="flex flex-wrap gap-1.5">
         <Badge
-          v-for="p in pointsData.pointList.filter(p => p.pointType !== 20)"
+          v-for="p in extraPointTypes"
           :key="p.pointType"
           variant="secondary"
           class="h-5 px-2 text-[10px] bg-muted/60"
