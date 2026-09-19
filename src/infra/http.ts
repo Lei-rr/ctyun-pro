@@ -113,7 +113,7 @@ export function safeWriteFileSync(filePath: string, content: string | Buffer): v
 
 /** 提取异常信息 (统一 Unknown 异常处理) */
 export function errorText(err: unknown): string {
-  return errorText(err);
+  return err instanceof Error ? err.message : String(err);
 }
 
 /** 统一消息推送入口 */

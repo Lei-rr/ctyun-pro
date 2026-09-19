@@ -42,11 +42,15 @@ export class EncryptedSession {
     return JSON.stringify({ data: Protocol.encryptAesCbc(plain, this.evalue) });
   }
 
-  /** 加密表单请求体 (official: eParams=<AES(querystring)>) */
+  /**
+   * 加密表单请求体
+   * 官方实现: eParams = AES(JSON.stringify(data))  (实测: 传 querystring 会返回 30090 数据解密失败)
+   */
   public encryptForm(params: Record<string, string>): string {
-    const qs = new URLSearchParams(params).toString();
-    if (!this.enabled) return qs;
-    return new URLSearchParams({ eParams: Protocol.encryptAesCbc(qs, this.evalue) }).toString();
+    if (!this.enabled) return new URLSearchParams(params).toString();
+    return new URLSearchParams({
+      eParams: Protocol.encryptAesCbc(JSON.stringify(params), this.evalue),
+    }).toString();
   }
 
   /** 加密 GET 查询串 (官方: eUrlParams=<AES(querystring)>) */
