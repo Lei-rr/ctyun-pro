@@ -145,7 +145,6 @@ export function registerDesktopProxyRoutes(
         secretKey: client.loginInfo?.secretKey,
         deviceType: CtYunClient.DEVICE_TYPE,
         bondedDevice: true,
-        commonLoginReqHeader: client.loginInfo?.commonLoginReqHeader || '',
         timestamp: Date.now(),
       };
 
@@ -239,7 +238,7 @@ export function registerDesktopProxyRoutes(
   const nsPrefix = 'ctyun_' + desktopCode + '_';
   const isolateKeys = new Set([
     'web_device_code', 'authExpiredAt', 'authData', 'judgeUserEId', 
-    'loginAt', 'user_name', 'userId', 'token', 'commonLoginReqHeader',
+    'loginAt', 'user_name', 'userId', 'token',
     'banner-historyUserId'
   ]);
 
@@ -278,7 +277,6 @@ export function registerDesktopProxyRoutes(
     localStorage.setItem('user_name', authData.userName || '');
     localStorage.setItem('userId', String(authData.userId || ''));
     localStorage.setItem('token', token || '');
-    localStorage.setItem('commonLoginReqHeader', authData.commonLoginReqHeader || '');
     localStorage.setItem('banner-historyUserId', String(authData.userId || ''));
     sessionStorage.setItem('authExpiredAt', expiredAt);
     sessionStorage.setItem('authData', JSON.stringify(authData));

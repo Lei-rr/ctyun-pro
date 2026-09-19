@@ -19,7 +19,6 @@ export interface LoginInfo {
   mobilephone?: string;
   email?: string;
   token?: string;
-  commonLoginReqHeader?: string;
   [key: string]: unknown;
 }
 
