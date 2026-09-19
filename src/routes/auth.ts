@@ -1,9 +1,9 @@
-import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
-import type { ProfileManager } from '../core/index.js';
-import { safeWriteFileSync } from '../core/utils.js';
+import type { ProfileManager } from '../manager.js';
+import { safeWriteFileSync } from '../infra/http.js';
 import { Config } from '../config.js';
 import { timingSafeEqualString } from '../common/crypto.js';
 import { sendSuccess, sendError } from '../common/response.js';
@@ -233,3 +233,25 @@ export const authRoutes: FastifyPluginAsync<{
     return sendSuccess(reply, null, manager.adminPassword ? '管理密码已更新' : '已取消管理密码');
   });
 };
+
+/** 免除全局鉴权的公开路径 (登录态查询、登录、登出、健康检查、SSE 流) */
+const PUBLIC_API_PATHS = new Set([
+  '/api/health',
+  '/api/auth/status',
+  '/api/auth/login',
+  '/api/auth/logout',
+  '/api/logs/stream',
+]);
+
+/**
+ * 注册全局 API 鉴权守卫
+ * 对所有 /api/* 路由统一校验，免除各路由内重复的 verifyAuth 样板
+ */
+export function registerAuthGuard(fastify: FastifyInstance, authContext: AuthContext): void {
+  fastify.addHook('onRequest', async (request, reply) => {
+    const path = (request.url || '').split('?')[0];
+    if (!path.startsWith('/api/')) return;
+    if (PUBLIC_API_PATHS.has(path)) return;
+    authContext.verifyAuth(request, reply);
+  });
+}

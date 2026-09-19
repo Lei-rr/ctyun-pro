@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { FastifyInstance } from 'fastify';
-import type { ProfileManager } from '../core/index.js';
+import type { ProfileManager } from '../manager.js';
 import type { AuthContext } from './auth.js';
 
 export function setupWebSocket(

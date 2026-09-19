@@ -1,6 +1,6 @@
 import path from 'node:path';
-import type { LoginInfo } from './core/client.js';
-import type { ManagedDesktopState } from './types/index.js';
+import type { LoginInfo } from './ctyun/client.js';
+import type { ManagedDesktopState } from './types.js';
 import fs from 'node:fs';
 
 export const DEFAULT_REDEEM_CONFIG: RedeemConfig = {
@@ -17,6 +17,8 @@ export interface RedeemConfig {
   targetProdId?: number; // 官方商品 ID
   costPoints?: number; // 默认 500
   prodType?: string; // 官方商品类型
+  costPointType?: number; // 官方积分类型: 1 通用 / 10 专属 (九江 20 不自动兑换)
+  redeemCount?: number; // 单次兑换数量 (默认 1)
   targetDesktopId?: string; // 指定绑定的云电脑
   scheduleType: 'monthly_last_day' | 'monthly_day' | 'interval_days' | 'daily' | 'specific_date';
   monthlyDay?: number; // 每月几号 (如 28)
@@ -84,10 +86,6 @@ export class Config {
       return path.resolve(process.env.CTYUN_ACCOUNTS);
     }
     return path.join(this.dataDir, 'accounts.json');
-  }
-
-  public static get rewardsFile(): string {
-    return path.join(this.dataDir, 'rewards.json');
   }
 
   public static get port(): number {

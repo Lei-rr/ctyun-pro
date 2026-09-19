@@ -51,7 +51,15 @@ const store = useAppStore();
                   :key="item.prodId"
                   :value="item.prodId"
                 >
-                  {{ item.prodName }} ({{ item.costPoints }} 积分)
+                  {{ item.prodName }} ({{ item.costPoints }} 积分){{
+                    typeof item.totalLimitSize === 'number' && item.totalLimitSize > -1
+                      ? ` · 剩${Math.max(0, item.totalLimitSize - (item.totalCount || 0))}/${item.totalLimitSize}`
+                      : ''
+                  }}{{
+                    typeof item.userLimitCount === 'number' && item.userLimitCount !== -1
+                      ? ` · 本期已兑${item.orderCount || 0}/${item.userLimitCount}`
+                      : ''
+                  }}
                 </option>
                 <option v-if="store.policyRewards.length === 0" value="" disabled>
                   暂无官方商品数据
@@ -69,6 +77,20 @@ const store = useAppStore();
                 <RefreshCw class="size-3.5" :class="{ 'animate-spin': store.policyRewardsLoading }" />
                 <span>刷新</span>
               </Button>
+            </div>
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="text-xs font-medium text-foreground">单次兑换数量</label>
+            <Input
+              type="number"
+              v-model="store.policyRedeemCount"
+              min="1"
+              max="500"
+              class="h-9 text-xs"
+            />
+            <div class="text-[10px] text-muted-foreground">
+              升配/扩容类商品官方要求兑换后重启云电脑方可生效，系统将自动下发重启指令
             </div>
           </div>
 

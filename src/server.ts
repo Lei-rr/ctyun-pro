@@ -1,9 +1,10 @@
 import Fastify, { type FastifyError } from 'fastify';
-import { ProfileManager } from './core/index.js';
-import { registerDesktopProxyRoutes } from './core/desktop-proxy.js';
+import { ProfileManager } from './manager.js';
+import { registerDesktopProxyRoutes } from './routes/desktop-proxy.js';
 import {
   authRoutes,
   createAuthContext,
+  registerAuthGuard,
   systemRoutes,
   profileRoutes,
   taskRoutes,
@@ -73,9 +74,6 @@ export async function createServer(managerInstance?: ProfileManager) {
       }, 60 * 1000);
       if (this.cleanupTimer.unref) this.cleanupTimer.unref();
     }
-    setWithTtl(key: string, val: { captchaKey?: string; smsKey?: string }, ttlMs = 10 * 60 * 1000) {
-      return super.set(key, { ...val, expireAt: Date.now() + ttlMs });
-    }
     destroy() {
       clearInterval(this.cleanupTimer);
       this.clear();
@@ -87,15 +85,16 @@ export async function createServer(managerInstance?: ProfileManager) {
     smsSessionCache.destroy();
   });
 
-  // 1. 初始化鉴权凭据与验证上下文
+  // 1. 初始化鉴权凭据与验证上下文，并注册全局 API 鉴权守卫
   const authContext = createAuthContext(manager);
+  registerAuthGuard(fastify, authContext);
 
   // 2. 挂载业务路由插件
   await fastify.register(authRoutes, { manager, authContext });
-  await fastify.register(systemRoutes, { manager, authContext });
-  await fastify.register(profileRoutes, { manager, authContext, smsSessionCache });
-  await fastify.register(taskRoutes, { manager, authContext });
-  await fastify.register(desktopRoutes, { manager, authContext });
+  await fastify.register(systemRoutes, { manager });
+  await fastify.register(profileRoutes, { manager, smsSessionCache });
+  await fastify.register(taskRoutes, { manager });
+  await fastify.register(desktopRoutes, { manager });
   await fastify.register(logRoutes, { manager, authContext });
   await fastify.register(staticRoutes);
 

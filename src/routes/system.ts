@@ -1,14 +1,10 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import { globalApiGate, type ProfileManager } from '../core/index.js';
-import type { AuthContext } from './auth.js';
-import { sendWebhookNotification, getCstDateTimeString } from '../core/utils.js';
+import { globalApiGate } from '../infra/gate.js';
+import type { ProfileManager } from '../manager.js';
+import { sendWebhookNotification, getCstDateTimeString , errorText } from '../infra/http.js';
 import { sendSuccess, sendError } from '../common/response.js';
 
-export const systemRoutes: FastifyPluginAsync<{
-  manager: ProfileManager;
-  authContext: AuthContext;
-}> = async (fastify, { manager, authContext }) => {
-  const { verifyAuth } = authContext;
+export const systemRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = async (fastify, { manager }) => {
 
   // 0. 容器健康检查与监控探针接口 (无需鉴权，供 Docker / K8s / 探针使用)
   fastify.get('/api/health', async () => {
@@ -55,7 +51,6 @@ export const systemRoutes: FastifyPluginAsync<{
 
   // 1. 获取系统状态 & 账号列表
   fastify.get('/api/status', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!verifyAuth(request, reply)) return;
     return sendSuccess(reply, {
       version: '3.0.1',
       needAuth: Boolean(manager.adminPassword),
@@ -78,7 +73,6 @@ export const systemRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const body = request.body || {};
       if (body.keepAliveSeconds !== undefined && body.keepAliveSeconds >= 10) {
         manager.keepAliveSeconds = body.keepAliveSeconds;
@@ -106,7 +100,6 @@ export const systemRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const body = request.body || {};
       const targetUrl = (body.webhookUrl || manager.webhookUrl || '').trim();
       if (!targetUrl) {
@@ -130,20 +123,18 @@ export const systemRoutes: FastifyPluginAsync<{
 
   // 1.3 导出安全配置备份
   fastify.get('/api/config/export', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!verifyAuth(request, reply)) return;
     return sendSuccess(reply, manager.exportConfigSafe());
   });
 
   // 1.4 导入配置备份
   fastify.post('/api/config/import', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!verifyAuth(request, reply)) return;
     try {
       const body = request.body;
       const res = manager.importConfigSafe(body);
       manager.addLog('info', `配置导入成功，已恢复 ${res.importedAccounts} 个账号配置`);
       return sendSuccess(reply, res, `配置恢复成功，已导入 ${res.importedAccounts} 个账号配置`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorText(err);
       return sendError(reply, `配置导入失败: ${msg}`);
     }
   });

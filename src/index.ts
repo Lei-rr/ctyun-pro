@@ -1,4 +1,5 @@
 import dns from 'dns';
+import { errorText } from './infra/http.js';
 import { Config } from './config.js';
 import { createServer } from './server.js';
 
@@ -26,7 +27,7 @@ async function main() {
     console.log(`免 OCR 人工直连 | 纯协议保活 | 现代化 Web 控制台`);
     console.log(`======================================================\n`);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorText(err);
     console.error('启动服务失败:', msg);
     process.exit(1);
   }
@@ -57,7 +58,7 @@ async function main() {
       process.exit(0);
     } catch (err) {
       clearTimeout(forceExitTimer);
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorText(err);
       console.error('[Process] 停机流程异常:', msg);
       process.exit(1);
     }
@@ -68,12 +69,12 @@ async function main() {
 }
 
 process.on('uncaughtException', (err) => {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = errorText(err);
   console.error('[Process] 未捕获异常 (已拦截保护):', msg);
 });
 
 process.on('unhandledRejection', (reason: unknown) => {
-  const msg = reason instanceof Error ? reason.message : String(reason);
+  const msg = errorText(reason);
   console.error('[Process] 未处理异步拒绝 (已拦截保护):', msg);
 });
 

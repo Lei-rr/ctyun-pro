@@ -1,22 +1,19 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
+import { errorText } from '../infra/http.js';
 import QRCode from 'qrcode';
-import type { ProfileManager } from '../core/index.js';
-import type { AuthContext } from './auth.js';
-import type { ChallengeData } from '../core/client.js';
+import type { ProfileManager } from '../manager.js';
+import type { ChallengeData } from '../ctyun/client.js';
 import type { TaskConfig, RedeemConfig } from '../config.js';
-import { getRandomScheduleTime, DEFAULT_REDEEM_CONFIG } from '../config.js';
+import { DEFAULT_REDEEM_CONFIG } from '../config.js';
 import { sendSuccess, sendError } from '../common/response.js';
 
 export const profileRoutes: FastifyPluginAsync<{
   manager: ProfileManager;
-  authContext: AuthContext;
   smsSessionCache: Map<string, { captchaKey?: string; smsKey?: string; expireAt?: number }>;
-}> = async (fastify, { manager, authContext, smsSessionCache }) => {
-  const { verifyAuth } = authContext;
+}> = async (fastify, { manager, smsSessionCache }) => {
 
   // 1. Profiles 列表 (所有身份档案及所属云实例快照)
   fastify.get('/api/profiles', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!verifyAuth(request, reply)) return;
     return sendSuccess(reply, manager.getAccountsSummary());
   });
 
@@ -35,7 +32,6 @@ export const profileRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const body = request.body || {};
       const name = (body.name || body.user || '').trim();
       const user = (body.user || body.name || '').trim();
@@ -73,7 +69,6 @@ export const profileRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const body = request.body || {};
       const accountName =
         (body.name || body.accountName || '').trim() || `user_${Date.now().toString().slice(-4)}`;
@@ -100,7 +95,6 @@ export const profileRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const query = request.query || {};
       if (!query.qrCodeId) {
         return sendError(reply, '缺少 qrCodeId 参数');
@@ -138,7 +132,6 @@ export const profileRoutes: FastifyPluginAsync<{
   fastify.get(
     '/api/profiles/:id',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const acc = manager.getAccount(id);
       const state = manager.getAccountState(id);
@@ -153,7 +146,6 @@ export const profileRoutes: FastifyPluginAsync<{
   fastify.delete(
     '/api/profiles/:id',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const acc = manager.getAccount(id);
       if (!acc) {
@@ -178,7 +170,6 @@ export const profileRoutes: FastifyPluginAsync<{
     }>,
     reply: FastifyReply,
   ) => {
-    if (!verifyAuth(request, reply)) return;
     const { id } = request.params;
     const body = request.body || {};
     const targetName = (body.newName || body.name || '').trim();
@@ -199,7 +190,6 @@ export const profileRoutes: FastifyPluginAsync<{
   fastify.post(
     '/api/profiles/:id/sync',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const acc = manager.getAccount(id);
       if (!acc) {
@@ -220,7 +210,6 @@ export const profileRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const query = request.query || {};
       const acc = manager.getAccount(id);
@@ -254,7 +243,6 @@ export const profileRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const body = request.body || {};
       const acc = manager.getAccount(id);
@@ -294,7 +282,7 @@ export const profileRoutes: FastifyPluginAsync<{
         manager.startAccount(name).catch((e) => manager.addLog('error', `[${name}] 启动保活失败: ${e.message}`));
         return sendSuccess(reply, manager.getAccountState(name), '登录成功并已启动保活');
       } catch (err: any) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorText(err);
         manager.addLog('error', `[${name}] 登录验证失败: ${msg}`);
         const needCaptcha = !!err?.needCaptcha;
         return sendError(reply, msg, 400, {
@@ -309,7 +297,6 @@ export const profileRoutes: FastifyPluginAsync<{
   fastify.get(
     '/api/profiles/:id/sms-captcha',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const acc = manager.getAccount(id);
       const name = acc?.name || id;
@@ -335,7 +322,6 @@ export const profileRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const body = request.body || {};
       const acc = manager.getAccount(id);
@@ -357,7 +343,7 @@ export const profileRoutes: FastifyPluginAsync<{
         manager.addLog('info', `[${name}] 短信验证码已发送至手机号 ${user}`);
         return sendSuccess(reply, null, '验证码已发送');
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorText(err);
         manager.addLog('error', `[${name}] 发送短信失败: ${msg}`);
         return sendError(reply, msg);
       }
@@ -374,7 +360,6 @@ export const profileRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const body = request.body || {};
       const acc = manager.getAccount(id);
@@ -395,7 +380,7 @@ export const profileRoutes: FastifyPluginAsync<{
         manager.startAccount(name).catch((e) => manager.addLog('error', `[${name}] 启动保活失败: ${e.message}`));
         return sendSuccess(reply, null, '绑定成功并已启动保活');
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorText(err);
         manager.addLog('error', `[${name}] 设备绑定失败: ${msg}`);
         return sendError(reply, msg);
       }
@@ -415,7 +400,6 @@ export const profileRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const body = request.body || {};
       const acc = manager.getAccount(id);
@@ -440,7 +424,6 @@ export const profileRoutes: FastifyPluginAsync<{
   fastify.post(
     '/api/profiles/:id/start',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const acc = manager.getAccount(id);
       if (!acc) return sendError(reply, 'Profile 未找到', 404);
@@ -452,7 +435,6 @@ export const profileRoutes: FastifyPluginAsync<{
   fastify.post(
     '/api/profiles/:id/stop',
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      if (!verifyAuth(request, reply)) return;
       const { id } = request.params;
       const acc = manager.getAccount(id);
       if (!acc) return sendError(reply, 'Profile 未找到', 404);

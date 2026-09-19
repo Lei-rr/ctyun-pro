@@ -1,18 +1,13 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import type { ProfileManager } from '../core/index.js';
-import type { AuthContext } from './auth.js';
-import type { PowerActionOptions } from '../types/index.js';
+import { errorText } from '../infra/http.js';
+import type { ProfileManager } from '../manager.js';
+import type { PowerActionOptions } from '../types.js';
 import { sendSuccess, sendError } from '../common/response.js';
 
-export const desktopRoutes: FastifyPluginAsync<{
-  manager: ProfileManager;
-  authContext: AuthContext;
-}> = async (fastify, { manager, authContext }) => {
-  const { verifyAuth } = authContext;
+export const desktopRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = async (fastify, { manager }) => {
 
   // 云电脑列表 (包含实时运行状态、剩余使用时间等)
   fastify.get('/api/desktops', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!verifyAuth(request, reply)) return;
     const allDesktops: Array<Record<string, unknown>> = [];
     const accounts = manager.getAccountsSummary();
     for (const acc of accounts) {
@@ -38,13 +33,12 @@ export const desktopRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const { desktopCode } = request.params;
       try {
         const res = await manager.getDesktopDirectUrlByDesktopCode(desktopCode);
         return sendSuccess(reply, res);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorText(err);
         return sendError(reply, msg);
       }
     },
@@ -60,7 +54,6 @@ export const desktopRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const { desktopCode } = request.params;
       const body = request.body || {};
       const res = manager.findDesktopByCode(desktopCode);
@@ -78,7 +71,7 @@ export const desktopRoutes: FastifyPluginAsync<{
         const msg = await manager.operateDesktop(res.accountName, desktopCode, op);
         return sendSuccess(reply, null, msg);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorText(err);
         return sendError(reply, msg);
       }
     },
@@ -92,7 +85,6 @@ export const desktopRoutes: FastifyPluginAsync<{
     }>,
     reply: FastifyReply,
   ) => {
-    if (!verifyAuth(request, reply)) return;
     const { desktopCode } = request.params;
     const body = request.body || {};
     const newName = (body.desktopName || body.newName || body.nickName || '').trim();
@@ -103,7 +95,7 @@ export const desktopRoutes: FastifyPluginAsync<{
       await manager.renameDesktop(desktopCode, newName);
       return sendSuccess(reply, null, '修改成功');
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorText(err);
       return sendError(reply, msg);
     }
   };
