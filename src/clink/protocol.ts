@@ -194,8 +194,19 @@ export class Protocol {
       if (size < 0 || offset + 6 + size > buffer.length) {
         break;
       }
-      const data = buffer.subarray(offset + 6, offset + 6 + size);
-      results.push({ type, data });
+      // 官方 resolveMessage 语义: type=0 为空占位/填充帧，直接丢弃且不计入 ACK
+      // (服务端会下发 4096B 全零帧；若计入会产生 682 条假消息与无效 ACK 风暴)
+      if (type !== 0) {
+        const data = buffer.subarray(offset + 6, offset + 6 + size);
+        results.push({ type, data });
+      } else if (size === 0) {
+        // 连续空占位帧，无有效载荷，终止扫描避免无效遍历
+        let allZero = true;
+        for (let i = offset; i < buffer.length; i++) {
+          if (buffer[i] !== 0) { allZero = false; break; }
+        }
+        if (allZero) break;
+      }
       offset += 6 + size;
     }
     return results;
