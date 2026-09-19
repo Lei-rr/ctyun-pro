@@ -202,6 +202,57 @@ export class Protocol {
   }
 
   /**
+   * 官方请求体 AES-CBC 加密 (对齐官方 FQ)
+   * 实测: key 取自 evalue 的 Utf8 全字节 (32B -> AES-256-CBC)，IV 为全零 16 字节，PKCS7
+   */
+  public static encryptAesCbc(plaintext: string, key: string): string {
+    const keyBuf = Buffer.from(key, 'utf8');
+    const algo = keyBuf.length === 32 ? 'aes-256-cbc' : 'aes-128-cbc';
+    const cipher = crypto.createCipheriv(algo, keyBuf, Buffer.alloc(16, 0));
+    cipher.setAutoPadding(true);
+    return Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]).toString('base64');
+  }
+
+  /**
+   * 官方响应体 AES-CBC 解密 (对齐官方 F6)
+   */
+  public static decryptAesCbc(ciphertextBase64: string, key: string): string {
+    const keyBuf = Buffer.from(key, 'utf8');
+    const algo = keyBuf.length === 32 ? 'aes-256-cbc' : 'aes-128-cbc';
+    const decipher = crypto.createDecipheriv(algo, keyBuf, Buffer.alloc(16, 0));
+    decipher.setAutoPadding(true);
+    return Buffer.concat([
+      decipher.update(Buffer.from(ciphertextBase64, 'base64')),
+      decipher.final(),
+    ]).toString('utf8');
+  }
+
+  /**
+   * 解密服务端用我方 RSA 公钥加密的 AES 密钥
+   * 官方经 JSEncrypt.decrypt 处理 (PKCS1 v1.5 填充)，实测确认
+   */
+  public static decryptRsaPkcs1(ciphertextBase64: string, privateKeyPem: string): string {
+    return crypto
+      .privateDecrypt(
+        { key: privateKeyPem, padding: crypto.constants.RSA_PKCS1_PADDING },
+        Buffer.from(ciphertextBase64, 'base64'),
+      )
+      .toString('utf8');
+  }
+
+  /**
+   * 生成 RSA-2048 OAEP(SHA-512) 密钥对 (SPKI 公钥 + PKCS8 私钥, base64)
+   */
+  public static generateRsaKeyPair(): { publicKeyB64: string; privateKeyPem: string } {
+    const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'der' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    return { publicKeyB64: (publicKey as Buffer).toString('base64'), privateKeyPem: privateKey as string };
+  }
+
+  /**
    * 计算 MD5 16 进制小写
    */
   public static md5(str: string): string {

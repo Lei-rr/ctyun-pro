@@ -830,11 +830,11 @@ export class ProfileManager {
       return;
     }
 
-    // 外部开机自愈：检测到在外部客户端/控制台开机时解除本地手动关机锁定
+    // 外部开机自愈：检测到实例已恢复运行态时解除本地手动关机锁定
     for (const d of list) {
       const isRunning =
-        String(d.useStatus) === '25' ||
-        (d.useStatusText && (d.useStatusText.includes('运行') || d.useStatusText.includes('使用')));
+        typeof d.useStatusText === 'string' &&
+        (d.useStatusText.includes('运行') || d.useStatusText.includes('使用'));
       if (
         isRunning &&
         (this.isManualShutdown(d.desktopCode) || this.isManualShutdown(d.desktopId))

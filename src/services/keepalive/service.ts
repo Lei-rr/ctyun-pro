@@ -164,43 +164,19 @@ export class KeepaliveService extends EventEmitter {
   ): Promise<void> {
     if (!client.loginInfo) return;
 
-    // 期望建立 Worker 的桌面数 (排除手动关机与前台 Web 避让中的桌面，避免反复重建抖动)
-    const expectedCount = desktops.filter((d) => {
-      const dCode = d.desktopCode || d.desktopId;
-      if (isManualShutdown && isManualShutdown(dCode)) return false;
-      if (isWebActive && (isWebActive(dCode) || (d.desktopId && isWebActive(String(d.desktopId))))) return false;
-      return true;
-    }).length;
-
     const existingWorkers = this.workers.get(accountName) || [];
 
-    // 无需保活的桌面 (全部手动关机或前台避让中) 且当前无 Worker，直接返回
-    if (expectedCount === 0 && existingWorkers.length === 0) {
-      return;
-    }
-
-    // 检查是否所有应保活 Worker 都在健康且活跃运行 (未被暂停且处于运行中)
-    const allActive =
-      existingWorkers.length === expectedCount &&
-      existingWorkers.length > 0 &&
-      existingWorkers.every((w) => w.isRunning && !w.isPaused);
-
-    if (allActive) {
-      return;
-    }
-
-    this.stopWorkers(accountName);
-    const newWorkers: KeepAliveWorker[] = [];
+    // 仅补建缺失的 Worker；已运行或已让位暂停的 Worker 原样保留，杜绝无谓重连踢号
+    const keptWorkers: KeepAliveWorker[] = [];
+    const toCreate: Array<{ desktop: Desktop; state?: ManagedDesktopState }> = [];
 
     for (let i = 0; i < desktops.length; i++) {
       const d = desktops[i];
       const state = desktopStates[i];
-
       const dCode = d.desktopCode || d.desktopId;
       const dName = d.desktopName || d.computerName || d.name || dCode;
       const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
 
-      // 手动关机锁定拦截
       if (isManualShutdown && isManualShutdown(dCode)) {
         if (state) {
           state.status = 'stopped';
@@ -210,7 +186,17 @@ export class KeepaliveService extends EventEmitter {
         continue;
       }
 
-      // 前台 Web 用户避让拦截：不重建保活连接，避免顶掉正在浏览器直连操作的用户
+      // 已存在的 Worker：保持连接不断开（运行中或已被动让位暂停均保留）
+      const existing = existingWorkers.find((w) => {
+        const dd = w.options?.desktop;
+        return String(dd?.desktopCode) === String(d.desktopCode) || String(dd?.desktopId) === String(d.desktopId);
+      });
+      if (existing && (existing.isRunning || existing.isPaused)) {
+        keptWorkers.push(existing);
+        continue;
+      }
+
+      // 前台 Web 用户避让拦截：不建立保活连接，避免顶掉正在浏览器直连操作的用户
       if (isWebActive && (isWebActive(dCode) || (d.desktopId && isWebActive(String(d.desktopId))))) {
         if (state) {
           state.status = 'paused';
@@ -219,6 +205,15 @@ export class KeepaliveService extends EventEmitter {
         this.logger.addLog('info', `[${dPrefix}] 前台 Web 用户正在操作，跳过后台保活建立（让位中）`);
         continue;
       }
+      toCreate.push({ desktop: d, state });
+    }
+
+    this.workers.set(accountName, keptWorkers);
+
+    for (const { desktop: d, state } of toCreate) {
+      const dCode = d.desktopCode || d.desktopId;
+      const dName = d.desktopName || d.computerName || d.name || dCode;
+      const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
 
       // 开机/唤醒检测与自愈指令
       let isRunning = d.useStatusText === '运行中' || d.useStatusText === '离线运行';
@@ -265,8 +260,7 @@ export class KeepaliveService extends EventEmitter {
             try {
               const stateRes = await client.getDesktopState(d.desktopId, d.objType);
               let statusText = stateRes?.useStatusText || '';
-              const desktopState = (stateRes?.desktopState || '').toUpperCase();
-              const useStatusCode = String(stateRes?.useStatus || '');
+              const desktopState = stateRes?.desktopState || '';
 
               if (!statusText && !desktopState) {
                 const list = await client.getDesktopList();
@@ -274,15 +268,8 @@ export class KeepaliveService extends EventEmitter {
                 statusText = current?.useStatusText || '';
               }
 
-              // 官方 desktopState 就绪态归一化为 running；useStatus 20/25 均代表实例在线
-              const normalizedState = normalizeDesktopState(desktopState);
-              const isReady =
-                statusText === '运行中' ||
-                statusText === '离线运行' ||
-                normalizedState === 'running' ||
-                desktopState === 'RUNNING' ||
-                useStatusCode === '20' ||
-                useStatusCode === '25';
+              // 就绪判定依据官方 desktopState 枚举: ACTIVE 为实例运行态
+              const isReady = statusText === '运行中' || statusText === '离线运行' || normalizeDesktopState(desktopState) === 'running';
 
               if (isReady) {
                 ready = true;
@@ -374,13 +361,14 @@ export class KeepaliveService extends EventEmitter {
         });
 
         workerInstance.start();
-        newWorkers.push(workerInstance);
+        keptWorkers.push(workerInstance);
+        this.workers.set(accountName, [...keptWorkers]);
       } catch (err) {
         const msg = errorText(err);
         this.logger.addLog('error', `[${dPrefix}] 保活连接建立失败: ${msg}`);
       }
     }
 
-    this.workers.set(accountName, newWorkers);
+    this.workers.set(accountName, keptWorkers);
   }
 }

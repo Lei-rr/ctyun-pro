@@ -20,10 +20,13 @@ export interface WatchdogState {
 
 /**
  * 桌面休眠/关机与避让看门狗服务 (Watchdog Service)
- * 职责：
- * 1. 管理受控桌面避让自愈探针生命周期（支持 5m -> 10m -> 15m 指数退避与 ±30s 随机 Jitter 防风控）；
- * 2. 探针精准调用 client.getDesktopState 读取 useStatus 与 desktopState；
- * 3. 当 useStatus === '20' (无活跃会话) 或脱离运行态 (关机/休眠) 时，自动唤醒开机并拉起保活长连接。
+ *
+ * 避让原则（依据官方协议语义）：
+ * 1. 被服务端 119/4001 让位后，探针按 5m -> 10m -> 15m 指数退避 (含 ±30s Jitter) 巡检；
+ * 2. 云电脑处于 ACTIVE/过渡态时，官方客户端可能仍在线 —— 绝不主动连接，
+ *    否则同账号异设备接入会触发服务端 exitDesktop 广播将真机用户强制下线；
+ * 3. 仅当云电脑归一化状态为 SUSPENED/SHUTOFF（用户已离开，实例已休眠或关机）时，
+ *    才唤醒实例并重新接管保活长连。
  */
 export class WatchdogService {
   private profileManager: ProfileManager;
@@ -170,29 +173,12 @@ export class WatchdogService {
 
     try {
       const stateInfo = await client.getDesktopState(desktopId, objType);
-      const useStatus = stateInfo?.useStatus;
       const desktopState = stateInfo?.desktopState || '';
       const useStatusText = stateInfo?.useStatusText || '';
 
-      // 判断官方客户端是否仍处于活跃占用中
-      // useStatus: 25 = 使用中/有活跃会话；20 = 空闲/无活跃会话 (官方返回可能是 number 或 string)
-      const useStatusCode = String(useStatus ?? '');
-      const isStillBusy = useStatusCode === '25' || (useStatusText.includes('使用') && !useStatusText.includes('未'));
-
-      if (isStillBusy) {
-        state.consecutiveBusyCount += 1;
-        const nextMin = Math.round(Math.min(this.baseIntervalMs * Math.pow(2, state.consecutiveBusyCount), this.maxIntervalMs) / 60000);
-        this.logger.addLog('info', `[${accountName} - ${dName}] 探针巡检: 官方客户端仍在活跃使用中 (第 ${state.consecutiveBusyCount} 次，下次退避探测约 ${nextMin} 分钟后)`);
-        this.scheduleNextProbe(accountName, desktopId, state);
-        this.profileManager.notifyStatusChange();
-        return;
-      }
-
-      // 官方客户端已退出或云电脑已关机/休眠：满足自愈接管条件
-      this.logger.addLog('info', `[${accountName} - ${dName}] 探针巡检: 官方客户端已退出，启动自动接管自愈链路`);
-      this.stopWatchdog(accountName, desktopId);
-
-      // 若处于关机或休眠状态，自动下发唤醒开机指令 (官方枚举归一化后判定)
+      // 官方协议语义: desktopState=ACTIVE 表示实例处于运行态，官方客户端可能仍在占用。
+      // useStatus 无"活跃会话"含义 (官方仅用于救援模式 87/88)，不得据此判断客户端是否在线。
+      // 运行态下主动接入会触发服务端 exitDesktop 广播踢掉真机用户，因此仅对已休眠/关机实例接管。
       const normalizedState = normalizeDesktopState(desktopState);
       const isStoppedOrSleeping =
         normalizedState === 'stopped' ||
@@ -201,13 +187,29 @@ export class WatchdogService {
         useStatusText.includes('休眠') ||
         useStatusText.includes('睡眠');
 
-      if (isStoppedOrSleeping) {
-        try {
-          await this.profileManager.operateDesktop(accountName, desktopCode, 'awake');
-          this.logger.addLog('info', `[${accountName} - ${dName}] 已下发自愈唤醒指令`);
-        } catch (startErr) {
-          this.logger.addLog('warn', `[${accountName} - ${dName}] 自愈唤醒失败: ${errorText(startErr)}`);
-        }
+      if (!isStoppedOrSleeping) {
+        state.consecutiveBusyCount += 1;
+        const nextMin = Math.round(
+          Math.min(this.baseIntervalMs * Math.pow(2, state.consecutiveBusyCount), this.maxIntervalMs) / 60000,
+        );
+        this.logger.addLog(
+          'info',
+          `[${accountName} - ${dName}] 探针巡检: 云电脑处于运行态 (${useStatusText || desktopState || '运行中'})，可能仍有客户端在线，暂不连接 (第 ${state.consecutiveBusyCount} 次，下次约 ${nextMin} 分钟后)`,
+        );
+        this.scheduleNextProbe(accountName, desktopId, state);
+        this.profileManager.notifyStatusChange();
+        return;
+      }
+
+      // 实例已休眠/关机，用户已离开：满足自愈接管条件
+      this.logger.addLog('info', `[${accountName} - ${dName}] 探针巡检: 云电脑已休眠/关机，启动自动接管自愈链路`);
+      this.stopWatchdog(accountName, desktopId);
+
+      try {
+        await this.profileManager.operateDesktop(accountName, desktopCode, 'awake');
+        this.logger.addLog('info', `[${accountName} - ${dName}] 已下发自愈唤醒指令`);
+      } catch (startErr) {
+        this.logger.addLog('warn', `[${accountName} - ${dName}] 自愈唤醒失败: ${errorText(startErr)}`);
       }
 
       // 精准接续恢复该桌面的保活长连接
