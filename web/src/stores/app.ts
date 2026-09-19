@@ -947,25 +947,6 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  async function manualClaimTasks(accountName: string) {
-    try {
-      const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/claim`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ accountName }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        toast.success(json.msg || '任务奖励领取完成');
-      } else {
-        toast.error(json.msg || '领取失败');
-      }
-      fetchStatus();
-    } catch (e: any) {
-      toast.error(e.message || '请求异常');
-    }
-  }
-
   async function manualRedeem(accountName: string) {
     const r = policyRewards.value.find((p) => p.prodId === policyTargetProdId.value);
     const cost = r ? r.costPoints : 500;
@@ -1125,7 +1106,6 @@ export const useAppStore = defineStore('app', () => {
     openPolicyModal,
     savePolicy,
     manualAiChatTask,
-    manualClaimTasks,
     manualRedeem,
     operateDesktopPower: async (
       accountName: string,

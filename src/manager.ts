@@ -968,10 +968,6 @@ export class ProfileManager {
     return this.tasksService.getPointDetailList(accountName, options);
   }
 
-  public async manualClaimTasks(accountName: string): Promise<string> {
-    return this.tasksService.claimPendingTasks(accountName);
-  }
-
   public async manualRedeem(
     accountName: string,
     prodId?: number,

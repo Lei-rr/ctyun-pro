@@ -4,7 +4,7 @@ import type { Logger } from '../../infra/logger.js';
 import type { AccountConfig, RedeemConfig } from '../../config.js';
 import type { ManagedAccount, ManagedDesktopState } from '../../types.js';
 import { AiChatTask } from './ai-chat.js';
-import { PointsTask, isDailyTask, TASK_STATUS, type PointsSummary, type TaskItem } from './points.js';
+import { PointsTask, isDailyTask, TASK_STATUS, type PointsSummary } from './points.js';
 import { RewardRedeemService, DEFAULT_LOCAL_REWARDS, type RewardItem } from '../reward/service.js';
 
 /** 任务与积分业务对外依赖 (由 ProfileManager 注入，避免循环引用) */
@@ -61,38 +61,6 @@ export class TasksService {
       throw new Error('账号未登录，无法查询积分明细');
     }
     return PointsTask.getPointDetailList(client, options);
-  }
-
-  /** 领取全部「待领取」任务奖励 (仅平台积分 1/10，排除九江 20) */
-  public async claimPendingTasks(accountName: string): Promise<string> {
-    const acc = this.host.getAccount(accountName);
-    const client = this.host.getClient(accountName);
-    if (!acc || !client.loginInfo) {
-      throw new Error('账号未登录，无法领取任务奖励');
-    }
-
-    const summary = await PointsTask.getPointsAndTasks(client);
-    const pending = summary.tasks.filter(
-      (t) => t.status === TASK_STATUS.UNCLAIMED && t.points.some((p) => p.type === 1 || p.type === 10),
-    );
-    if (pending.length === 0) {
-      return '当前没有可领取的任务奖励';
-    }
-
-    const results: string[] = [];
-    for (const task of pending as TaskItem[]) {
-      const res = await PointsTask.receivePoints(client, task);
-      results.push(res.success ? `[${task.name}] 领取成功 (+${task.rewardPoints}积分)` : `[${task.name}] ${res.message}`);
-      this.host.logger.addLog(res.success ? 'success' : 'warn', `[${accountName}] 领取任务奖励: ${res.message}`);
-      await new Promise((r) => setTimeout(r, 800));
-    }
-
-    setTimeout(() => {
-      this.getPointsAndTasks(accountName)
-        .then(() => this.host.notifyStatusChange())
-        .catch(() => {});
-    }, 1500);
-    return results.join('；');
   }
 
   /** 手动兑换指定商品 */

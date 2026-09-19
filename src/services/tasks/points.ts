@@ -1,5 +1,5 @@
 import type { CtYunClient } from '../../ctyun/client.js';
-import { safeFetch , errorText } from '../../infra/http.js';
+import { safeFetch } from '../../infra/http.js';
 
 export type TaskType = 'chat' | 'hang' | 'login' | 'other';
 
@@ -276,41 +276,6 @@ export class PointsTask {
       pointList,
       tasks,
     };
-  }
-
-  /**
-   * 领取已达到条件的任务奖励 (对齐官方 receivePointsV2)
-   * @param taskItem 待领取任务 (status === 1)
-   */
-  public static async receivePoints(
-    client: CtYunClient,
-    taskItem: Pick<TaskItem, 'taskDefId' | 'currentProgress'>,
-  ): Promise<{ success: boolean; message: string }> {
-    if (!client.loginInfo) {
-      return { success: false, message: '账号未登录，无法领取任务奖励' };
-    }
-    try {
-      const params = new URLSearchParams();
-      params.append('taskDefId', String(taskItem.taskDefId));
-      params.append('progress', String(taskItem.currentProgress + 1));
-      const res = await safeFetch(
-        `${this.SELFORDER_URL}/api/marketing/userPoints/receivePointsV2?${params.toString()}`,
-        { headers: client.getHeaders() },
-      );
-      if (res.status !== 200) {
-        return { success: false, message: `领取接口异常 (HTTP ${res.status})` };
-      }
-      const json = (await res.json()) as { code?: number; msg?: string; data?: unknown };
-      // 官方判定语义：data 为真即领取成功 (result ? 成功 : 失败)
-      const ok = json.code === 0 && Boolean(json.data);
-      if (ok) {
-        return { success: true, message: `任务 [${taskItem.taskDefId}] 奖励领取成功` };
-      }
-      return { success: false, message: json.msg || '领取失败，官方未返回成功结果' };
-    } catch (err) {
-      const msg = errorText(err);
-      return { success: false, message: `领取任务奖励异常: ${msg}` };
-    }
   }
 
   /**

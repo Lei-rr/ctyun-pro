@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Clock,
   Play,
-  Gift,
   History,
   RefreshCw,
 } from 'lucide-vue-next';
@@ -25,7 +24,6 @@ const emit = defineEmits<{
 const store = useAppStore();
 const loading = ref(false);
 const chatRunning = ref(false);
-const claimRunning = ref(false);
 const activeTab = ref<'tasks' | 'detail'>('tasks');
 
 interface TaskPointItem {
@@ -203,10 +201,6 @@ const extraPointTypes = computed(() => {
   return list.filter((p) => p.pointType !== 1 && p.pointType !== 500 && p.pointType !== 20);
 });
 
-const hasClaimable = computed(() => {
-  return displayTasks.value.some((t) => t.status === 1);
-});
-
 async function runAiChatTaskInModal() {
   if (!props.accountName || chatRunning.value) return;
   chatRunning.value = true;
@@ -215,17 +209,6 @@ async function runAiChatTaskInModal() {
     await loadPoints();
   } finally {
     chatRunning.value = false;
-  }
-}
-
-async function claimPendingTasks() {
-  if (!props.accountName || claimRunning.value) return;
-  claimRunning.value = true;
-  try {
-    await store.manualClaimTasks(props.accountName);
-    await loadPoints();
-  } finally {
-    claimRunning.value = false;
   }
 }
 
@@ -335,19 +318,8 @@ function detailTypeLabel(msgType: number): string {
 
       <!-- 任务明细 -->
       <div v-if="activeTab === 'tasks'" class="space-y-2">
-        <div class="text-xs font-medium text-foreground flex items-center justify-between">
-          <span>今日任务</span>
-          <Button
-            v-if="hasClaimable"
-            variant="outline"
-            size="sm"
-            class="h-6 px-2 text-[10px] gap-1 cursor-pointer border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
-            :disabled="claimRunning"
-            @click="claimPendingTasks"
-          >
-            <Gift class="size-2.5" />
-            {{ claimRunning ? '领取中...' : '一键领取待领取奖励' }}
-          </Button>
+        <div class="text-xs font-medium text-foreground">
+          今日任务
         </div>
 
         <template v-for="group in groupedTasks" :key="group.key">
@@ -383,27 +355,13 @@ function detailTypeLabel(msgType: number): string {
           <div class="text-[11px] text-muted-foreground flex items-center justify-between font-mono pt-1">
             <span>{{ formatProgress(task) }}</span>
             <div class="flex items-center gap-2">
-              <!-- 1. 待领取任务：一键领取 -->
-              <template v-if="task.status === 1">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  class="h-6 px-2 text-[10px] gap-1 cursor-pointer border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
-                  :disabled="claimRunning"
-                  @click="claimPendingTasks"
-                >
-                  <Gift class="size-2.5" />
-                  领取奖励
-                </Button>
-              </template>
-
-              <!-- 2. 挂机与登录类任务：提示保活自动达成 -->
-              <template v-else-if="task.type === 'hang' || task.type === 'login'">
+              <!-- 1. 挂机与登录类任务：提示保活自动达成 -->
+              <template v-if="task.type === 'hang' || task.type === 'login'">
                 <span v-if="task.status === 2" class="text-emerald-500 font-sans">已达标</span>
                 <span v-else class="text-muted-foreground font-sans">后台保活长连自动累计</span>
               </template>
 
-              <!-- 3. 与AI对话任务：手动执行 -->
+              <!-- 2. 与AI对话任务：手动执行 -->
               <template v-else-if="task.type === 'chat'">
                 <Button
                   v-if="task.status !== 2"
@@ -420,7 +378,7 @@ function detailTypeLabel(msgType: number): string {
                 <span v-else class="text-emerald-500 font-sans">已领取</span>
               </template>
 
-              <!-- 4. 其他任务 -->
+              <!-- 3. 其他任务 -->
               <template v-else>
                 <span v-if="task.status === 2" class="text-emerald-500 font-sans">已领取</span>
                 <span v-else class="text-muted-foreground font-sans">按官方规则完成</span>

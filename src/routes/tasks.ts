@@ -75,22 +75,6 @@ export const taskRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = async
     },
   );
 
-  // 2.1 手动领取所有「待领取」任务奖励 (对齐官方 receivePointsV2)
-  fastify.post(
-    '/api/profiles/:id/tasks/claim',
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      const acc = resolveAccount(request.params.id, reply);
-      if (!acc) return;
-      try {
-        const msg = await manager.manualClaimTasks(acc.name);
-        return sendSuccess(reply, null, msg);
-      } catch (err) {
-        const msg = errorText(err);
-        return sendError(reply, msg);
-      }
-    },
-  );
-
   // 3. 手动执行积分兑换
   fastify.post(
     '/api/profiles/:id/tasks/redeem',
