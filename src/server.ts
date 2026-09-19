@@ -1,9 +1,10 @@
 import Fastify, { type FastifyError } from 'fastify';
-import { ProfileManager } from './core/index.js';
-import { registerDesktopProxyRoutes } from './core/desktop-proxy.js';
+import { ProfileManager } from './core/profile-manager.js';
+import { registerDesktopProxyRoutes } from './routes/desktop-proxy.js';
 import {
   authRoutes,
   createAuthContext,
+  registerAuthGuard,
   systemRoutes,
   profileRoutes,
   taskRoutes,
@@ -31,7 +32,7 @@ export async function createServer(managerInstance?: ProfileManager) {
       ? error.statusCode
       : 500;
     const msg = error.message || '系统内部异常';
-    manager.addLog('error', `[API] ${request.method} ${request.url} 异常: ${msg}`);
+    manager.addLog('error', `${request.method} ${request.url} -> ${statusCode}: ${msg}`, {});
     reply.code(statusCode).send({
       success: false,
       msg,
@@ -39,7 +40,7 @@ export async function createServer(managerInstance?: ProfileManager) {
   });
 
   // 支持无 body 的 application/json POST/PUT 请求 (如前端带 Header 的动作触发请求)
-  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
     if (!body || (typeof body === 'string' && body.trim() === '')) {
       done(null, {});
       return;
@@ -54,12 +55,12 @@ export async function createServer(managerInstance?: ProfileManager) {
   });
 
   // 支持所有其他媒体类型直接以 Buffer 透传 (供反向代理等场景直通，防止 415 Unsupported Media Type)
-  fastify.addContentTypeParser('*', { parseAs: 'buffer' }, (req, body, done) => {
+  fastify.addContentTypeParser('*', { parseAs: 'buffer' }, (_req, body, done) => {
     done(null, body);
   });
 
   // 短信验证会话内存缓存 (带 10 分钟自动过期 TTL，防止垃圾残留)
-  class ExpiringSmsSessionCache extends Map<string, { captchaKey?: string; smsKey?: string; expireAt: number }> {
+  class ExpiringSmsSessionCache extends Map<string, { captchaKey?: string; expireAt: number }> {
     private cleanupTimer: NodeJS.Timeout;
     constructor() {
       super();
@@ -73,9 +74,6 @@ export async function createServer(managerInstance?: ProfileManager) {
       }, 60 * 1000);
       if (this.cleanupTimer.unref) this.cleanupTimer.unref();
     }
-    setWithTtl(key: string, val: { captchaKey?: string; smsKey?: string }, ttlMs = 10 * 60 * 1000) {
-      return super.set(key, { ...val, expireAt: Date.now() + ttlMs });
-    }
     destroy() {
       clearInterval(this.cleanupTimer);
       this.clear();
@@ -87,15 +85,16 @@ export async function createServer(managerInstance?: ProfileManager) {
     smsSessionCache.destroy();
   });
 
-  // 1. 初始化鉴权凭据与验证上下文
+  // 1. 初始化鉴权凭据与验证上下文，并注册全局 API 鉴权守卫
   const authContext = createAuthContext(manager);
+  registerAuthGuard(fastify, authContext);
 
   // 2. 挂载业务路由插件
   await fastify.register(authRoutes, { manager, authContext });
-  await fastify.register(systemRoutes, { manager, authContext });
-  await fastify.register(profileRoutes, { manager, authContext, smsSessionCache });
-  await fastify.register(taskRoutes, { manager, authContext });
-  await fastify.register(desktopRoutes, { manager, authContext });
+  await fastify.register(systemRoutes, { manager });
+  await fastify.register(profileRoutes, { manager, smsSessionCache });
+  await fastify.register(taskRoutes, { manager });
+  await fastify.register(desktopRoutes, { manager });
   await fastify.register(logRoutes, { manager, authContext });
   await fastify.register(staticRoutes);
 

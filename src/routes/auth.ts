@@ -1,12 +1,12 @@
-import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
-import type { ProfileManager } from '../core/index.js';
-import { safeWriteFileSync } from '../core/utils.js';
+import type { ProfileManager } from '../core/profile-manager.js';
+import { safeWriteFileSync } from '../infra/fs.js';
 import { Config } from '../config.js';
-import { timingSafeEqualString } from '../common/crypto.js';
-import { sendSuccess, sendError } from '../common/response.js';
+import { timingSafeEqualString } from '../infra/crypto.js';
+import { sendSuccess, sendError } from '../infra/reply.js';
 
 export interface AuthContext {
   sessions: Set<string>;
@@ -154,7 +154,7 @@ export const authRoutes: FastifyPluginAsync<{
   manager: ProfileManager;
   authContext: AuthContext;
 }> = async (fastify, { manager, authContext }) => {
-  const { sessions, saveSessions, isValidToken, verifyAuth, parseCookieToken } = authContext;
+  const { sessions, saveSessions, isValidToken, parseCookieToken } = authContext;
 
   // 1. 系统鉴权状态与登录接口
   fastify.get('/api/auth/status', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -223,13 +223,35 @@ export const authRoutes: FastifyPluginAsync<{
 
   // 4. 修改管理员密码
   fastify.post('/api/auth/password', async (request: FastifyRequest<{ Body: { newPassword?: string } }>, reply: FastifyReply) => {
-    if (!verifyAuth(request, reply)) return;
     const body = request.body || {};
     manager.adminPassword = body.newPassword ? body.newPassword.trim() : '';
     manager.saveToDisk();
     sessions.clear();
     saveSessions();
-    manager.addLog('info', manager.adminPassword ? '已更新控制台管理密码' : '已取消控制台管理密码');
+    manager.addLog('info', manager.adminPassword ? '已更新控制台管理密码' : '已取消控制台管理密码', {});
     return sendSuccess(reply, null, manager.adminPassword ? '管理密码已更新' : '已取消管理密码');
   });
 };
+
+/** 免除全局鉴权的公开路径 (登录态查询、登录、登出、健康检查、SSE 流) */
+const PUBLIC_API_PATHS = new Set([
+  '/api/health',
+  '/api/auth/status',
+  '/api/auth/login',
+  '/api/auth/logout',
+  '/api/logs/stream',
+]);
+
+/**
+ * 注册全局 API 鉴权守卫
+ * 对所有 /api/* 路由统一校验，免除各路由内重复的 verifyAuth 样板
+ */
+export function registerAuthGuard(fastify: FastifyInstance, authContext: AuthContext): void {
+  fastify.addHook('onRequest', async (request, reply) => {
+    const path = (request.url || '').split('?')[0];
+    if (!path.startsWith('/api/')) return;
+    if (PUBLIC_API_PATHS.has(path)) return;
+    // 未授权时 verifyAuth 已写入 401 响应，返回 reply 以短路后续处理链
+    if (!authContext.verifyAuth(request, reply)) return reply;
+  });
+}

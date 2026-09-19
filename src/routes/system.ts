@@ -1,14 +1,13 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import { globalApiGate, type ProfileManager } from '../core/index.js';
-import type { AuthContext } from './auth.js';
-import { sendWebhookNotification, getCstDateTimeString } from '../core/utils.js';
-import { sendSuccess, sendError } from '../common/response.js';
+import { APP_VERSION } from '../config.js';
+import { globalApiGate } from '../infra/gate.js';
+import type { ProfileManager } from '../core/profile-manager.js';
+import { errorText } from '../infra/http.js';
+import { getCstDateTimeString } from '../infra/time.js';
+import { NotifyService } from '../infra/notify.js';
+import { sendSuccess, sendError } from '../infra/reply.js';
 
-export const systemRoutes: FastifyPluginAsync<{
-  manager: ProfileManager;
-  authContext: AuthContext;
-}> = async (fastify, { manager, authContext }) => {
-  const { verifyAuth } = authContext;
+export const systemRoutes: FastifyPluginAsync<{ manager: ProfileManager }> = async (fastify, { manager }) => {
 
   // 0. 容器健康检查与监控探针接口 (无需鉴权，供 Docker / K8s / 探针使用)
   fastify.get('/api/health', async () => {
@@ -22,7 +21,8 @@ export const systemRoutes: FastifyPluginAsync<{
       if (acc.desktops) {
         totalDesktops += acc.desktops.length;
         for (const d of acc.desktops) {
-          if (d.status === 'running') onlineDesktops++;
+          // 保活在线 = connected；yielding = paused (前台/官方客户端占用让位)
+          if (d.status === 'connected') onlineDesktops++;
           if (d.status === 'paused') pausedDesktops++;
         }
       }
@@ -34,7 +34,7 @@ export const systemRoutes: FastifyPluginAsync<{
 
     return {
       status: 'healthy',
-      version: '3.0.1',
+      version: APP_VERSION,
       uptime: Math.floor(process.uptime()),
       timestamp: getCstDateTimeString(),
       metrics: {
@@ -54,13 +54,11 @@ export const systemRoutes: FastifyPluginAsync<{
   });
 
   // 1. 获取系统状态 & 账号列表
-  fastify.get('/api/status', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!verifyAuth(request, reply)) return;
+  fastify.get('/api/status', async (_request: FastifyRequest, reply: FastifyReply) => {
     return sendSuccess(reply, {
-      version: '3.0.1',
+      version: APP_VERSION,
       needAuth: Boolean(manager.adminPassword),
       webhookUrl: manager.webhookUrl,
-      keepAliveSeconds: manager.keepAliveSeconds,
       accounts: manager.getAccountsSummary(),
     });
   });
@@ -71,18 +69,13 @@ export const systemRoutes: FastifyPluginAsync<{
     async (
       request: FastifyRequest<{
         Body: {
-          keepAliveSeconds?: number;
           adminPassword?: string;
           webhookUrl?: string;
         };
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const body = request.body || {};
-      if (body.keepAliveSeconds !== undefined && body.keepAliveSeconds >= 10) {
-        manager.keepAliveSeconds = body.keepAliveSeconds;
-      }
       if (body.adminPassword !== undefined) {
         manager.adminPassword = body.adminPassword.trim();
       }
@@ -90,7 +83,7 @@ export const systemRoutes: FastifyPluginAsync<{
         manager.webhookUrl = body.webhookUrl.trim();
       }
       manager.saveToDisk();
-      manager.addLog('info', '系统全局配置已持久化至 data/config.json');
+      manager.addLog('info', '系统全局配置已保存至 data/config.json', {});
       return sendSuccess(reply, null, '系统配置已保存');
     },
   );
@@ -106,7 +99,6 @@ export const systemRoutes: FastifyPluginAsync<{
       }>,
       reply: FastifyReply,
     ) => {
-      if (!verifyAuth(request, reply)) return;
       const body = request.body || {};
       const targetUrl = (body.webhookUrl || manager.webhookUrl || '').trim();
       if (!targetUrl) {
@@ -114,7 +106,7 @@ export const systemRoutes: FastifyPluginAsync<{
       }
 
       const nowStr = getCstDateTimeString();
-      const success = await sendWebhookNotification(
+      const success = await NotifyService.sendNotification(
         targetUrl,
         'CTYUN-PRO - Webhook 通知测试',
         `Webhook 消息通知已成功连通。\n\n• 测试结果: 通信正常\n• 发送时间: ${nowStr}\n• 推送规则: 严格精简推送，仅在凭证失效、兑换成功、重试熔断及每日早报 (09:00) 时通知，杜绝日常琐碎流水刷屏。`,
@@ -129,21 +121,19 @@ export const systemRoutes: FastifyPluginAsync<{
   );
 
   // 1.3 导出安全配置备份
-  fastify.get('/api/config/export', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!verifyAuth(request, reply)) return;
+  fastify.get('/api/config/export', async (_request: FastifyRequest, reply: FastifyReply) => {
     return sendSuccess(reply, manager.exportConfigSafe());
   });
 
   // 1.4 导入配置备份
   fastify.post('/api/config/import', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!verifyAuth(request, reply)) return;
     try {
       const body = request.body;
       const res = manager.importConfigSafe(body);
-      manager.addLog('info', `配置导入成功，已恢复 ${res.importedAccounts} 个账号配置`);
+      manager.addLog('info', `配置导入成功，已恢复 ${res.importedAccounts} 个账号配置`, {});
       return sendSuccess(reply, res, `配置恢复成功，已导入 ${res.importedAccounts} 个账号配置`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorText(err);
       return sendError(reply, `配置导入失败: ${msg}`);
     }
   });

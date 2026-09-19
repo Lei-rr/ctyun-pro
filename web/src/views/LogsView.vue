@@ -35,15 +35,14 @@ watch(
 
 onMounted(() => {
   scrollToBottom();
-  // 若 WS 尚未连上，开启 SSE 兜底推流
-  // 优先直接使用同源 Cookie 鉴权建立 SSE 连接，避免在 URL 中暴露 token
+  // WS 未连通时用 SSE 兜底 (同源 Cookie 鉴权)
   if (!store.isWsConnected) {
     es = new EventSource('/api/logs/stream');
     es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'init') {
-           store.initLogs(data.logs);
+          store.initLogs(data.logs);
         } else if (data.type === 'log') {
           store.appendLog(data.log);
         }
@@ -67,11 +66,9 @@ onUnmounted(() => {
           <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
           <span class="relative inline-flex size-2 rounded-full bg-emerald-500"></span>
         </span>
-        <span class="font-medium text-foreground">
-          实时日志
-        </span>
+        <span class="font-medium text-foreground">实时日志</span>
         <Badge variant="secondary" class="h-5 px-1.5 text-[10px] font-mono shrink-0 ml-1">
-           {{ store.logs.length }} / 1000 条
+          {{ store.logs.length }} / 1000 条
         </Badge>
       </div>
 
@@ -108,19 +105,24 @@ onUnmounted(() => {
       <div
         v-for="log in store.logs"
         :key="log.id"
-        class="leading-relaxed flex items-start gap-2.5 break-all select-text hover:bg-muted/30 px-1.5 py-0.5 rounded transition-colors"
+        class="leading-relaxed flex items-start gap-2 break-all select-text hover:bg-muted/30 px-1.5 py-0.5 rounded transition-colors"
       >
         <span class="text-muted-foreground/60 select-none shrink-0">[{{ log.time }}]</span>
-        <span
-          class="flex-1"
-          :class="{
-            'text-emerald-600 dark:text-emerald-400': log.level === 'success',
-            'text-foreground': log.level === 'info',
-            'text-amber-600 dark:text-amber-400': log.level === 'warn',
-            'text-rose-600 dark:text-rose-400 font-semibold': log.level === 'error',
-          }"
-        >
-          {{ log.message }}
+        <span class="flex-1">
+          <span v-if="log.account" class="text-muted-foreground select-none">
+            [{{ log.account }}]<template v-if="log.desktop"> [{{ log.desktop }}]</template>
+          </span>
+          <span
+            class="ml-1.5"
+            :class="{
+              'text-emerald-600 dark:text-emerald-400': log.level === 'success',
+              'text-foreground': log.level === 'info',
+              'text-amber-600 dark:text-amber-400': log.level === 'warn',
+              'text-rose-600 dark:text-rose-400 font-semibold': log.level === 'error',
+            }"
+          >
+            {{ log.message }}
+          </span>
           <span
             v-if="log.count && log.count > 1"
             class="ml-1.5 inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-sky-500/15 text-sky-600 dark:bg-sky-400/20 dark:text-sky-300 border border-sky-500/30 select-none leading-none align-middle"

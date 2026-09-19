@@ -1,3 +1,2 @@
-export { confirmDialog, confirmDelete, confirmState, settleConfirm } from './confirm'
-export type { ConfirmOptions } from './types'
+export { confirmDelete } from './confirm'
 export { default as ConfirmHost } from './ConfirmHost.vue'

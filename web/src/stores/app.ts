@@ -51,10 +51,14 @@ export interface Account {
   desktops: Desktop[];
 }
 
+export type LogLevel = 'info' | 'warn' | 'error' | 'success';
+
 export interface LogItem {
   id: number;
   time: string;
-  level: 'info' | 'warn' | 'error' | 'success';
+  level: LogLevel;
+  account?: string;
+  desktop?: string;
   message: string;
   count?: number;
 }
@@ -214,37 +218,17 @@ export const useAppStore = defineStore('app', () => {
     logs.value = (newLogs || []).slice(-1000);
   }
 
-  // 智能折叠日志插入：在当前末尾连续心跳波次（Block）内寻找同款心跳折叠，遇到业务日志立即打断
+  /**
+   * 日志插入 (服务端已完成相邻折叠与计数)：
+   * - 若为已存在 id (折叠更新)，原位删除后追加至末尾；
+   * - 否则直接追加并裁剪到 1000 条。
+   */
   function appendLog(incoming: LogItem) {
-    const isHeartbeat = incoming.message && incoming.message.includes('发送客户端活跃心跳');
-    let found = false;
-    if (isHeartbeat) {
-      for (let i = logs.value.length - 1; i >= 0; i--) {
-        const item = logs.value[i];
-        const itemIsHeartbeat = item.message && item.message.includes('发送客户端活跃心跳');
-        if (!itemIsHeartbeat) {
-          // 遇到业务/报警日志，停止回溯
-          break;
-        }
-        if (
-          item.id === incoming.id ||
-          (item.message === incoming.message && item.level === incoming.level)
-        ) {
-          const [matched] = logs.value.splice(i, 1);
-          matched.count = incoming.count || (matched.count || 1) + 1;
-          matched.time = incoming.time;
-          logs.value.push(matched);
-          found = true;
-          break;
-        }
-      }
-    }
-
-    if (!found) {
-      logs.value.push(incoming);
-      if (logs.value.length > 1000) {
-        logs.value.splice(0, logs.value.length - 1000);
-      }
+    const idx = logs.value.findIndex((l) => l.id === incoming.id);
+    if (idx !== -1) logs.value.splice(idx, 1);
+    logs.value.push(incoming);
+    if (logs.value.length > 1000) {
+      logs.value.splice(0, logs.value.length - 1000);
     }
   }
 
@@ -726,12 +710,14 @@ export const useAppStore = defineStore('app', () => {
   const policyTargetDesktop = ref('');
   const policyDesktops = ref<Desktop[]>([]);
   const policyTargetProdId = ref<number | ''>(17024101);
+  const policyRedeemCount = ref(1);
   const LOCAL_DEFAULT_REWARDS = [
     {
       prodId: 17023101,
       prodName: '8C16G升配包1天',
       costPoints: 500,
       prodType: 'pointstplupgrade',
+      costPointType: 1,
       description: '可将AI云电脑（公众版、政企版）升配至8C16G，最多支持兑换365天；规格升配、重置均会重启AI云电脑，请注意保存数据',
     },
     {
@@ -739,13 +725,31 @@ export const useAppStore = defineStore('app', () => {
       prodName: '16C32G升配包1天',
       costPoints: 1000,
       prodType: 'pointstplupgrade',
+      costPointType: 1,
       description: '可将AI云电脑（政企版）升配至16C32G，最多支持兑换365天；规格升配、恢复均会重启AI云电脑，请注意保存数据',
+    },
+    {
+      prodId: 17026101,
+      prodName: 'XC云电脑8C16G升配包',
+      costPoints: 500,
+      prodType: 'pointstplupgrade',
+      costPointType: 10,
+      description: 'XC云电脑规格升配包，规格升配会重启AI云电脑，请注意保存数据',
+    },
+    {
+      prodId: 17026111,
+      prodName: 'XC云电脑16C32G升配包',
+      costPoints: 1000,
+      prodType: 'pointstplupgrade',
+      costPointType: 10,
+      description: 'XC云电脑规格升配包，规格升配会重启AI云电脑，请注意保存数据',
     },
     {
       prodId: 17021101,
       prodName: '天翼AI云手机1个月试用',
       costPoints: 9000,
       prodType: 'pointscomputer',
+      costPointType: 1,
       description: '权益：天翼AI云手机包月不限时，有效期1个月',
     },
     {
@@ -753,6 +757,7 @@ export const useAppStore = defineStore('app', () => {
       prodName: '游戏AI云电脑包月5小时试用',
       costPoints: 7500,
       prodType: 'pointscomputer',
+      costPointType: 1,
       description: '权益：游戏AI云电脑包月5小时试用，有效期1个月',
     },
     {
@@ -760,6 +765,7 @@ export const useAppStore = defineStore('app', () => {
       prodName: '专属智库1G存储空间',
       costPoints: 1000,
       prodType: 'cpcai',
+      costPointType: 1,
       description: '权益：基于当前AI应用中心存储空间，叠加1G存储空间，每月限兑5次',
     },
     {
@@ -767,6 +773,7 @@ export const useAppStore = defineStore('app', () => {
       prodName: 'AI应用中心高级版',
       costPoints: 1000,
       prodType: 'cpcai',
+      costPointType: 1,
       description: '权益：AI应用中心高级版，支持DeepSeek满血版、专属智库等，有效期1个月',
     },
     {
@@ -774,12 +781,13 @@ export const useAppStore = defineStore('app', () => {
       prodName: '1G数据盘永久扩容',
       costPoints: 1200,
       prodType: 'pointsdiskupgrade',
+      costPointType: 1,
       description: '兑换后，将自动创建1个新数据盘，该盘仅支持积分扩容，最大不超过500GB',
     },
   ];
 
   function sortRewardsList(items: any[]) {
-    const priorityOrder = [17023101, 17023111, 17021101, 17022101, 17010101, 17020101, 17024101];
+    const priorityOrder = [17023101, 17023111, 17026101, 17026111, 17021101, 17022101, 17010101, 17020101, 17024101];
     return [...items].sort((a, b) => {
       const idxA = priorityOrder.indexOf(Number(a.prodId));
       const idxB = priorityOrder.indexOf(Number(b.prodId));
@@ -796,7 +804,12 @@ export const useAppStore = defineStore('app', () => {
       prodName: string;
       costPoints: number;
       prodType: string;
+      costPointType?: number;
       description: string;
+      orderCount?: number;
+      userLimitCount?: number;
+      totalCount?: number;
+      totalLimitSize?: number;
     }>
   >(sortRewardsList(LOCAL_DEFAULT_REWARDS));
   const policyLoading = ref(false);
@@ -838,6 +851,7 @@ export const useAppStore = defineStore('app', () => {
     policySpecificDate.value = r.specificDate || '';
     policyTargetDesktop.value = r.targetDesktopId || '';
     policyTargetProdId.value = r.targetProdId ? Number(r.targetProdId) : 17024101;
+    policyRedeemCount.value = Number(r.redeemCount) > 0 ? Number(r.redeemCount) : 1;
     policyDesktops.value = account.desktops || [];
     showPolicyModal.value = true;
 
@@ -880,6 +894,8 @@ export const useAppStore = defineStore('app', () => {
             costPoints: selectedProd?.costPoints || 1200,
             prodType: selectedProd?.prodType || 'pointsdiskupgrade',
             targetReward: selectedProd?.prodName || '1G数据盘永久扩容',
+            costPointType: selectedProd?.costPointType || 1,
+            redeemCount: policyRedeemCount.value > 0 ? policyRedeemCount.value : 1,
             fallbackDays: 4,
           },
         }),
@@ -922,6 +938,7 @@ export const useAppStore = defineStore('app', () => {
     const prodId = policyTargetProdId.value;
     const prodType = r?.prodType;
     const desktopId = policyTargetDesktop.value || undefined;
+    const costPointType = r?.costPointType;
 
     try {
       const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/redeem`, {
@@ -933,6 +950,8 @@ export const useAppStore = defineStore('app', () => {
           costPoints: cost,
           prodType,
           desktopId,
+          costPointType,
+          count: policyRedeemCount.value > 0 ? policyRedeemCount.value : 1,
         }),
       });
       const json = await res.json();
@@ -1033,6 +1052,22 @@ export const useAppStore = defineStore('app', () => {
       if (!json.success) throw new Error(json.msg || '获取积分详情失败');
       return json.data;
     },
+    fetchPointDetailList: async (
+      accountUserOrName: string,
+      options: { pageNum?: number; pageSize?: number; msgType?: number } = {},
+    ) => {
+      const params = new URLSearchParams();
+      params.set('pageNum', String(options.pageNum || 1));
+      params.set('pageSize', String(options.pageSize || 10));
+      if (options.msgType) params.set('msgType', String(options.msgType));
+      const res = await fetch(
+        `/api/profiles/${encodeURIComponent(accountUserOrName)}/points/detail?${params.toString()}`,
+        { headers: getHeaders() },
+      );
+      const json = await res.json();
+      if (!json.success) throw new Error(json.msg || '获取积分明细失败');
+      return json.data;
+    },
     connectWebSocket,
     disconnectWebSocket,
     isWsConnected,
@@ -1047,6 +1082,7 @@ export const useAppStore = defineStore('app', () => {
     policyTargetDesktop,
     policyDesktops,
     policyTargetProdId,
+    policyRedeemCount,
     policyRewards,
     policyRewardsLoading,
     refreshPolicyRewards,

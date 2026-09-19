@@ -1,0 +1,378 @@
+import { EventEmitter } from 'events';
+import { errorText } from '../../infra/http.js';
+import { normalizeDesktopState, normalizeUseStatusText, type CtYunClient, type Desktop, type DesktopInfo } from '../../ctyun/client.js';
+import { KeepAliveWorker } from './worker.js';
+import type { Logger } from '../../infra/logger.js';
+import type { ManagedDesktopState } from '../../types.js';
+export type { ManagedDesktopState };
+
+/**
+ * 现代化静默保活服务模块 (Keepalive Service)
+ *
+ * 核心设计（三大极简控制原则）：
+ * 1. 保活与任务：WebSocket 长连接维持 30 秒客户端活跃心跳；
+ * 2. 项目内远程桌面：进入 /desktop/:desktopCode 时由 ProfileManager 暂停保活，关闭后 20s 防抖精准恢复；
+ * 3. 官方客户端避让：收到 4001（Type 119）保活立即断开让位并触发 paused 事件，由看门狗探针检测自愈。
+ */
+export class KeepaliveService extends EventEmitter {
+  private workers: Map<string, KeepAliveWorker[]> = new Map();
+  private logger: Logger;
+  private onStateChange?: () => void;
+  // 同账号防并发 Worker 同步锁
+  private syncWorkersPromises: Map<string, Promise<void>> = new Map();
+
+  constructor(logger: Logger, onStateChange?: () => void) {
+    super();
+    this.logger = logger;
+    this.onStateChange = onStateChange;
+  }
+
+  /**
+   * 停止指定账号下的所有保活 Worker
+   */
+  public stopWorkers(accountName: string): void {
+    const list = this.workers.get(accountName);
+    if (list) {
+      for (const w of list) {
+        try {
+          w.stop();
+        } catch {}
+      }
+      this.workers.delete(accountName);
+    }
+  }
+
+  /**
+   * 停止单台云电脑的保活 Worker
+   */
+  public stopWorkerForDesktop(accountName: string, desktopCodeOrId: string): void {
+    const list = this.workers.get(accountName);
+    if (!list) return;
+
+    const remaining: KeepAliveWorker[] = [];
+    for (const w of list) {
+      const d = w.options?.desktop;
+      if (d && (d.desktopCode === desktopCodeOrId || String(d.desktopId) === String(desktopCodeOrId))) {
+        try {
+          w.stop();
+        } catch {}
+      } else {
+        remaining.push(w);
+      }
+    }
+    if (remaining.length > 0) {
+      this.workers.set(accountName, remaining);
+    } else {
+      this.workers.delete(accountName);
+    }
+  }
+
+  /**
+   * 暂停单台云电脑的保活 Worker
+   */
+  public pauseWorkerForDesktop(accountName: string, desktopCodeOrId: string): boolean {
+    const list = this.workers.get(accountName);
+    if (!list || list.length === 0) return false;
+
+    for (const w of list) {
+      const d = w.options?.desktop;
+      const targetKey = d?.desktopCode || String(d?.desktopId || '');
+      if (targetKey === desktopCodeOrId || String(d?.desktopId) === desktopCodeOrId) {
+        try {
+          w.pause();
+          return true;
+        } catch {}
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 恢复单台云电脑的保活 Worker
+   */
+  public async resumeWorkerForDesktop(accountName: string, desktopCodeOrId: string): Promise<boolean> {
+    const list = this.workers.get(accountName);
+    if (!list || list.length === 0) return false;
+
+    for (const w of list) {
+      const d = w.options?.desktop;
+      const targetKey = d?.desktopCode || String(d?.desktopId || '');
+      if (targetKey === desktopCodeOrId || String(d?.desktopId) === desktopCodeOrId) {
+        const dName = d?.desktopName || d?.computerName || d?.name || targetKey;
+        this.logger.addLog('info', '正在申请连接凭据并恢复保活', { account: accountName, desktop: dName });
+        w.needsFreshTicket = true;
+        w.resume();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 停止全部保活工作者
+   */
+  public stopAll(): void {
+    for (const [, workers] of this.workers.entries()) {
+      for (const w of workers) {
+        try {
+          w.stop();
+        } catch {}
+      }
+    }
+    this.workers.clear();
+  }
+
+  /**
+   * 核心保活调度：按最新云电脑列表智能创建、维持受控保活连接
+   */
+  public async syncWorkersForAccount(
+    accountName: string,
+    client: CtYunClient,
+    desktops: Desktop[],
+    desktopStates: ManagedDesktopState[],
+    isManualShutdown?: (desktopId: string) => boolean,
+    isWebActive?: (desktopId: string) => boolean,
+  ): Promise<void> {
+    if (!client.loginInfo) return;
+
+    const existingPromise = this.syncWorkersPromises.get(accountName);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    const task = (async () => {
+      try {
+        await this._doSyncWorkersForAccount(accountName, client, desktops, desktopStates, isManualShutdown, isWebActive);
+      } finally {
+        this.syncWorkersPromises.delete(accountName);
+      }
+    })();
+
+    this.syncWorkersPromises.set(accountName, task);
+    return task;
+  }
+
+  private async _doSyncWorkersForAccount(
+    accountName: string,
+    client: CtYunClient,
+    desktops: Desktop[],
+    desktopStates: ManagedDesktopState[],
+    isManualShutdown?: (desktopId: string) => boolean,
+    isWebActive?: (desktopId: string) => boolean,
+  ): Promise<void> {
+    if (!client.loginInfo) return;
+
+    const existingWorkers = this.workers.get(accountName) || [];
+
+    // 仅补建缺失的 Worker；已运行或已让位暂停的 Worker 原样保留，杜绝无谓重连踢号
+    const keptWorkers: KeepAliveWorker[] = [];
+    const toCreate: Array<{ desktop: Desktop; state?: ManagedDesktopState }> = [];
+
+    for (let i = 0; i < desktops.length; i++) {
+      const d = desktops[i];
+      const state = desktopStates[i];
+      const dCode = d.desktopCode || d.desktopId;
+      const dName = d.desktopName || d.computerName || d.name || dCode;
+
+      if (isManualShutdown && isManualShutdown(dCode)) {
+        if (state) {
+          state.status = 'stopped';
+          state.useStatusText = '已关机';
+        }
+        this.logger.addLog('info', '手动关机锁定中，跳过唤醒与保活', { account: accountName, desktop: dName });
+        continue;
+      }
+
+      // 已存在的 Worker：保持连接不断开（运行中或已被动让位暂停均保留）
+      const existing = existingWorkers.find((w) => {
+        const dd = w.options?.desktop;
+        return String(dd?.desktopCode) === String(d.desktopCode) || String(dd?.desktopId) === String(d.desktopId);
+      });
+      if (existing && (existing.isRunning || existing.isPaused)) {
+        keptWorkers.push(existing);
+        continue;
+      }
+
+      // 前台 Web 用户避让拦截：不建立保活连接，避免顶掉正在浏览器直连操作的用户
+      if (isWebActive && (isWebActive(dCode) || (d.desktopId && isWebActive(String(d.desktopId))))) {
+        if (state) {
+          state.status = 'paused';
+          state.useStatusText = '前台操作中';
+        }
+        this.logger.addLog('info', '前台操作中，暂不建立保活 (让位)', { account: accountName, desktop: dName });
+        continue;
+      }
+      toCreate.push({ desktop: d, state });
+    }
+
+    this.workers.set(accountName, keptWorkers);
+
+    for (const { desktop: d, state } of toCreate) {
+      const dCode = d.desktopCode || d.desktopId;
+      const dName = d.desktopName || d.computerName || d.name || dCode;
+
+      // 开机/唤醒检测与自愈指令
+      let isRunning = normalizeUseStatusText(d.useStatusText) === 'running';
+      if (!isRunning) {
+        const textKind = normalizeUseStatusText(d.useStatusText);
+        const isSleep = textKind === 'suspended';
+        const isOff = textKind === 'stopped';
+        let cmdSent = false;
+
+        if (isSleep) {
+          this.logger.addLog('info', '云电脑休眠中，正在发送唤醒指令', { account: accountName, desktop: dName });
+          try {
+            await client.operateDesktop(d.desktopId, 'awake', d.objType);
+            this.logger.addLog('info', '唤醒指令已发送，等待启动就绪 (最长 5 分钟)', { account: accountName, desktop: dName });
+            cmdSent = true;
+          } catch (e) {
+            const err = errorText(e);
+            this.logger.addLog('error', `唤醒失败: ${err}`, { account: accountName, desktop: dName });
+          }
+        } else if (isOff) {
+          this.logger.addLog('info', '云电脑已关机，正在发送开机指令', { account: accountName, desktop: dName });
+          try {
+            await client.operateDesktop(d.desktopId, 'on', d.objType);
+            this.logger.addLog('info', '开机指令已发送，等待启动就绪 (最长 5 分钟)', { account: accountName, desktop: dName });
+            cmdSent = true;
+          } catch (e) {
+            const err = errorText(e);
+            this.logger.addLog('error', `开机失败: ${err}`, { account: accountName, desktop: dName });
+          }
+        }
+
+        if (cmdSent) {
+          if (state) {
+            state.status = 'connecting';
+            state.useStatusText = isSleep ? '唤醒中' : '启动中';
+            this.onStateChange?.();
+          }
+
+          const MAX_ATTEMPTS = 10;
+          const POLL_INTERVAL = 30000;
+          let ready = false;
+
+          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+            try {
+              const stateRes = await client.getDesktopState(d.desktopId, d.objType);
+              let statusText = stateRes?.useStatusText || '';
+              const desktopState = stateRes?.desktopState || '';
+
+              if (!statusText && !desktopState) {
+                const list = await client.getDesktopList();
+                const current = list.find((item) => String(item.desktopCode) === String(d.desktopCode) || String(item.desktopId) === String(d.desktopId));
+                statusText = current?.useStatusText || '';
+              }
+
+              // 就绪判定: desktopState 枚举 ACTIVE 或 useStatusText 归一化为运行态
+              const isReady =
+                normalizeDesktopState(desktopState) === 'running' ||
+                normalizeUseStatusText(statusText) === 'running';
+
+              if (isReady) {
+                ready = true;
+                if (statusText) d.useStatusText = statusText;
+                if (state) {
+                  state.useStatusText = statusText || '运行中';
+                  this.onStateChange?.();
+                }
+                this.logger.addLog('info', '云电脑已就绪，开始建立保活连接', { account: accountName, desktop: dName });
+                break;
+              } else {
+                this.logger.addLog(
+                  'info',
+                  `启动中，等待就绪 (第 ${attempt}/${MAX_ATTEMPTS} 次${statusText || desktopState ? ' · ' + (statusText || desktopState) : ''})`,
+                  { account: accountName, desktop: dName, foldKey: 'keepalive:boot' },
+                );
+              }
+            } catch (pollErr) {
+              const errMsg = errorText(pollErr);
+              this.logger.addLog('warn', `状态轮询异常 (第 ${attempt}/${MAX_ATTEMPTS} 次): ${errMsg}`, { account: accountName, desktop: dName });
+            }
+          }
+
+          if (!ready) {
+            this.logger.addLog('warn', '启动等待超时 (5 分钟)，看门狗稍后自动巡检', { account: accountName, desktop: dName });
+            continue;
+          }
+        }
+      }
+
+      // 获取保活长连接凭证 (Ticket)
+      let info: DesktopInfo | null = null;
+      try {
+        info = await client.connectDesktop(d);
+      } catch (err) {
+        const msg = errorText(err);
+        this.logger.addLog('error', `申请连接凭据失败: ${msg}`, { account: accountName, desktop: dName });
+      }
+
+      if (!info) {
+        continue;
+      }
+
+      try {
+        d.desktopInfo = info;
+
+        const workerInstance = new KeepAliveWorker({
+          accountName,
+          desktop: d,
+          desktopInfo: info,
+          loginInfo: client.loginInfo,
+          deviceCode: client.getDeviceCode(),
+          onLog: (level, msg, meta) =>
+            this.logger.addLog(level, msg, {
+              account: accountName,
+              desktop: dName,
+              foldKey: meta?.foldKey,
+            }),
+          onStatusChange: (status) => {
+            if (state) {
+              state.status = status;
+              if (status === 'connected') {
+                state.useStatusText = '运行中';
+              }
+              if (status === 'paused') {
+                this.emit('desktop:paused', { accountName, desktopId: d.desktopId, desktopCode: d.desktopCode });
+              }
+            }
+            this.onStateChange?.();
+          },
+          onPreempted: (code, reason) => {
+            this.emit('desktop:paused', { accountName, desktopId: d.desktopId, desktopCode: d.desktopCode });
+            this.emit('worker:preempted', { accountName, desktopCode: d.desktopCode, desktopId: d.desktopId, code, reason });
+          },
+          onHeartbeat: () => {
+            if (state) {
+              state.lastHeartbeat = new Date().toLocaleTimeString('zh-CN', {
+                timeZone: 'Asia/Shanghai',
+                hour12: false,
+              });
+              state.useStatusText = '运行中';
+            }
+            this.onStateChange?.();
+          },
+          onRefreshInfo: async () => {
+            // 关键自愈：强制要求官方签发全新凭据 (forceFresh=true)
+            const newInfo = await client.connectDesktop(d, 0, true);
+            if (newInfo && newInfo.clinkLvsOutHost) {
+              d.desktopInfo = newInfo;
+              return newInfo;
+            }
+            throw new Error('调度中心未返回有效网关凭据');
+          },
+        });
+
+        workerInstance.start();
+        keptWorkers.push(workerInstance);
+        this.workers.set(accountName, [...keptWorkers]);
+      } catch (err) {
+        const msg = errorText(err);
+        this.logger.addLog('error', `保活连接建立失败: ${msg}`, { account: accountName, desktop: dName });
+      }
+    }
+
+    this.workers.set(accountName, keptWorkers);
+  }
+}

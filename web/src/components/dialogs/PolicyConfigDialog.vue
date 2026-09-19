@@ -16,7 +16,7 @@ const store = useAppStore();
     :description="`配置账号 [${store.policyAccount}] 的每日自动任务与积分兑换`"
     content-class="sm:max-w-md"
   >
-    <div class="space-y-4">
+    <div class="min-w-0 space-y-4">
       <!-- 模块 1: 每日自动 AI 对话任务 (06:00~08:00 随机错峰执行) -->
       <div class="p-4 rounded-xl bg-muted/40 border border-border/40 space-y-3.5">
         <div class="flex items-center justify-between">
@@ -29,7 +29,7 @@ const store = useAppStore();
       </div>
 
       <!-- 模块 2: 自动兑换 -->
-      <div class="p-4 rounded-xl bg-muted/40 border border-border/40 space-y-3.5">
+      <div class="min-w-0 p-4 rounded-xl bg-muted/40 border border-border/40 space-y-3.5">
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm font-medium text-foreground">自动兑换商品</div>
@@ -39,19 +39,28 @@ const store = useAppStore();
         </div>
 
         <div v-if="store.policyRedeemEnabled" class="pt-3 space-y-3 border-t border-border/40">
-          <div class="space-y-1.5">
+          <div class="min-w-0 space-y-1.5">
             <label class="text-xs font-medium text-foreground">目标商品</label>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 min-w-0">
               <select
                 v-model="store.policyTargetProdId"
-                class="flex-1 h-9 px-3 text-xs rounded-lg bg-background border border-input text-foreground focus:outline-none focus:ring-1 focus:ring-ring min-w-0"
+                class="flex-1 w-0 min-w-0 h-9 px-3 text-xs rounded-lg bg-background border border-input text-foreground focus:outline-none focus:ring-1 focus:ring-ring truncate"
+                :title="store.policyRewards.find(r => r.prodId === store.policyTargetProdId)?.prodName || ''"
               >
                 <option
                   v-for="item in store.policyRewards"
                   :key="item.prodId"
                   :value="item.prodId"
                 >
-                  {{ item.prodName }} ({{ item.costPoints }} 积分)
+                  {{ item.prodName }} ({{ item.costPoints }} 积分){{
+                    typeof item.totalLimitSize === 'number' && item.totalLimitSize > -1
+                      ? ` · 剩${Math.max(0, item.totalLimitSize - (item.totalCount || 0))}/${item.totalLimitSize}`
+                      : ''
+                  }}{{
+                    typeof item.userLimitCount === 'number' && item.userLimitCount !== -1
+                      ? ` · 本期已兑${item.orderCount || 0}/${item.userLimitCount}`
+                      : ''
+                  }}
                 </option>
                 <option v-if="store.policyRewards.length === 0" value="" disabled>
                   暂无官方商品数据
@@ -73,10 +82,24 @@ const store = useAppStore();
           </div>
 
           <div class="space-y-1.5">
+            <label class="text-xs font-medium text-foreground">单次兑换数量</label>
+            <Input
+              type="number"
+              v-model="store.policyRedeemCount"
+              min="1"
+              max="500"
+              class="h-9 text-xs"
+            />
+            <div class="text-[10px] text-muted-foreground">
+              升配/扩容类商品官方要求兑换后重启云电脑方可生效，系统将自动下发重启指令
+            </div>
+          </div>
+
+          <div class="min-w-0 space-y-1.5">
             <label class="text-xs font-medium text-foreground">绑定云电脑实例</label>
             <select
               v-model="store.policyTargetDesktop"
-              class="w-full h-9 px-3 text-xs rounded-lg bg-background border border-input text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              class="w-full min-w-0 h-9 px-3 text-xs rounded-lg bg-background border border-input text-foreground focus:outline-none focus:ring-1 focus:ring-ring truncate"
             >
               <option value="">默认第一台云电脑</option>
               <option v-for="d in store.policyDesktops" :key="d.desktopCode" :value="d.desktopCode">

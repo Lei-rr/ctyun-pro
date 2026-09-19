@@ -31,15 +31,15 @@ const props = withDefaults(
         )
       "
     >
-      <DialogHeader v-if="title || description || $slots.header">
+      <DialogHeader v-if="title || description || $slots.header" class="min-w-0">
         <slot name="header">
-          <DialogTitle v-if="title">{{ title }}</DialogTitle>
-          <DialogDescription v-if="description">{{ description }}</DialogDescription>
+          <DialogTitle v-if="title" class="min-w-0 break-words">{{ title }}</DialogTitle>
+          <DialogDescription v-if="description" class="min-w-0 break-words">{{ description }}</DialogDescription>
         </slot>
       </DialogHeader>
 
-      <div class="min-h-0 max-h-[60dvh] sm:max-h-none touch-pan-y overflow-y-auto overscroll-contain px-0.5">
-        <div class="grid gap-3 sm:gap-4">
+      <div class="min-h-0 min-w-0 max-h-[60dvh] sm:max-h-none touch-pan-y overflow-y-auto overflow-x-hidden overscroll-contain px-0.5">
+        <div class="grid min-w-0 gap-3 sm:gap-4">
           <slot />
         </div>
       </div>
