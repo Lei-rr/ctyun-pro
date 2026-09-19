@@ -443,11 +443,17 @@ export class CtYunClient {
   /**
    * 4. 获取绑定设备短信图形验证码
    */
-  public async getSmsCodeCaptcha(): Promise<{ image: Buffer; captchaKey: string }> {
+  public async getSmsCodeCaptcha(userAccount: string): Promise<{ image: Buffer; captchaKey: string }> {
     const timestamp = Date.now();
-    const res = await this.requestBinary(
-      `/api/auth/client/validateCode/captcha?width=120&height=40&_t=${timestamp}`,
-    );
+    // 官方参数规范 (getCaptchaUrlAndKey): height/width/userAccount/mode/_t，缺失 userAccount 会返回非图片内容
+    const query = new URLSearchParams({
+      height: '40',
+      width: '120',
+      userAccount,
+      mode: 'auto',
+      _t: timestamp.toString(),
+    }).toString();
+    const res = await this.requestBinary(`/api/auth/client/validateCode/captcha?${query}`);
     if (!res.ok) {
       throw new Error(`获取短信验证码图验失败: HTTP ${res.status}`);
     }

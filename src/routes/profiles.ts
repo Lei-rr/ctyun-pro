@@ -301,7 +301,8 @@ export const profileRoutes: FastifyPluginAsync<{
       const acc = manager.getAccount(id);
       const name = acc?.name || id;
       const client = manager.getClient(name);
-      const { image, captchaKey } = await client.getSmsCodeCaptcha();
+      const userAccount = acc?.user || id;
+      const { image, captchaKey } = await client.getSmsCodeCaptcha(userAccount);
       if (captchaKey) {
         const cur = smsSessionCache.get(name) || { expireAt: 0 };
         cur.captchaKey = captchaKey;
