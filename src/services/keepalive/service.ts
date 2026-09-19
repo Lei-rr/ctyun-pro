@@ -99,7 +99,7 @@ export class KeepaliveService extends EventEmitter {
       const targetKey = d?.desktopCode || String(d?.desktopId || '');
       if (targetKey === desktopCodeOrId || String(d?.desktopId) === desktopCodeOrId) {
         const dName = d?.desktopName || d?.computerName || d?.name || targetKey;
-        this.logger.addLog('info', '正在申请全新凭据并恢复保活', { account: accountName, desktop: dName });
+        this.logger.addLog('info', '正在申请连接凭据并恢复保活', { account: accountName, desktop: dName });
         w.needsFreshTicket = true;
         w.resume();
         return true;
@@ -302,11 +302,10 @@ export class KeepaliveService extends EventEmitter {
       // 获取保活长连接凭证 (Ticket)
       let info: DesktopInfo | null = null;
       try {
-        this.logger.addLog('info', '正在申请长连接凭据', { account: accountName, desktop: dName });
         info = await client.connectDesktop(d);
       } catch (err) {
         const msg = errorText(err);
-        this.logger.addLog('error', `申请长连接凭据失败: ${msg}`, { account: accountName, desktop: dName });
+        this.logger.addLog('error', `申请连接凭据失败: ${msg}`, { account: accountName, desktop: dName });
       }
 
       if (!info) {

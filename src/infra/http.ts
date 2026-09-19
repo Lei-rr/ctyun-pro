@@ -25,7 +25,25 @@ export async function safeFetch(
   });
 }
 
-/** 提取异常信息 (统一 unknown 异常处理) */
+/**
+ * 提取异常信息 (统一 unknown 异常处理)
+ * Node fetch 的 TypeError('fetch failed') 会把真实原因放在 cause 中 (如 ECONNRESET/ENOTFOUND)，
+ * 必须展开 cause 否则日志无法定位网络故障
+ */
 export function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause) {
+    if (cause instanceof Error) {
+      const code = (cause as { code?: string }).code;
+      return `${err.message} (${code || cause.message})`;
+    }
+    if (typeof cause === 'object') {
+      const c = cause as { code?: string; message?: string };
+      const detail = c.code || c.message;
+      if (detail) return `${err.message} (${detail})`;
+    }
+    if (typeof cause === 'string') return `${err.message} (${cause})`;
+  }
+  return err.message;
 }
