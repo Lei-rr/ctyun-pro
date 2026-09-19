@@ -93,6 +93,25 @@ export function normalizeDesktopState(state?: string): 'running' | 'stopped' | '
   }
 }
 
+/**
+ * useStatusText 语义归一化 (服务端下发中文文案)
+ * 判定顺序: 休眠/关机 → 离线运行 → 否定词 → 运行/使用
+ */
+export function normalizeUseStatusText(text?: string): 'running' | 'stopped' | 'suspended' | 'unknown' {
+  const t = String(text || '').trim();
+  if (!t) return 'unknown';
+  // 1. 先判定停止/休眠类关键词 (优先级最高，避免被"未"误伤)
+  if (t.includes('休眠') || t.includes('睡眠') || t.includes('挂起')) return 'suspended';
+  if (t.includes('关机') || t.includes('停止')) return 'stopped';
+  // 2. 官方"离线运行"属运行态 (先于否定词判定)
+  if (t.includes('离线运行')) return 'running';
+  // 3. 否定词兜底: "未使用"/"未运行" 等不得判定为运行态
+  if (t.includes('未')) return 'unknown';
+  // 4. 运行/使用
+  if (t.includes('运行') || t.includes('使用')) return 'running';
+  return 'unknown';
+}
+
 export interface DesktopStateInfo {
   objType: number;
   objId: string;
@@ -240,7 +259,7 @@ export class CtYunClient {
       ? `${pathname}${this.encryptedSession.encryptQuery(query)}`
       : path;
 
-    const res = await safeFetch(`${baseUrl || CtYunClient.BASE_URL}${finalPath}`, {
+    const res = await safeFetch(`${baseUrl || this.activeApiBase}${finalPath}`, {
       ...rest,
       headers,
       body,
@@ -260,7 +279,7 @@ export class CtYunClient {
     const merged = this.encryptedSession.applyHeaders({ ...this.getHeaders(), ...headers });
     const [pathname, query] = path.split('?');
     const finalPath = query ? `${pathname}${this.encryptedSession.encryptQuery(query)}` : path;
-    return safeFetch(`${CtYunClient.BASE_URL}${finalPath}`, { headers: merged });
+    return safeFetch(`${this.activeApiBase}${finalPath}`, { headers: merged });
   }
 
   /**
@@ -794,8 +813,8 @@ export class CtYunClient {
 
     // 官方线路候选：主集群 → connectUrl 集群列表 → backupurl 备用节点
     const connectPath = connectMaster === 1 ? '/api/desktop/client/connectMaster' : '/api/desktop/client/connect';
-    const apiBases: string[] = [CtYunClient.BASE_URL];
-    for (const u of [...connectUrls, ...backupUrls]) {
+    const apiBases: string[] = [this.activeApiBase];
+    for (const u of [CtYunClient.BASE_URL, ...connectUrls, ...backupUrls]) {
       if (u && !apiBases.includes(u)) apiBases.push(u);
     }
 

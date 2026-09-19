@@ -1,7 +1,7 @@
 import { ProfileManager } from '../../manager.js';
 import { errorText } from '../../infra/http.js';
 import { Logger } from '../../infra/logger.js';
-import { normalizeDesktopState } from '../../ctyun/client.js';
+import { normalizeDesktopState, normalizeUseStatusText } from '../../ctyun/client.js';
 
 export interface WatchdogOptions {
   profileManager: ProfileManager;
@@ -179,13 +179,9 @@ export class WatchdogService {
       // 官方协议语义: desktopState=ACTIVE 表示实例处于运行态，官方客户端可能仍在占用。
       // useStatus 无"活跃会话"含义 (官方仅用于救援模式 87/88)，不得据此判断客户端是否在线。
       // 运行态下主动接入会触发服务端 exitDesktop 广播踢掉真机用户，因此仅对已休眠/关机实例接管。
-      const normalizedState = normalizeDesktopState(desktopState);
-      const isStoppedOrSleeping =
-        normalizedState === 'stopped' ||
-        normalizedState === 'suspended' ||
-        useStatusText.includes('关机') ||
-        useStatusText.includes('休眠') ||
-        useStatusText.includes('睡眠');
+      const stateKind = normalizeDesktopState(desktopState);
+      const textKind = normalizeUseStatusText(useStatusText);
+      const isStoppedOrSleeping = stateKind === 'stopped' || stateKind === 'suspended' || textKind === 'stopped' || textKind === 'suspended';
 
       if (!isStoppedOrSleeping) {
         state.consecutiveBusyCount += 1;

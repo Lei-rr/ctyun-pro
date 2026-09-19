@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { Config, DEFAULT_REDEEM_CONFIG, type AccountConfig } from './config.js';
-import { CtYunClient, type Desktop, type LoginInfo } from './ctyun/client.js';
+import { CtYunClient, normalizeUseStatusText, type Desktop, type LoginInfo } from './ctyun/client.js';
 import { KeepaliveService, type ManagedDesktopState } from './services/keepalive/service.js';
 import { WatchdogService } from './services/watchdog/service.js';
 import { Logger, type LogItem } from './infra/logger.js';
@@ -593,7 +593,7 @@ export class ProfileManager {
       
       if (isPowerOnOrAwake) {
         // 智能电源探测：若云电脑状态提示休眠或指定 awake，优先发 18 唤醒；若提示关机则发 1 开机；失败时双向回退互补
-        const isSleep = (desktop.useStatusText || '').includes('休眠') || (desktop.useStatusText || '').includes('睡眠') || operation === 'awake';
+        const isSleep = normalizeUseStatusText(desktop.useStatusText) === 'suspended' || operation === 'awake';
         const primaryOp: 'on' | 'awake' = isSleep ? 'awake' : 'on';
         const fallbackOp: 'on' | 'awake' = isSleep ? 'on' : 'awake';
 
@@ -832,9 +832,7 @@ export class ProfileManager {
 
     // 外部开机自愈：检测到实例已恢复运行态时解除本地手动关机锁定
     for (const d of list) {
-      const isRunning =
-        typeof d.useStatusText === 'string' &&
-        (d.useStatusText.includes('运行') || d.useStatusText.includes('使用'));
+      const isRunning = normalizeUseStatusText(d.useStatusText) === 'running';
       if (
         isRunning &&
         (this.isManualShutdown(d.desktopCode) || this.isManualShutdown(d.desktopId))

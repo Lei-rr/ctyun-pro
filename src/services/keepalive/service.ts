@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { errorText } from '../../infra/http.js';
-import { normalizeDesktopState, type CtYunClient, type Desktop, type DesktopInfo } from '../../ctyun/client.js';
+import { normalizeDesktopState, normalizeUseStatusText, type CtYunClient, type Desktop, type DesktopInfo } from '../../ctyun/client.js';
 import { KeepAliveWorker } from './worker.js';
 import type { Logger } from '../../infra/logger.js';
 import type { ManagedDesktopState } from '../../types.js';
@@ -216,10 +216,11 @@ export class KeepaliveService extends EventEmitter {
       const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
 
       // 开机/唤醒检测与自愈指令
-      let isRunning = d.useStatusText === '运行中' || d.useStatusText === '离线运行';
+      let isRunning = normalizeUseStatusText(d.useStatusText) === 'running';
       if (!isRunning) {
-        const isSleep = (d.useStatusText || '').includes('休眠') || (d.useStatusText || '').includes('睡眠');
-        const isOff = (d.useStatusText || '').includes('关机') || (d.useStatusText || '').includes('已停止');
+        const textKind = normalizeUseStatusText(d.useStatusText);
+        const isSleep = textKind === 'suspended';
+        const isOff = textKind === 'stopped';
         let cmdSent = false;
 
         if (isSleep) {
