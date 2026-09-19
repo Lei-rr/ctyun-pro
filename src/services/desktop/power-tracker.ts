@@ -61,7 +61,6 @@ export class DesktopPowerTracker {
 
         if (realStatusText && target) {
           const dName = target.desktopName || target.computerName || target.name || desktopId;
-          const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
           target.useStatusText = realStatusText;
           const statusKind = normalizeUseStatusText(realStatusText);
 
@@ -70,7 +69,7 @@ export class DesktopPowerTracker {
               clearInterval(timer);
               this.powerTrackingTimers.delete(trackingKey);
               target.status = 'connecting';
-              this.logger.addLog('success', `[${dPrefix}] 云电脑已成功开机，正在接入保活...`);
+              this.logger.addLog('success', '云电脑已开机，正在接入保活', { source: 'power', account: accountName, desktop: dName });
               this.delegate.notifyStatusChange();
               // 开机成功后通知上层就绪处理（如缓冲后接入 WS 保活）
               this.delegate.onPowerOnSuccess(accountName);
@@ -81,7 +80,7 @@ export class DesktopPowerTracker {
               clearInterval(timer);
               this.powerTrackingTimers.delete(trackingKey);
               target.status = 'stopped';
-              this.logger.addLog('info', `[${dPrefix}] 云电脑已安全关机，已锁定保活防止误唤醒`);
+              this.logger.addLog('info', '云电脑已安全关机，保活已锁定防误唤醒', { source: 'power', account: accountName, desktop: dName });
               this.delegate.notifyStatusChange();
               return;
             }
@@ -90,7 +89,7 @@ export class DesktopPowerTracker {
         }
       } catch (err) {
         const msg = errorText(err);
-        this.logger.addLog('warn', `[${accountName}] 电源状态轮询跟踪网络异常: ${msg}`);
+        this.logger.addLog('warn', `电源状态轮询异常: ${msg}`, { source: 'power', account: accountName });
       }
 
       if (attempts >= maxAttempts) {
@@ -98,8 +97,7 @@ export class DesktopPowerTracker {
         this.powerTrackingTimers.delete(trackingKey);
         const target = this.delegate.getDesktopState(accountName, desktopId);
         const dName = target?.desktopName || target?.computerName || target?.name || desktopId;
-        const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
-        this.logger.addLog('warn', `[${dPrefix}] 电源操作追踪已达 5 分钟上限，已结束实时追踪`);
+        this.logger.addLog('warn', '电源操作追踪已达 5 分钟上限，结束追踪', { source: 'power', account: accountName, desktop: dName });
         this.delegate.onPowerTimeout(accountName);
       }
     }, TRACK_INTERVAL_MS);

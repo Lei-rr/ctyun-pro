@@ -99,9 +99,7 @@ export class KeepaliveService extends EventEmitter {
       const targetKey = d?.desktopCode || String(d?.desktopId || '');
       if (targetKey === desktopCodeOrId || String(d?.desktopId) === desktopCodeOrId) {
         const dName = d?.desktopName || d?.computerName || d?.name || targetKey;
-        const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
-
-        this.logger.addLog('info', `[${dPrefix}] 正在申请全新凭据并唤醒恢复保活长连接...`);
+        this.logger.addLog('info', '正在申请全新凭据并恢复保活', { source: 'keepalive', account: accountName, desktop: dName });
         w.needsFreshTicket = true;
         w.resume();
         return true;
@@ -175,14 +173,13 @@ export class KeepaliveService extends EventEmitter {
       const state = desktopStates[i];
       const dCode = d.desktopCode || d.desktopId;
       const dName = d.desktopName || d.computerName || d.name || dCode;
-      const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
 
       if (isManualShutdown && isManualShutdown(dCode)) {
         if (state) {
           state.status = 'stopped';
           state.useStatusText = '已关机';
         }
-        this.logger.addLog('info', `[${dPrefix}] 处于手动关机锁定状态，跳过自动唤醒与保活`);
+        this.logger.addLog('info', '手动关机锁定中，跳过唤醒与保活', { source: 'keepalive', account: accountName, desktop: dName });
         continue;
       }
 
@@ -202,7 +199,7 @@ export class KeepaliveService extends EventEmitter {
           state.status = 'paused';
           state.useStatusText = '前台操作中';
         }
-        this.logger.addLog('info', `[${dPrefix}] 前台 Web 用户正在操作，跳过后台保活建立（让位中）`);
+        this.logger.addLog('info', '前台操作中，暂不建立保活 (让位)', { source: 'keepalive', account: accountName, desktop: dName });
         continue;
       }
       toCreate.push({ desktop: d, state });
@@ -213,7 +210,6 @@ export class KeepaliveService extends EventEmitter {
     for (const { desktop: d, state } of toCreate) {
       const dCode = d.desktopCode || d.desktopId;
       const dName = d.desktopName || d.computerName || d.name || dCode;
-      const dPrefix = dName ? `${accountName} - ${dName}` : accountName;
 
       // 开机/唤醒检测与自愈指令
       let isRunning = normalizeUseStatusText(d.useStatusText) === 'running';
@@ -224,24 +220,24 @@ export class KeepaliveService extends EventEmitter {
         let cmdSent = false;
 
         if (isSleep) {
-          this.logger.addLog('info', `[${dPrefix}] 云电脑处于休眠状态，正在发送唤醒指令...`);
+          this.logger.addLog('info', '云电脑休眠中，正在发送唤醒指令', { source: 'keepalive', account: accountName, desktop: dName });
           try {
             await client.operateDesktop(d.desktopId, 'awake', d.objType);
-            this.logger.addLog('info', `[${dPrefix}] 唤醒指令已发送，等待系统启动就绪 (最长等待 5 分钟)`);
+            this.logger.addLog('info', '唤醒指令已发送，等待启动就绪 (最长 5 分钟)', { source: 'keepalive', account: accountName, desktop: dName });
             cmdSent = true;
           } catch (e) {
             const err = errorText(e);
-            this.logger.addLog('error', `[${dPrefix}] 唤醒失败: ${err}`);
+            this.logger.addLog('error', `唤醒失败: ${err}`, { source: 'keepalive', account: accountName, desktop: dName });
           }
         } else if (isOff) {
-          this.logger.addLog('info', `[${dPrefix}] 云电脑处于关机状态，正在发送开机指令...`);
+          this.logger.addLog('info', '云电脑已关机，正在发送开机指令', { source: 'keepalive', account: accountName, desktop: dName });
           try {
             await client.operateDesktop(d.desktopId, 'on', d.objType);
-            this.logger.addLog('info', `[${dPrefix}] 开机指令已发送，等待系统启动就绪 (最长等待 5 分钟)`);
+            this.logger.addLog('info', '开机指令已发送，等待启动就绪 (最长 5 分钟)', { source: 'keepalive', account: accountName, desktop: dName });
             cmdSent = true;
           } catch (e) {
             const err = errorText(e);
-            this.logger.addLog('error', `[${dPrefix}] 开机失败: ${err}`);
+            this.logger.addLog('error', `开机失败: ${err}`, { source: 'keepalive', account: accountName, desktop: dName });
           }
         }
 
@@ -281,22 +277,23 @@ export class KeepaliveService extends EventEmitter {
                   state.useStatusText = statusText || '运行中';
                   this.onStateChange?.();
                 }
-                this.logger.addLog('info', `[${dPrefix}] 云电脑已启动就绪 (状态: ${statusText || '运行中'})，开始建立保活长连接`);
+                this.logger.addLog('info', `云电脑已就绪 (${statusText || '运行中'})，开始建立保活连接`, { source: 'keepalive', account: accountName, desktop: dName });
                 break;
               } else {
                 this.logger.addLog(
                   'info',
-                  `[${dPrefix}] 云电脑启动中 (第 ${attempt}/${MAX_ATTEMPTS} 次检测，当前状态: ${statusText || desktopState || '开机中'})，等待 30s 后复测...`
+                  `启动中，等待就绪 (第 ${attempt}/${MAX_ATTEMPTS} 次 · ${statusText || desktopState || '开机中'})`,
+                  { source: 'keepalive', account: accountName, desktop: dName, foldKey: `boot:${accountName}:${dName}` },
                 );
               }
             } catch (pollErr) {
               const errMsg = errorText(pollErr);
-              this.logger.addLog('warn', `[${dPrefix}] 状态轮询检测异常 (第 ${attempt}/${MAX_ATTEMPTS} 次): ${errMsg}`);
+              this.logger.addLog('warn', `状态轮询异常 (第 ${attempt}/${MAX_ATTEMPTS} 次): ${errMsg}`, { source: 'keepalive', account: accountName, desktop: dName });
             }
           }
 
           if (!ready) {
-            this.logger.addLog('warn', `[${dPrefix}] 云电脑启动等待超时 (已等待 5 分钟)，稍后看门狗探针将自动重新巡检`);
+            this.logger.addLog('warn', '启动等待超时 (5 分钟)，看门狗稍后自动巡检', { source: 'keepalive', account: accountName, desktop: dName });
             continue;
           }
         }
@@ -305,11 +302,11 @@ export class KeepaliveService extends EventEmitter {
       // 获取保活长连接凭证 (Ticket)
       let info: DesktopInfo | null = null;
       try {
-        this.logger.addLog('info', `[${dPrefix}] 正在向天翼云调度中心申请长连接凭据 (Ticket)...`);
+        this.logger.addLog('info', '正在申请长连接凭据', { source: 'keepalive', account: accountName, desktop: dName });
         info = await client.connectDesktop(d);
       } catch (err) {
         const msg = errorText(err);
-        this.logger.addLog('error', `[${dPrefix}] 申请长连接凭据失败: ${msg}`);
+        this.logger.addLog('error', `申请长连接凭据失败: ${msg}`, { source: 'keepalive', account: accountName, desktop: dName });
       }
 
       if (!info) {
@@ -325,7 +322,13 @@ export class KeepaliveService extends EventEmitter {
           desktopInfo: info,
           loginInfo: client.loginInfo,
           deviceCode: client.getDeviceCode(),
-          onLog: (level, msg) => this.logger.addLog(level, msg),
+          onLog: (level, msg, meta) =>
+            this.logger.addLog(level, msg, {
+              source: 'keepalive',
+              account: accountName,
+              desktop: dName,
+              foldKey: meta?.foldKey,
+            }),
           onStatusChange: (status) => {
             if (state) {
               state.status = status;
@@ -368,7 +371,7 @@ export class KeepaliveService extends EventEmitter {
         this.workers.set(accountName, [...keptWorkers]);
       } catch (err) {
         const msg = errorText(err);
-        this.logger.addLog('error', `[${dPrefix}] 保活连接建立失败: ${msg}`);
+        this.logger.addLog('error', `保活连接建立失败: ${msg}`, { source: 'keepalive', account: accountName, desktop: dName });
       }
     }
 

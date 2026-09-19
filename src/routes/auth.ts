@@ -228,7 +228,7 @@ export const authRoutes: FastifyPluginAsync<{
     manager.saveToDisk();
     sessions.clear();
     saveSessions();
-    manager.addLog('info', manager.adminPassword ? '已更新控制台管理密码' : '已取消控制台管理密码');
+    manager.addLog('info', manager.adminPassword ? '已更新控制台管理密码' : '已取消控制台管理密码', { source: 'api' });
     return sendSuccess(reply, null, manager.adminPassword ? '管理密码已更新' : '已取消管理密码');
   });
 };

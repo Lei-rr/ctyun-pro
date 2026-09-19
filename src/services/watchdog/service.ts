@@ -51,7 +51,7 @@ export class WatchdogService {
 
     const matched = this.profileManager.findDesktopByCode(desktopId);
     const dName = matched?.desktop?.desktopName || desktopId;
-    this.logger.addLog('info', `[${accountName} - ${dName}] 官方客户端在线，后台长连接暂停让位 (启动自愈看门狗探针)`);
+    this.logger.addLog('info', '检测到官方客户端在线，启动自愈探针 (保活让位中)', { source: 'watchdog', account: accountName, desktop: dName });
 
     const state: WatchdogState = {
       active: true,
@@ -84,7 +84,7 @@ export class WatchdogService {
       this.probeAndHeal(accountName, desktopId).catch((err) => {
         const matched = this.profileManager.findDesktopByCode(desktopId);
         const dName = matched?.desktop?.desktopName || desktopId;
-        this.logger.addLog('warn', `[${accountName} - ${dName}] 探针巡检异常: ${errorText(err)}`);
+        this.logger.addLog('warn', `探针巡检异常: ${errorText(err)}`, { source: 'watchdog', account: accountName, desktop: dName });
         // 异常后继续调度下一次
         if (this.states.has(`${accountName}:${desktopId}`)) {
           this.scheduleNextProbe(accountName, desktopId, state);
@@ -190,7 +190,8 @@ export class WatchdogService {
         );
         this.logger.addLog(
           'info',
-          `[${accountName} - ${dName}] 探针巡检: 云电脑处于运行态 (${useStatusText || desktopState || '运行中'})，可能仍有客户端在线，暂不连接 (第 ${state.consecutiveBusyCount} 次，下次约 ${nextMin} 分钟后)`,
+          `实例运行中 (${useStatusText || desktopState || '运行中'})，暂不抢占，下次约 ${nextMin} 分钟后复检`,
+          { source: 'watchdog', account: accountName, desktop: dName, foldKey: `probe:${accountName}:${dName}` },
         );
         this.scheduleNextProbe(accountName, desktopId, state);
         this.profileManager.notifyStatusChange();
@@ -198,20 +199,20 @@ export class WatchdogService {
       }
 
       // 实例已休眠/关机，用户已离开：满足自愈接管条件
-      this.logger.addLog('info', `[${accountName} - ${dName}] 探针巡检: 云电脑已休眠/关机，启动自动接管自愈链路`);
+      this.logger.addLog('info', '实例已休眠/关机，启动自愈接管', { source: 'watchdog', account: accountName, desktop: dName });
       this.stopWatchdog(accountName, desktopId);
 
       try {
         await this.profileManager.operateDesktop(accountName, desktopCode, 'awake');
-        this.logger.addLog('info', `[${accountName} - ${dName}] 已下发自愈唤醒指令`);
+        this.logger.addLog('info', '已下发自愈唤醒指令', { source: 'watchdog', account: accountName, desktop: dName });
       } catch (startErr) {
-        this.logger.addLog('warn', `[${accountName} - ${dName}] 自愈唤醒失败: ${errorText(startErr)}`);
+        this.logger.addLog('warn', `自愈唤醒失败: ${errorText(startErr)}`, { source: 'watchdog', account: accountName, desktop: dName });
       }
 
       // 精准接续恢复该桌面的保活长连接
       this.profileManager.getKeepaliveService().resumeWorkerForDesktop(accountName, desktopCode);
     } catch (err) {
-      this.logger.addLog('warn', `[${accountName} - ${dName}] 探针检测失败: ${errorText(err)}`);
+      this.logger.addLog('warn', `探针检测失败: ${errorText(err)}`, { source: 'watchdog', account: accountName, desktop: dName });
       // 网络或临时异常仍继续安排下一次
       if (this.states.has(key)) {
         this.scheduleNextProbe(accountName, desktopId, state);

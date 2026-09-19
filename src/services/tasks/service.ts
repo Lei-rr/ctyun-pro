@@ -43,7 +43,7 @@ export class TasksService {
       throw new Error('账号未登录，无法执行AI对话');
     }
     const res = await AiChatTask.execute(client);
-    this.host.logger.addLog('success', `[${accountName}] AI对话: ${res.message}`);
+    this.host.logger.addLog('success', `AI 对话: ${res.message}`, { source: 'task', account: accountName });
     setTimeout(() => {
       this.getPointsAndTasks(accountName)
         .then(() => this.host.notifyStatusChange())
@@ -134,15 +134,15 @@ export class TasksService {
         const apiDesktopId = hit?.desktop?.desktopId || String(targetDesktopId);
         await client.operateDesktop(String(apiDesktopId), 'reset', hit?.desktop?.objType ?? 0);
         restartNote = '，已下发重启指令使权益生效';
-        this.host.logger.addLog('info', `[${accountName} - ${desktopCode}] 升配/扩容生效重启指令已下发`);
+        this.host.logger.addLog('info', '升配/扩容生效重启指令已下发', { source: 'redeem', account: accountName, desktop: desktopCode });
       } catch (err) {
         const msg = errorText(err);
         restartNote = `；重启指令下发失败(请手动重启生效): ${msg}`;
-        this.host.logger.addLog('warn', `[${accountName}] 兑换后自动重启失败: ${msg}`);
+        this.host.logger.addLog('warn', `兑换后自动重启失败: ${msg}`, { source: 'redeem', account: accountName });
       }
     }
 
-    this.host.logger.addLog('success', `[${accountName}] ${res.message}`);
+    this.host.logger.addLog('success', res.message, { source: 'redeem', account: accountName });
     return `${res.message}${restartNote}`;
   }
 
@@ -163,7 +163,7 @@ export class TasksService {
           }
         }
       } catch (err) {
-        this.host.logger.addLog('warn', `获取在线积分商品列表失败，回退使用内存缓存: ${errorText(err)}`);
+        this.host.logger.addLog('warn', `获取在线商品列表失败，回退内存缓存: ${errorText(err)}`, { source: 'redeem' });
       }
     }
     const current = this.host.rewardsCache;

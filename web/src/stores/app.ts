@@ -51,10 +51,26 @@ export interface Account {
   desktops: Desktop[];
 }
 
+export type LogLevel = 'info' | 'warn' | 'error' | 'success';
+
+export type LogSource =
+  | 'system'
+  | 'account'
+  | 'keepalive'
+  | 'watchdog'
+  | 'task'
+  | 'redeem'
+  | 'power'
+  | 'proxy'
+  | 'api';
+
 export interface LogItem {
   id: number;
   time: string;
-  level: 'info' | 'warn' | 'error' | 'success';
+  level: LogLevel;
+  source: LogSource;
+  account?: string;
+  desktop?: string;
   message: string;
   count?: number;
 }
@@ -214,37 +230,17 @@ export const useAppStore = defineStore('app', () => {
     logs.value = (newLogs || []).slice(-1000);
   }
 
-  // 智能折叠日志插入：在当前末尾连续心跳波次（Block）内寻找同款心跳折叠，遇到业务日志立即打断
+  /**
+   * 日志插入 (服务端已完成相邻折叠与计数)：
+   * - 若为已存在 id (折叠更新)，原位删除后追加至末尾；
+   * - 否则直接追加并裁剪到 1000 条。
+   */
   function appendLog(incoming: LogItem) {
-    const isHeartbeat = incoming.message && incoming.message.includes('发送客户端活跃心跳');
-    let found = false;
-    if (isHeartbeat) {
-      for (let i = logs.value.length - 1; i >= 0; i--) {
-        const item = logs.value[i];
-        const itemIsHeartbeat = item.message && item.message.includes('发送客户端活跃心跳');
-        if (!itemIsHeartbeat) {
-          // 遇到业务/报警日志，停止回溯
-          break;
-        }
-        if (
-          item.id === incoming.id ||
-          (item.message === incoming.message && item.level === incoming.level)
-        ) {
-          const [matched] = logs.value.splice(i, 1);
-          matched.count = incoming.count || (matched.count || 1) + 1;
-          matched.time = incoming.time;
-          logs.value.push(matched);
-          found = true;
-          break;
-        }
-      }
-    }
-
-    if (!found) {
-      logs.value.push(incoming);
-      if (logs.value.length > 1000) {
-        logs.value.splice(0, logs.value.length - 1000);
-      }
+    const idx = logs.value.findIndex((l) => l.id === incoming.id);
+    if (idx !== -1) logs.value.splice(idx, 1);
+    logs.value.push(incoming);
+    if (logs.value.length > 1000) {
+      logs.value.splice(0, logs.value.length - 1000);
     }
   }
 

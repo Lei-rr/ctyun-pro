@@ -25,7 +25,11 @@ export interface KeepAliveWorkerOptions {
   onPreempted?: (code: number, reason: string) => void;
   onHeartbeat?: () => void;
   onRefreshInfo?: () => Promise<DesktopInfo | null>;
-  onLog?: (level: 'info' | 'warn' | 'error' | 'success', msg: string) => void;
+  onLog?: (
+    level: 'info' | 'warn' | 'error' | 'success',
+    msg: string,
+    meta?: { foldKey?: string },
+  ) => void;
 }
 
 /**
@@ -68,14 +72,8 @@ export class KeepAliveWorker {
     this.options = options;
   }
 
-  private get logPrefix(): string {
-    const d = this.options.desktop;
-    const dName = d?.desktopName || d?.computerName || d?.name || d?.desktopCode || d?.desktopId || '';
-    return dName ? `${this.options.accountName} - ${dName}` : this.options.accountName;
-  }
-
-  private log(level: 'info' | 'warn' | 'error' | 'success', msg: string) {
-    this.options.onLog?.(level, `[${this.logPrefix}] ${msg}`);
+  private log(level: 'info' | 'warn' | 'error' | 'success', msg: string, meta?: { foldKey?: string }) {
+    this.options.onLog?.(level, msg, meta);
   }
 
   public start(): void {
@@ -136,7 +134,7 @@ export class KeepAliveWorker {
       this.heartbeatTimer = null;
     }
     this.cleanupSocket();
-    this.log('info', '保活通道已暂停');
+    this.log('info', '保活通道已暂停，等待任务结束后恢复');
     this.options.onStatusChange?.('paused');
   }
 
@@ -149,10 +147,10 @@ export class KeepAliveWorker {
     // 若此刻仍有在途连接流程, 置位待恢复意图由其结束后接续 (否则本次 resume 会丢失)
     if (this.isConnecting) {
       this.pendingReconnect = true;
-      this.log('info', '任务完成，待当前连接流程结束后恢复保活...');
+      this.log('info', '任务完成，等待当前连接流程结束后恢复保活');
       return;
     }
-    this.log('info', '任务完成，保活通道正在恢复连接...');
+    this.log('info', '任务完成，正在恢复保活连接');
     this.connect();
   }
 
@@ -202,7 +200,7 @@ export class KeepAliveWorker {
       if (silentMs > silentThreshold) {
         this.unackedHeartbeats += 1;
         if (this.unackedHeartbeats >= 2) {
-          this.log('warn', `网关静默超过 ${Math.round(silentMs / 1000)}s 且心跳无回包，判定链路假死，主动断开重连`);
+          this.log('warn', `网关静默 ${Math.round(silentMs / 1000)}s 且心跳无回包，判定链路假死，主动断开重连`);
           this.needsFreshTicket = true;
           try {
             this.currentWs.close(4003, 'Heartbeat Timeout');
@@ -215,13 +213,13 @@ export class KeepAliveWorker {
     try {
       const hbBuf = Protocol.buildHeartbeat();
       this.currentWs.send(hbBuf);
-      this.log('info', '发送客户端活跃心跳');
+      this.log('info', '发送活跃心跳', { foldKey: 'keepalive:heartbeat' });
       this.options.onHeartbeat?.();
       // 兜底：若 10s 内未收到 HEARTBEAT_RES (handleHeartBeatRes 会重排)，则仍按节奏续发，避免断流
       this.scheduleNextHeartbeat(HEARTBEAT_RES_FALLBACK_MS);
     } catch (err) {
       const msg = errorText(err);
-      this.log('warn', `发送客户端心跳异常: ${msg}`);
+      this.log('warn', `发送心跳失败: ${msg}`);
       this.scheduleNextHeartbeat(HEARTBEAT_RES_FALLBACK_MS);
     }
   }
@@ -249,7 +247,7 @@ export class KeepAliveWorker {
       this.lastInboundAt = Date.now();
       this.unackedHeartbeats = 0;
       this.options.onStatusChange?.('connected');
-      this.log('success', '云电脑保活会话建立成功');
+      this.log('success', '保活会话已建立');
 
       // 启动响应驱动活跃心跳 (对齐官方 MAIN 通道模型，间隔可配置)
       this.scheduleNextHeartbeat(HEARTBEAT_INTERVAL_MS);
@@ -312,25 +310,25 @@ export class KeepAliveWorker {
 
     // 凭据有效性前置防御检查
     if (!this.isCertValid(this.options.desktopInfo?.clientCert)) {
-      this.log('warn', '检测到长连接凭据证书不完整，准备向官方申请全新凭据...');
+      this.log('warn', '长连接凭据不完整，将向官方重新申请');
       this.needsFreshTicket = true;
     }
 
     // 如果标记需要刷新凭据，在建立连接前主动换取全新 Ticket
     if (this.needsFreshTicket && this.options.onRefreshInfo) {
       try {
-        this.log('info', '正在向官方调度中心申请全新 Ticket 与连接凭据...');
+        this.log('info', '正在向官方调度中心申请连接凭据');
         const newInfo = await this.options.onRefreshInfo();
         if (newInfo && newInfo.clinkLvsOutHost) {
           this.options.desktopInfo = newInfo;
           this.needsFreshTicket = false;
-          this.log('info', '已成功换取全新长连接凭据');
+          this.log('info', '连接凭据申请成功');
         } else {
           throw new Error('调度中心未返回有效网关凭据');
         }
       } catch (e) {
         const msg = errorText(e);
-        this.log('warn', `换取长连接凭据提示: ${msg}`);
+        this.log('warn', `申请连接凭据失败: ${msg}`);
         this.isReconnecting = false;
         const retryDelay = 30000;
         this.reconnectTimer = setTimeout(() => {
@@ -351,7 +349,7 @@ export class KeepAliveWorker {
     // 优先使用官方标准网关，若 desktopInfo 提供了自定义 http(s) 接入域名则回退兼容
     const mainUrl = this.buildMainChannelUrl(desktopInfo, String(desktop.desktopId));
 
-    this.log('info', `建立云电脑长连接 (${mainUrl})...`);
+    this.log('info', `正在建立长连接 ${mainUrl}`);
 
     const ws = new WebSocket(mainUrl, ['binary'], {
       headers: {
@@ -384,7 +382,7 @@ export class KeepAliveWorker {
         this.isReconnecting = false;
         this.isPaused = true;
         this.needsFreshTicket = true;
-        this.log('warn', `检测到官方或前台客户端接入 (${code}, ${reasonStr})，后台保活长连接主动让位暂停`);
+        this.log('warn', `检测到官方客户端接入 (${code}${reasonStr ? ' ' + reasonStr : ''})，后台保活主动让位`);
         this.options.onStatusChange?.('paused');
         this.options.onPreempted?.(code, reasonStr);
         return;
@@ -410,7 +408,7 @@ export class KeepAliveWorker {
         this.isHandshakeComplete = false;
         this.consecutiveFailures = 0;
         this.needsFreshTicket = true;
-        this.log('info', `网络连接断开 (${code}, ${reasonStr || '远程连接关闭'})，5秒后自动重连...`);
+        this.log('info', `连接断开 (${code}${reasonStr ? ' ' + reasonStr : ''})，5s 后重连`);
       } else {
         // 未完成握手即断开（如网关 1005 关闭或拒接）：累计握手失败计数
         this.consecutiveFailures++;
@@ -427,7 +425,7 @@ export class KeepAliveWorker {
           } else {
             retryDelay = 10000;
           }
-          this.log('info', `云电脑服务正在拉起就绪中，${retryDelay / 1000}秒后申请全新凭据接入长连接 (连续重试 ${this.consecutiveFailures} 次)...`);
+          this.log('info', `云电脑服务启动中，${retryDelay / 1000}s 后重新申请凭据接入 (第 ${this.consecutiveFailures} 次重试)`);
         } else {
           // 阶梯指数退避：5s -> 10s -> 20s -> 30s，最高 60s
           if (this.consecutiveFailures === 1) {
@@ -445,7 +443,7 @@ export class KeepAliveWorker {
           const retryDelaySec = Math.round(retryDelay / 1000);
           this.log(
             'warn',
-            `长连接握手未完成即断开 (${code}, ${reasonStr || '远程连接关闭'})，${retryDelaySec}秒后换取新凭据重试 (连续重试 ${this.consecutiveFailures} 次)...`,
+            `握手未完成即断开 (${code}${reasonStr ? ' ' + reasonStr : ''})，${retryDelaySec}s 后重新申请凭据 (第 ${this.consecutiveFailures} 次重试)`,
           );
         }
       }
@@ -459,7 +457,7 @@ export class KeepAliveWorker {
     };
 
     ws.on('open', async () => {
-      this.log('success', 'WebSocket 连接就绪，发送握手配置...');
+      this.log('info', 'WebSocket 已连接，开始握手');
 
       // 1. 发送连接握手 JSON
       // 对齐官方: 若调度返回 internalIp/internalPort (真实虚拟机地址) 则作为 servername，否则沿用 host:port
@@ -506,7 +504,7 @@ export class KeepAliveWorker {
       // 3. 设置 15 秒握手超时防护
       this.handshakeTimeout = setTimeout(() => {
         if (!this.isHandshakeComplete && ws.readyState === WebSocket.OPEN) {
-          this.log('warn', '长连接握手未在规定时间内收到网关响应，主动断开重试');
+          this.log('warn', '握手超时未收到网关响应，断开重试');
           ws.close(1006, 'Handshake Timeout');
         }
       }, 15000);
@@ -530,7 +528,7 @@ export class KeepAliveWorker {
           /\berror\b/i.test(text);
         if (isGatewayPlainError) {
           this.lastGatewayError = text.trim();
-          this.log('warn', `网关拒绝连接: ${text.trim()}，将主动断开并申请全新凭据重连`);
+          this.log('warn', `网关拒绝连接: ${text.trim()}，将重新申请凭据`);
           this.needsFreshTicket = true;
           try {
             ws.close(4002, 'Gateway rejected');
