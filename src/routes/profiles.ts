@@ -9,7 +9,7 @@ import { sendSuccess, sendError } from '../common/response.js';
 
 export const profileRoutes: FastifyPluginAsync<{
   manager: ProfileManager;
-  smsSessionCache: Map<string, { captchaKey?: string; smsKey?: string; expireAt?: number }>;
+  smsSessionCache: Map<string, { captchaKey?: string; expireAt?: number }>;
 }> = async (fastify, { manager, smsSessionCache }) => {
 
   // 1. Profiles 列表 (所有身份档案及所属云实例快照)
@@ -332,15 +332,8 @@ export const profileRoutes: FastifyPluginAsync<{
         return sendError(reply, '参数不完整');
       }
       const client = manager.getClient(name);
-      const cachedKey = smsSessionCache.get(name)?.captchaKey || '';
       try {
-        const { smsKey } = await client.sendSmsCode(user, body.captchaCode.trim(), cachedKey);
-        if (smsKey) {
-          const cur = smsSessionCache.get(name) || {};
-          cur.smsKey = smsKey;
-          cur.expireAt = Date.now() + 10 * 60 * 1000;
-          smsSessionCache.set(name, cur);
-        }
+        await client.sendSmsCode(user, body.captchaCode.trim());
         manager.addLog('info', `[${name}] 短信验证码已发送至手机号 ${user}`);
         return sendSuccess(reply, null, '验证码已发送');
       } catch (err) {
@@ -369,9 +362,8 @@ export const profileRoutes: FastifyPluginAsync<{
         return sendError(reply, '请填写短信验证码');
       }
       const client = manager.getClient(name);
-      const cachedSmsKey = smsSessionCache.get(name)?.smsKey || '';
       try {
-        await client.bindDevice(body.smsCode.trim(), cachedSmsKey);
+        await client.bindDevice(body.smsCode.trim());
         smsSessionCache.delete(name);
         if (acc && client.loginInfo) {
           acc.loginInfo = client.loginInfo;

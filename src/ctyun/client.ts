@@ -463,37 +463,33 @@ export class CtYunClient {
   }
 
   /**
-   * 5. 发送短信验证码 (官方要求携带 captchaCodeKey 与 CTG-SMS-KEY 提取)
+   * 5. 发送设备绑定短信验证码 (对齐官方 sendBindSMSCode)
+   * 官方参数: { mobilePhone, captchaCode }
    */
-  public async sendSmsCode(userPhone: string, captchaCode: string, captchaCodeKey = ''): Promise<{ success: boolean; smsKey: string }> {
-    let url = `/api/cdserv/client/device/getSmsCode?mobilePhone=${encodeURIComponent(
-      userPhone,
-    )}&captchaCode=${encodeURIComponent(captchaCode)}`;
-    if (captchaCodeKey) {
-      url += `&captchaCodeKey=${encodeURIComponent(captchaCodeKey)}`;
-    }
-    await this.ensureNegotiation();
-    const headers = this.encryptedSession.applyHeaders({ ...this.getHeaders() });
-    const res = await safeFetch(`${CtYunClient.BASE_URL}${url}`, { headers });
-    const smsKey = res.headers.get('ctg-sms-key') || res.headers.get('CTG-SMS-KEY') || '';
-    const json = this.encryptedSession.decryptResponse(
-      (await res.json()) as { code: number; msg?: string },
+  public async sendSmsCode(
+    userPhone: string,
+    captchaCode: string,
+  ): Promise<{ success: boolean }> {
+    const query = new URLSearchParams({
+      mobilePhone: userPhone,
+      captchaCode,
+    }).toString();
+    const json = await this.requestApi<{ code: number; msg?: string }>(
+      `/api/cdserv/client/device/getSmsCode?${query}`,
+      { method: 'GET' },
     );
     if (json.code !== 0 && json.code !== 200) {
       throw new Error(json.msg || '发送短信验证码失败');
     }
-    return { success: true, smsKey };
+    return { success: true };
   }
 
   /**
-   * 6. 绑定设备 (官方要求携带 verificationCode 与 smsCodeKey)
+   * 6. 绑定设备 (对齐官方 bind: 仅传 verificationCode + 设备信息)
    */
-  public async bindDevice(verificationCode: string, smsCodeKey = ''): Promise<boolean> {
+  public async bindDevice(verificationCode: string): Promise<boolean> {
     const formData = new URLSearchParams();
     formData.append('verificationCode', verificationCode.trim());
-    if (smsCodeKey) {
-      formData.append('smsCodeKey', smsCodeKey.trim());
-    }
     formData.append('deviceName', 'Chrome浏览器');
     formData.append('deviceCode', this.deviceCode);
     formData.append('deviceModel', 'Windows NT 10.0; Win64; x64');

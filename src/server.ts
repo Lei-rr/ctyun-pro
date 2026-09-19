@@ -60,7 +60,7 @@ export async function createServer(managerInstance?: ProfileManager) {
   });
 
   // 短信验证会话内存缓存 (带 10 分钟自动过期 TTL，防止垃圾残留)
-  class ExpiringSmsSessionCache extends Map<string, { captchaKey?: string; smsKey?: string; expireAt: number }> {
+  class ExpiringSmsSessionCache extends Map<string, { captchaKey?: string; expireAt: number }> {
     private cleanupTimer: NodeJS.Timeout;
     constructor() {
       super();
