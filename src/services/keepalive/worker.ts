@@ -45,6 +45,9 @@ export class KeepAliveWorker {
   private reconnectTimer: NodeJS.Timeout | null = null;
   public isRunning = false;
   private isReconnecting = false;
+  private isConnecting = false;
+  /** 在途连接期间收到 resume/重连请求时置位, 连接流程结束后自动重试 */
+  private pendingReconnect = false;
   public isPaused = false;
   private isHandshakeComplete = false;
   private consecutiveFailures = 0;
@@ -85,6 +88,8 @@ export class KeepAliveWorker {
   public stop(): void {
     this.isRunning = false;
     this.isPaused = false;
+    this.isConnecting = false;
+    this.pendingReconnect = false;
     this.isHandshakeComplete = false;
     this.consecutiveFailures = 0;
     this.needsFreshTicket = false;
@@ -112,6 +117,7 @@ export class KeepAliveWorker {
   public pause(): void {
     if (!this.isRunning || this.isPaused) return;
     this.isPaused = true;
+    this.pendingReconnect = false;
     this.isHandshakeComplete = false;
     this.consecutiveFailures = 0;
     this.needsFreshTicket = false;
@@ -140,6 +146,12 @@ export class KeepAliveWorker {
   public resume(): void {
     if (!this.isRunning || !this.isPaused) return;
     this.isPaused = false;
+    // 若此刻仍有在途连接流程, 置位待恢复意图由其结束后接续 (否则本次 resume 会丢失)
+    if (this.isConnecting) {
+      this.pendingReconnect = true;
+      this.log('info', '任务完成，待当前连接流程结束后恢复保活...');
+      return;
+    }
     this.log('info', '任务完成，保活通道正在恢复连接...');
     this.connect();
   }
@@ -152,6 +164,8 @@ export class KeepAliveWorker {
     if (this.currentWs) {
       try {
         this.currentWs.removeAllListeners();
+        // CONNECTING 状态下 close() 会异步触发 error 事件, 无监听将导致进程崩溃, 必须兜底吞掉
+        this.currentWs.on('error', () => {});
         if (this.currentWs.readyState === WebSocket.OPEN || this.currentWs.readyState === WebSocket.CONNECTING) {
           this.currentWs.close(1000, 'Worker cleanup');
         }
@@ -257,6 +271,28 @@ export class KeepAliveWorker {
   }
 
   private async connect(): Promise<void> {
+    // 并发守卫: 多入口 (start/resume/重试/重连定时器) 可能同时触发,
+    // 无守卫会创建孤儿连接 (旧 WS 仍在发心跳), 导致重复会话与资源泄漏
+    if (!this.isRunning || this.isPaused) return;
+    // 在途连接直接丢弃 (重复 start/重连定时器), 避免孤儿连接
+    if (this.isConnecting) return;
+    this.isConnecting = true;
+
+    try {
+      await this._connectInternal();
+    } finally {
+      this.isConnecting = false;
+      // 仅 resume() 显式置位的待恢复意图才接续, 避免重复 start 触发多余连接
+      if (this.pendingReconnect) {
+        this.pendingReconnect = false;
+        if (this.isRunning && !this.isPaused) {
+          this.connect();
+        }
+      }
+    }
+  }
+
+  private async _connectInternal(): Promise<void> {
     if (!this.isRunning || this.isPaused) return;
 
     if (this.reconnectTimer) {
@@ -303,6 +339,9 @@ export class KeepAliveWorker {
         return;
       }
     }
+
+    // 异步换取凭据期间可能已被 pause/stop, 必须复检状态避免创建孤儿连接
+    if (!this.isRunning || this.isPaused) return;
 
     this.isReconnecting = false;
     this.options.onStatusChange?.('connecting');
