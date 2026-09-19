@@ -488,4 +488,34 @@ export class RewardRedeemService {
       message: `兑换成功！订单号: ${resJson.data?.orderId || '已生成'}，消耗 ${resolvedPoints * count} 积分`,
     };
   }
+
+  /**
+   * 兑换后生效重启 (升配/扩容类商品)
+   * 官方处理订单为异步流程，立即重启会返回"正在执行系统任务，请稍后再试"，
+   * 因此先等待订单生效，再按退避节奏重试重启。
+   */
+  public static async restartAfterRedeem(
+    client: CtYunClient,
+    desktopId: string,
+    objType = 0,
+    options: { initialDelayMs?: number; retries?: number; onWait?: (attempt: number, delayMs: number) => void } = {},
+  ): Promise<void> {
+    const retries = Math.max(1, options.retries ?? 4);
+    let delay = Math.max(0, options.initialDelayMs ?? 15000);
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      await new Promise((r) => setTimeout(r, delay));
+      try {
+        await client.operateDesktop(desktopId, 'reset', objType);
+        return;
+      } catch (err) {
+        const msg = errorText(err);
+        const isBusy = msg.includes('正在执行') || msg.includes('请稍后') || msg.includes('任务') || msg.includes('处理中');
+        if (!isBusy || attempt === retries) throw err;
+        // 订单仍在处理中：退避重试，最长累计约 15s+30s+60s+120s
+        delay = Math.min(delay * 2, 120000);
+        options.onWait?.(attempt, delay);
+      }
+    }
+  }
 }

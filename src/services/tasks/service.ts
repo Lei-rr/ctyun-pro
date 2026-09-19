@@ -125,16 +125,24 @@ export class TasksService {
     acc.redeemConfig = rConf;
     this.host.saveToDisk();
 
-    // 升配/扩容类商品：官方要求兑换后立即重启云电脑方可生效
+    // 升配/扩容类商品：官方异步处理订单，等待生效后再重启方可应用新配置
     let restartNote = '';
     if (resolved?.hardwareBound && targetDesktopId) {
       try {
         const hit = this.host.findDesktopByCode(String(targetDesktopId));
         const desktopCode = hit?.desktop?.desktopCode || String(targetDesktopId);
         const apiDesktopId = hit?.desktop?.desktopId || String(targetDesktopId);
-        await client.operateDesktop(String(apiDesktopId), 'reset', hit?.desktop?.objType ?? 0);
+        this.host.logger.addLog('info', '等待兑换订单生效后重启云电脑', { account: accountName, desktop: desktopCode });
+        await RewardRedeemService.restartAfterRedeem(client, String(apiDesktopId), hit?.desktop?.objType ?? 0, {
+          onWait: (attempt, delayMs) =>
+            this.host.logger.addLog(
+              'info',
+              `订单生效中，${Math.round(delayMs / 1000)}s 后重试重启 (第 ${attempt} 次)`,
+              { account: accountName, desktop: desktopCode },
+            ),
+        });
         restartNote = '，已下发重启指令使权益生效';
-        this.host.logger.addLog('info', '升配/扩容生效重启指令已下发', { account: accountName, desktop: desktopCode });
+        this.host.logger.addLog('info', '权益生效重启指令已下发', { account: accountName, desktop: desktopCode });
       } catch (err) {
         const msg = errorText(err);
         restartNote = `；重启指令下发失败(请手动重启生效): ${msg}`;
