@@ -5,6 +5,7 @@ export class WebActiveTracker {
   private webReleaseTimers = new Map<string, NodeJS.Timeout>();
   private webActiveKeys = new Set<string>();
   private maxHoldTimers = new Map<string, NodeJS.Timeout>();
+  private activeExpiresAt = new Map<string, number>();
 
   /**
    * 查询指定桌面当前是否处于前台 Web 活跃状态 (供保活同步时跳过，避免顶掉前台用户)
@@ -13,12 +14,23 @@ export class WebActiveTracker {
     return this.webActiveKeys.has(canonicalKey);
   }
 
+  /**
+   * 获取指定桌面 Web 活跃的剩余秒数
+   */
+  public getRemainingActiveSec(canonicalKey: string): number {
+    if (!this.webActiveKeys.has(canonicalKey)) return 0;
+    const expiresAt = this.activeExpiresAt.get(canonicalKey);
+    if (!expiresAt) return 0;
+    return Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
+  }
+
   private clearMaxHold(canonicalKey: string): void {
     const timer = this.maxHoldTimers.get(canonicalKey);
     if (timer) {
       clearTimeout(timer);
       this.maxHoldTimers.delete(canonicalKey);
     }
+    this.activeExpiresAt.delete(canonicalKey);
   }
 
   private clearRelease(canonicalKey: string): void {
@@ -54,8 +66,10 @@ export class WebActiveTracker {
     }
 
     const holdMs = Math.max(60, Number(maxHoldSec) || WEB_ACTIVE_MAX_HOLD_SEC) * 1000;
+    this.activeExpiresAt.set(canonicalKey, Date.now() + holdMs);
     const timer = setTimeout(() => {
       this.maxHoldTimers.delete(canonicalKey);
+      this.activeExpiresAt.delete(canonicalKey);
       if (this.webReleaseTimers.has(canonicalKey)) return;
       this.webActiveKeys.delete(canonicalKey);
       try {
@@ -78,9 +92,11 @@ export class WebActiveTracker {
 
     this.clearRelease(canonicalKey);
     this.clearMaxHold(canonicalKey);
+    this.activeExpiresAt.set(canonicalKey, Date.now() + Math.max(1, delaySec) * 1000);
 
     const timer = setTimeout(async () => {
       this.webReleaseTimers.delete(canonicalKey);
+      this.activeExpiresAt.delete(canonicalKey);
       this.webActiveKeys.delete(canonicalKey);
       try {
         await onResume();
@@ -99,6 +115,7 @@ export class WebActiveTracker {
     }
     this.webReleaseTimers.clear();
     this.maxHoldTimers.clear();
+    this.activeExpiresAt.clear();
     this.webActiveKeys.clear();
   }
 }

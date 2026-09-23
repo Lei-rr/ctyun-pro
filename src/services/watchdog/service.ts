@@ -46,11 +46,12 @@ export class WatchdogService {
    * 启动单台桌面的自愈看门狗探针
    */
   public startWatchdog(accountName: string, desktopId: string): void {
-    const key = `${accountName}:${desktopId}`;
+    const matched = this.profileManager.findDesktopByCode(desktopId);
+    const canonicalKey = matched?.desktop?.desktopCode || desktopId;
+    const key = `${accountName}:${canonicalKey}`;
     if (this.states.has(key)) return;
 
-    const matched = this.profileManager.findDesktopByCode(desktopId);
-    const dName = matched?.desktop?.desktopName || desktopId;
+    const dName = matched?.desktop?.desktopName || canonicalKey;
     this.logger.addLog('info', '检测到官方客户端在线，启动自愈探针 (保活让位中)', { account: accountName, desktop: dName });
 
     const state: WatchdogState = {
@@ -60,7 +61,7 @@ export class WatchdogService {
       nextProbeTime: Date.now() + this.baseIntervalMs,
     };
 
-    this.scheduleNextProbe(accountName, desktopId, state);
+    this.scheduleNextProbe(accountName, canonicalKey, state);
     this.states.set(key, state);
     this.profileManager.notifyStatusChange();
   }
@@ -83,11 +84,13 @@ export class WatchdogService {
     state.timer = setTimeout(() => {
       this.probeAndHeal(accountName, desktopId).catch((err) => {
         const matched = this.profileManager.findDesktopByCode(desktopId);
-        const dName = matched?.desktop?.desktopName || desktopId;
+        const canonicalKey = matched?.desktop?.desktopCode || desktopId;
+        const key = `${accountName}:${canonicalKey}`;
+        const dName = matched?.desktop?.desktopName || canonicalKey;
         this.logger.addLog('warn', `探针巡检异常: ${errorText(err)}`, { account: accountName, desktop: dName });
         // 异常后继续调度下一次
-        if (this.states.has(`${accountName}:${desktopId}`)) {
-          this.scheduleNextProbe(accountName, desktopId, state);
+        if (this.states.has(key)) {
+          this.scheduleNextProbe(accountName, canonicalKey, state);
         }
       });
     }, finalInterval);
@@ -110,11 +113,14 @@ export class WatchdogService {
    * 停止单台桌面的看门狗探针
    */
   public stopWatchdog(accountName: string, desktopId: string): void {
-    const key = `${accountName}:${desktopId}`;
-    const state = this.states.get(key);
+    const matched = this.profileManager.findDesktopByCode(desktopId);
+    const canonicalKey = matched?.desktop?.desktopCode || desktopId;
+    const key = `${accountName}:${canonicalKey}`;
+    const state = this.states.get(key) || this.states.get(`${accountName}:${desktopId}`);
     if (state) {
       if (state.timer) clearTimeout(state.timer);
       this.states.delete(key);
+      this.states.delete(`${accountName}:${desktopId}`);
       this.profileManager.notifyStatusChange();
     }
   }
@@ -123,7 +129,9 @@ export class WatchdogService {
    * 获取指定桌面的看门狗运行态指标 (供 Profile 摘要与前端展示)
    */
   public getWatchdogInfo(accountName: string, desktopId: string) {
-    const state = this.states.get(`${accountName}:${desktopId}`);
+    const matched = this.profileManager.findDesktopByCode(desktopId);
+    const canonicalKey = matched?.desktop?.desktopCode || desktopId;
+    const state = this.states.get(`${accountName}:${canonicalKey}`) || this.states.get(`${accountName}:${desktopId}`);
     if (!state || !state.active) return null;
 
     const remainingMs = Math.max(0, state.nextProbeTime - Date.now());
@@ -157,17 +165,28 @@ export class WatchdogService {
    */
   public async probeAndHeal(accountName: string, desktopId: string): Promise<void> {
     const client = this.profileManager.getClient(accountName);
+    const matched = this.profileManager.findDesktopByCode(desktopId);
+    const canonicalKey = matched?.desktop?.desktopCode || desktopId;
+    const key = `${accountName}:${canonicalKey}`;
+
     if (!client) {
-      this.stopWatchdog(accountName, desktopId);
+      this.stopWatchdog(accountName, canonicalKey);
       return;
     }
 
-    const key = `${accountName}:${desktopId}`;
-    const state = this.states.get(key);
+    // 若桌面已被手动关机、前台 Web 操作中、或账号已停用，探针立即撤销
+    const acc = this.profileManager.getAccount(accountName);
+    if (!acc || acc.autoStart === false ||
+        this.profileManager.isManualShutdown(canonicalKey) ||
+        this.profileManager.isWebUserActive(canonicalKey)) {
+      this.stopWatchdog(accountName, canonicalKey);
+      return;
+    }
+
+    const state = this.states.get(key) || this.states.get(`${accountName}:${desktopId}`);
     if (!state) return;
 
-    const matched = this.profileManager.findDesktopByCode(desktopId);
-    const dName = matched?.desktop?.desktopName || desktopId;
+    const dName = matched?.desktop?.desktopName || canonicalKey;
     const desktopCode = matched?.desktop?.desktopCode || desktopId;
     const objType = matched?.desktop?.objType ?? 0;
 
@@ -201,7 +220,7 @@ export class WatchdogService {
 
       // 实例已休眠/关机，用户已离开：满足自愈接管条件
       this.logger.addLog('info', '实例已休眠/关机，启动自愈接管', { account: accountName, desktop: dName });
-      this.stopWatchdog(accountName, desktopId);
+      this.stopWatchdog(accountName, canonicalKey);
 
       try {
         await this.profileManager.operateDesktop(accountName, desktopCode, 'awake');
@@ -216,7 +235,7 @@ export class WatchdogService {
       this.logger.addLog('warn', `探针检测失败: ${errorText(err)}`, { account: accountName, desktop: dName });
       // 网络或临时异常仍继续安排下一次
       if (this.states.has(key)) {
-        this.scheduleNextProbe(accountName, desktopId, state);
+        this.scheduleNextProbe(accountName, canonicalKey, state);
       }
     }
   }

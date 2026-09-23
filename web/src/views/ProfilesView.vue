@@ -161,21 +161,16 @@ onMounted(() => {
     for (const acc of store.accounts) {
       if (acc.desktops && Array.isArray(acc.desktops)) {
         for (const dt of acc.desktops) {
-          // 1. 远程桌面主动避让倒计时
+          // 1. 远程桌面主动避让倒计时平滑递减 (避让结束严格由后端推送判定，前端不擅自将其置为 false)
           if (dt.yieldStatus?.yielding) {
-            if (dt.yieldStatus.remainingSeconds > 1) {
+            if (dt.yieldStatus.remainingSeconds && dt.yieldStatus.remainingSeconds > 0) {
               dt.yieldStatus.remainingSeconds -= 1;
-            } else {
-              dt.yieldStatus.yielding = false;
-              dt.yieldStatus.remainingSeconds = 0;
             }
           }
           // 2. 官方客户端探针（看门狗）下次探测倒计时平滑推演
           if (dt.watchdog?.active && dt.watchdog.nextProbeSec !== undefined) {
-            if (dt.watchdog.nextProbeSec > 1) {
+            if (dt.watchdog.nextProbeSec > 0) {
               dt.watchdog.nextProbeSec -= 1;
-            } else {
-              dt.watchdog.nextProbeSec = 0;
             }
           }
         }
