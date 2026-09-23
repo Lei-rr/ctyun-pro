@@ -165,9 +165,14 @@ export class ProfileManager {
     this.loadFromDisk();
     this.taskScheduler.start();
 
-    // 让位事件 → 启动自愈看门狗探针
-    this.keepaliveService.on('desktop:paused', ({ accountName, desktopId }) => {
-      this.watchdogService.startWatchdog(accountName, desktopId);
+    // 让位事件 → 启动自愈看门狗探针 (前提：账号未停用且桌面未被手动关机或前台Web直连)
+    this.keepaliveService.on('desktop:paused', ({ accountName, desktopId, desktopCode }) => {
+      const targetCode = String(desktopCode || desktopId || '');
+      const acc = this.store.accounts.get(accountName);
+      if (!acc || acc.autoStart === false) return;
+      if (this.isManualShutdown(targetCode) || this.isManualShutdown(String(desktopId))) return;
+      if (this.isWebUserActive(targetCode) || this.isWebUserActive(String(desktopId))) return;
+      this.watchdogService.startWatchdog(accountName, targetCode);
     });
   }
 
@@ -243,6 +248,12 @@ export class ProfileManager {
     const matched = this.findDesktopByCode(desktopCode);
     const canonicalKey = matched?.desktop?.desktopCode || desktopCode;
     return this.webActiveTracker.isWebActive(canonicalKey);
+  }
+
+  public getWebUserActiveRemainingSec(desktopCode: string): number {
+    const matched = this.findDesktopByCode(desktopCode);
+    const canonicalKey = matched?.desktop?.desktopCode || desktopCode;
+    return this.webActiveTracker.getRemainingActiveSec(canonicalKey);
   }
 
   public isManualShutdown(desktopCode: string): boolean {
@@ -377,6 +388,10 @@ export class ProfileManager {
           const webActive =
             this.webActiveTracker.isWebActive(String(d.desktopCode || '')) ||
             this.webActiveTracker.isWebActive(String(d.desktopId || ''));
+          const webActiveRemaining = Math.max(
+            this.webActiveTracker.getRemainingActiveSec(String(d.desktopCode || '')),
+            this.webActiveTracker.getRemainingActiveSec(String(d.desktopId || '')),
+          );
           const next: typeof d = { ...d };
 
           if (info) {
@@ -388,11 +403,16 @@ export class ProfileManager {
             };
           }
           if (webActive || info || d.status === 'paused') {
+            const probeSec = info?.nextProbeSec;
+            const remainingSec = webActive
+              ? (webActiveRemaining || 300)
+              : (typeof probeSec === 'number' && probeSec > 0 ? probeSec : (d.status === 'paused' ? 300 : 0));
+
             next.yieldStatus = {
               active: true,
               yielding: true,
               reason: webActive ? '前台浏览器直连操作中，后台已主动让位' : '检测到外部客户端在线，后台已主动让位',
-              remainingSeconds: info?.nextProbeSec ?? 0,
+              remainingSeconds: remainingSec,
             };
           }
           return next;

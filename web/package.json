@@ -1,6 +1,6 @@
 {
-  "name": "ctyun-web",
-  "version": "3.0.4",
+  "name": "ctyun-pro-web",
+  "version": "3.0.5",
   "private": true,
   "scripts": {
     "dev": "vite",
