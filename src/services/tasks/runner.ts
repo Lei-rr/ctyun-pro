@@ -12,12 +12,6 @@ import type { TaskConfig } from '../../config.js';
  * 1. 与 AI 助手对话 (纯 HTTP，03:00~06:00 随机错峰)
  * 2. 挂机与活跃由常驻静默保活 Worker 自动跑满
  */
-export interface TaskExecutionSummary {
-  aiChat?: { success: boolean; message: string };
-  totalTodayPoints?: number;
-  generalPoints?: number;
-}
-
 export class TaskRunner {
   /**
    * 顺序执行今日任务（领取奖励 + AI 对话）
@@ -28,23 +22,29 @@ export class TaskRunner {
   ): Promise<{ success: boolean; message: string }> {
     const results: string[] = [];
 
+    // 预查询失败不阻断执行：降级为「状态未知」照常尝试 AI 对话
     let taskSummary: PointsSummary | null = null;
     try {
       taskSummary = await PointsTask.getPointsAndTasks(client);
-    } catch {}
+    } catch (e) {
+      results.push(`任务状态预查询失败: ${errorText(e)}`);
+    }
 
     // 执行 AI 对话交互任务 (+100积分)
     const chatTask = taskSummary?.tasks.find((t) => t.type === 'chat');
     const isChatCompleted = !!chatTask && chatTask.status === TASK_STATUS.DONE;
+    let chatFailed = false;
 
     if (isChatCompleted) {
       results.push('今日已完成 AI 对话 (+100积分)，无需重复执行');
     } else if (!taskConfig || taskConfig.aiChat !== false) {
+      chatFailed = true;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           const chatRes = await AiChatTask.execute(client);
           if (chatRes.success) {
             results.push(chatRes.message);
+            chatFailed = false;
             break;
           }
           if (attempt === 3) {
@@ -76,11 +76,13 @@ export class TaskRunner {
       todayEarnedPoints = finalSummary.tasks.reduce((sum, t) => {
         return sum + (t.status === TASK_STATUS.DONE ? t.rewardPoints : 0);
       }, 0);
-    } catch {}
+    } catch (e) {
+      results.push(`积分汇总查询失败: ${errorText(e)}`);
+    }
 
     const fullMessage = results.join('；');
     return {
-      success: true,
+      success: !chatFailed,
       message: `${fullMessage} (今日任务已获 ${todayEarnedPoints} 积分，总可用 ${finalGeneralPoints} 积分)`,
     };
   }

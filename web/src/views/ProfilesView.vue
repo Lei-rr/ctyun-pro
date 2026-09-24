@@ -21,10 +21,9 @@ import {
 } from 'lucide-vue-next';
 import { Button } from '@/shared/ui/button';
 import { Badge } from '@/shared/ui/badge';
-import AccountRenameDialog from '@/components/dialogs/AccountRenameDialog.vue';
 import PointsTaskDialog from '@/components/dialogs/PointsTaskDialog.vue';
 import PowerOperateDialog, { type PowerTarget } from '@/components/dialogs/PowerOperateDialog.vue';
-import DesktopRenameDialog from '@/components/dialogs/DesktopRenameDialog.vue';
+import RenameDialog from '@/components/dialogs/RenameDialog.vue';
 import {
   Table,
   TableHeader,
@@ -53,6 +52,11 @@ function openRename(name: string) {
   showRenameModal.value = true;
 }
 
+// 提交函数注入通用重命名弹窗（弹窗管 loading 与错误提示，此处只做数据操作）
+async function submitAccountRename(newName: string) {
+  await store.renameAccount(renameOldName.value, newName);
+}
+
 // 云电脑重命名
 const showDesktopRenameModal = ref(false);
 const renameDesktopCode = ref('');
@@ -62,6 +66,10 @@ function openDesktopRename(desktopCode: string, currentName: string) {
   renameDesktopCode.value = desktopCode;
   renameDesktopCurrentName.value = currentName || desktopCode;
   showDesktopRenameModal.value = true;
+}
+
+async function submitDesktopRename(newName: string) {
+  await store.renameDesktop(renameDesktopCode.value, newName);
 }
 
 // 电源控制确认弹窗
@@ -640,9 +648,14 @@ onUnmounted(() => {
     </div>
 
     <!-- 弹窗 1: 账号重命名弹窗 -->
-    <AccountRenameDialog
+    <RenameDialog
       v-model:open="showRenameModal"
-      :account-name="renameOldName"
+      title="修改账号备注"
+      description="给天翼云账号设置一个更易辨识的备注名称"
+      label="账号新备注"
+      placeholder="例如：主账号 / 二号机"
+      :initial-value="renameOldName"
+      :submit="submitAccountRename"
     />
 
     <!-- 弹窗 2: 积分与今日任务进度详情 -->
@@ -658,10 +671,14 @@ onUnmounted(() => {
     />
 
     <!-- 弹窗 4: 云电脑名称重命名弹窗 -->
-    <DesktopRenameDialog
+    <RenameDialog
       v-model:open="showDesktopRenameModal"
-      :desktop-code="renameDesktopCode"
-      :current-name="renameDesktopCurrentName"
+      title="修改云电脑名称"
+      description="同步修改天翼云官方控制台显示的云电脑昵称"
+      label="云电脑新名称"
+      placeholder="例如：挂机专用机 / 开发机"
+      :initial-value="renameDesktopCurrentName"
+      :submit="submitDesktopRename"
     />
   </div>
 </template>

@@ -7,6 +7,7 @@ import { safeWriteFileSync } from '../infra/fs.js';
 import { Config } from '../config.js';
 import { timingSafeEqualString } from '../infra/crypto.js';
 import { sendSuccess, sendError } from '../infra/reply.js';
+import { errorText } from '../infra/http.js';
 
 export interface AuthContext {
   sessions: Set<string>;
@@ -98,7 +99,10 @@ export function createAuthContext(manager: ProfileManager): AuthContext {
         purgeExpiredSessions();
       }
     }
-  } catch {}
+  } catch (e) {
+    // 文件损坏时告警，避免重启后全体登录态静默丢失且无从排查
+    manager.addLog('warn', `会话文件解析失败，已忽略: ${sessionFile} - ${errorText(e)}`);
+  }
 
   const isValidToken = (token?: string): boolean => {
     if (!token) return false;

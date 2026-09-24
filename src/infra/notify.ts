@@ -1,27 +1,5 @@
 import { getCstDateTimeString } from './time.js';
-
-/**
- * 安全的 HTTP 请求客户端 (带超时控制)
- */
-export async function safeFetch(
-  url: string,
-  options: RequestInit & { timeoutMs?: number } = {},
-): Promise<{ ok: boolean; status: number; text: string }> {
-  const { timeoutMs = 10000, ...fetchOptions } = options;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetch(url, {
-      ...fetchOptions,
-      signal: controller.signal,
-    });
-    const text = await res.text();
-    return { ok: res.ok, status: res.status, text };
-  } finally {
-    clearTimeout(timer);
-  }
-}
+import { timedFetch } from './http.js';
 
 /**
  * 统一通知推送模块
@@ -60,13 +38,13 @@ export class NotifyService {
         const barkUrl = url.endsWith('/')
           ? `${url}${encTitle}/${encBody}`
           : `${url}/${encTitle}/${encBody}`;
-        const res = await safeFetch(barkUrl, { method: 'GET', timeoutMs: 8000 });
+        const res = await timedFetch(barkUrl, { method: 'GET', timeoutMs: 8000 });
         return res.ok;
       }
 
       // 2. Server 酱 (sctapi.ftqq.com)
       if (url.includes('ftqq.com')) {
-        await safeFetch(url, {
+        await timedFetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: `title=${encodeURIComponent(formatted.title)}&desp=${encodeURIComponent(formatted.content)}`,
@@ -77,7 +55,7 @@ export class NotifyService {
 
       // 3. 企业微信 Webhook
       if (url.includes('qyapi.weixin.qq.com')) {
-        await safeFetch(url, {
+        await timedFetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -93,7 +71,7 @@ export class NotifyService {
 
       // 4. 飞书机器人 Webhook
       if (url.includes('open.feishu.cn')) {
-        await safeFetch(url, {
+        await timedFetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -109,7 +87,7 @@ export class NotifyService {
 
       // 5. 钉钉机器人 Webhook
       if (url.includes('oapi.dingtalk.com')) {
-        await safeFetch(url, {
+        await timedFetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -132,7 +110,7 @@ export class NotifyService {
         } catch {}
 
         if (chatId) {
-          await safeFetch(url, {
+          await timedFetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -147,7 +125,7 @@ export class NotifyService {
       }
 
       // 7. 默认通用 JSON POST Webhook
-      await safeFetch(url, {
+      await timedFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

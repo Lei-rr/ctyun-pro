@@ -61,11 +61,6 @@ export interface AccountConfig {
   desktops?: ManagedDesktopState[]; // 本地缓存持久化的云电脑列表快照
 }
 
-export interface SystemConfig {
-  adminPassword?: string;
-  webhookUrl?: string; // 消息推送 (如 Server酱 / Bark / Webhook)
-}
-
 export class Config {
   public static get dataDir(): string {
     if (process.env.CTYUN_DATA_DIR) {

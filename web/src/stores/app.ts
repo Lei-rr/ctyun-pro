@@ -213,6 +213,8 @@ export const useAppStore = defineStore('app', () => {
   const isWsConnected = ref(false);
   let wsClient: WebSocket | null = null;
   let wsReconnectTimer: NodeJS.Timeout | null = null;
+  // 重连退避：3s 起、翻倍、30s 封顶，避免服务端故障时全体客户端重连风暴
+  let wsReconnectDelay = 3000;
 
   function initLogs(newLogs: LogItem[]) {
     logs.value = (newLogs || []).slice(-1000);
@@ -248,6 +250,7 @@ export const useAppStore = defineStore('app', () => {
 
       wsClient.onopen = () => {
         isWsConnected.value = true;
+        wsReconnectDelay = 3000;
         if (wsReconnectTimer) {
           clearTimeout(wsReconnectTimer);
           wsReconnectTimer = null;
@@ -275,7 +278,8 @@ export const useAppStore = defineStore('app', () => {
           wsReconnectTimer = setTimeout(() => {
             wsReconnectTimer = null;
             connectWebSocket();
-          }, 3000);
+          }, wsReconnectDelay);
+          wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000);
         }
       };
 
