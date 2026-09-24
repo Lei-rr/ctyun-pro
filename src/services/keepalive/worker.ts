@@ -226,7 +226,7 @@ export class KeepAliveWorker {
     try {
       const hbBuf = Protocol.buildHeartbeat();
       this.currentWs.send(hbBuf);
-      this.log('info', '发送活跃心跳，维持云端会话在线', { foldKey: 'keepalive:heartbeat' });
+      this.log('info', '发送客户端活跃心跳 (30s 心跳保活)', { foldKey: 'keepalive:heartbeat' });
       this.options.onHeartbeat?.();
       // 兜底：若 10s 内未收到 HEARTBEAT_RES (handleHeartBeatRes 会重排)，则仍按节奏续发，避免断流
       this.scheduleNextHeartbeat(HEARTBEAT_RES_FALLBACK_MS);
