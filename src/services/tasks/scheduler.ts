@@ -119,6 +119,8 @@ export class TaskScheduler {
             try {
               this.logger.addLog('info', `命中每日任务定时 (${targetTime}，抖动 ${(jitterMs/1000).toFixed(1)}s)，开始执行`, { account: name });
               const res = await TaskRunner.executeDailyTasks(client, tConf);
+              // 执行器内部失败 (如 AI 对话 3 次未成功) 需抛出以复用退避重试，禁止静默标记完成
+              if (!res.success) throw new Error(res.message);
               tConf.lastRunDate = today;
               delete tConf.retryCount;
               delete tConf.retryDate;
@@ -266,7 +268,10 @@ export class TaskScheduler {
           let resolvedReward = null;
           try {
             resolvedReward = await RewardRedeemService.resolveReward(client, rConf.targetProdId, this.profileManager.rewardsCache);
-          } catch {}
+          } catch (e) {
+            // 反查失败不阻断：降级使用本地配置的兑换参数
+            this.logger.addLog('warn', `商品规格在线反查失败，改用本地配置参数: ${errorText(e)}`, { account: name });
+          }
 
           // 九江专属积分(20)商品不参与自动兑换
           const redeemPointType = resolvedReward?.costPointType ?? rConf.costPointType ?? 1;

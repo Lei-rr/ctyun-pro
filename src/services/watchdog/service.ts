@@ -1,4 +1,5 @@
-import { ProfileManager } from '../../core/profile-manager.js';
+// 仅类型引用：避免 watchdog <-> profile-manager 运行时循环依赖
+import type { ProfileManager } from '../../core/profile-manager.js';
 import { errorText } from '../../infra/http.js';
 import { Logger } from '../../infra/logger.js';
 import { normalizeDesktopState, normalizeUseStatusText } from '../../ctyun/client.js';

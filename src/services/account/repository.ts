@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { APP_VERSION, Config, DEFAULT_REDEEM_CONFIG, type AccountConfig } from '../../config.js';
 import { safeWriteFileSync } from '../../infra/fs.js';
+import { errorText } from '../../infra/http.js';
 
 const SAVE_CONFIG_DEBOUNCE_MS = 150;
 
@@ -39,7 +40,9 @@ export class AccountRepository {
         const sys = sysJson.system || sysJson;
         if (sys.adminPassword !== undefined) adminPassword = String(sys.adminPassword);
         if (sys.webhookUrl !== undefined) webhookUrl = String(sys.webhookUrl);
-      } catch {}
+      } catch (e) {
+        console.warn(`[config] system 配置读取失败，使用默认值: ${errorText(e)}`);
+      }
     }
 
     if (process.env.ADMIN_PASSWORD && !adminPassword) {
@@ -58,17 +61,21 @@ export class AccountRepository {
         } else if (Array.isArray(accJson.accounts)) {
           rawAccounts = accJson.accounts;
         }
-      } catch {}
+      } catch (e) {
+        console.warn(`[config] accounts 配置读取失败，账号列表按空处理: ${errorText(e)}`);
+      }
     }
 
-    // 兼容旧版 config.json 内含 accounts 字段
+    // 兼容旧版 config.json 内含 accounts 字段（次要回退路径，失败按无账号处理）
     if (rawAccounts.length === 0 && fs.existsSync(Config.configFile)) {
       try {
         const legacyCfg = JSON.parse(fs.readFileSync(Config.configFile, 'utf8'));
         if (Array.isArray(legacyCfg.accounts)) {
           rawAccounts = legacyCfg.accounts;
         }
-      } catch {}
+      } catch {
+        // 忽略：旧版格式解析失败视为无历史账号
+      }
     }
 
     for (const acc of rawAccounts) {
