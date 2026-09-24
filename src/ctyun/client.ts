@@ -98,11 +98,13 @@ export function normalizeDesktopState(state?: string): 'running' | 'stopped' | '
 
 /**
  * useStatusText 语义归一化 (服务端下发中文文案)
- * 判定顺序: 休眠/关机 → 离线运行 → 否定词 → 运行/使用
+ * 判定顺序: 唤醒/启动过渡态 → 休眠/关机 → 离线运行 → 否定词 → 运行/使用
  */
-export function normalizeUseStatusText(text?: string): 'running' | 'stopped' | 'suspended' | 'unknown' {
+export function normalizeUseStatusText(text?: string): 'running' | 'stopped' | 'suspended' | 'transition' | 'unknown' {
   const t = String(text || '').trim();
   if (!t) return 'unknown';
+  // 0. 过渡态 (唤醒中、启动中、重启中)
+  if (t.includes('唤醒中') || t.includes('启动中') || t.includes('重启中')) return 'transition';
   // 1. 先判定停止/休眠类关键词 (优先级最高，避免被"未"误伤)
   if (t.includes('休眠') || t.includes('睡眠') || t.includes('挂起')) return 'suspended';
   if (t.includes('关机') || t.includes('停止')) return 'stopped';
@@ -551,7 +553,7 @@ export class CtYunClient {
           desktopId: String(item.desktopId || item.objId),
           desktopName: item.desktopName || '天翼云电脑',
           desktopCode: item.desktopCode || '',
-          useStatusText: String(item.useStatusText || ''),
+          useStatusText: String(item.useStatusText || item.useStatus || ''),
           useStatus: item.useStatus,
           imageName: item.imageName || '',
           flavorName: item.flavorName || item.prodGroupName || '',
@@ -737,16 +739,21 @@ export class CtYunClient {
   }
 
   /**
-   * 7.1 获取云电脑实时运行状态 (对齐官方 api/desktop/client/state 轻量级毫秒级接口)
+   * 7.1 获取云电脑实时运行状态
    */
   public async getDesktopState(desktopId: string, objType = 0): Promise<DesktopStateInfo | null> {
     try {
-      const json = await this.requestApi<{ code: number; data?: DesktopStateInfo[] }>(
-        '/api/desktop/client/state',
-        { method: 'POST', jsonBody: [{ objId: String(desktopId), objType }] },
-      );
-      if (json.code === 0 && Array.isArray(json.data) && json.data.length > 0) {
-        return json.data[0];
+      const list = await this.getDesktopList();
+      const item = list.find((d) => String(d.desktopCode) === String(desktopId) || String(d.desktopId) === String(desktopId) || String(d.objId) === String(desktopId));
+      if (item) {
+        const text = item.useStatusText || (item.useStatus ? String(item.useStatus) : '');
+        return {
+          objType: item.objType ?? objType,
+          objId: item.objId || item.desktopId,
+          desktopId: item.desktopId,
+          useStatus: item.useStatus,
+          useStatusText: text,
+        };
       }
     } catch {}
     return null;
@@ -861,6 +868,7 @@ export class CtYunClient {
     desktopId: string,
     operation: PowerOperation,
     objType = 0,
+    customBaseUrl?: string,
   ): Promise<string> {
     const typeMap: Record<PowerOperation, number> = {
       on: 1,
@@ -881,27 +889,42 @@ export class CtYunClient {
     formData.append('objType', String(objType));
     formData.append('operationType', String(opType));
 
-    const json = await this.requestApi<{ code: number; msg?: string }>(
-      '/api/desktop/client/operate',
-      { method: 'POST', formBody: Object.fromEntries(formData.entries()) },
-    );
-    if (json.code === 0) {
-      const opNames: Record<number, string> = {
-        1: '开机指令已下发，正在启动...',
-        18: '唤醒指令已下发，正在从休眠中唤醒...',
-        2: '关机指令已下发...',
-        3: '重启指令已下发，正在重启...',
-      };
-      return opNames[opType] || '电源控制指令已下发';
+    const opNames: Record<number, string> = {
+      1: '开机指令已下发，正在启动...',
+      18: '唤醒指令已下发，正在从休眠中唤醒...',
+      2: '关机指令已下发...',
+      3: '重启指令已下发，正在重启...',
+    };
+
+    const baseUrls = [customBaseUrl, undefined].filter((u, i, arr) => arr.indexOf(u) === i);
+    let lastError = '';
+
+    for (const bUrl of baseUrls) {
+      try {
+        const json = await this.requestApi<{ code: number; msg?: string }>(
+          '/api/desktop/client/operate',
+          {
+            method: 'POST',
+            formBody: Object.fromEntries(formData.entries()),
+            baseUrl: bUrl || undefined,
+          },
+        );
+        if (json.code === 0) {
+          return opNames[opType] || '电源控制指令已下发';
+        }
+        // 特殊容错：若提示“只有已关机状态允许进行开机操作”或状态不符，平滑判定
+        if (
+          (opType === 1 || opType === 18) &&
+          (json.code === 30010 || json.msg?.includes('已关机状态') || json.msg?.includes('已运行') || json.msg?.includes('已经处于') || json.msg?.includes('not suspended'))
+        ) {
+          return '云电脑已在运行中或处于可用状态';
+        }
+        lastError = json.msg || `操作失败 (Code: ${json.code})`;
+      } catch (err) {
+        lastError = errorText(err);
+      }
     }
-    // 特殊容错：若提示“只有已关机状态允许进行开机操作”或状态不符，平滑判定
-    if (
-      (opType === 1 || opType === 18) &&
-      (json.code === 30010 || json.msg?.includes('已关机状态') || json.msg?.includes('已运行') || json.msg?.includes('已经处于'))
-    ) {
-      return '云电脑已在运行中或处于可用状态';
-    }
-    throw new Error(json.msg || `操作失败 (Code: ${json.code})`);
+    throw new Error(lastError || '电源操作失败');
   }
 
   /** 官方积分中心 (selforder SPA) 的接口根地址 (该 SPA 不启用请求体加密) */

@@ -218,11 +218,12 @@ export class KeepaliveService extends EventEmitter {
         const isSleep = textKind === 'suspended';
         const isOff = textKind === 'stopped';
         let cmdSent = false;
+        const backupUrl = Array.isArray(d.backupurl) && d.backupurl.length > 0 ? d.backupurl[0] : undefined;
 
         if (isSleep) {
           this.logger.addLog('info', '云电脑休眠中，正在发送唤醒指令', { account: accountName, desktop: dName });
           try {
-            await client.operateDesktop(d.desktopId, 'awake', d.objType);
+            await client.operateDesktop(d.desktopId, 'awake', d.objType, backupUrl);
             this.logger.addLog('info', '唤醒指令已发送，等待启动就绪 (最长 5 分钟)', { account: accountName, desktop: dName });
             cmdSent = true;
           } catch (e) {
@@ -232,7 +233,7 @@ export class KeepaliveService extends EventEmitter {
         } else if (isOff) {
           this.logger.addLog('info', '云电脑已关机，正在发送开机指令', { account: accountName, desktop: dName });
           try {
-            await client.operateDesktop(d.desktopId, 'on', d.objType);
+            await client.operateDesktop(d.desktopId, 'on', d.objType, backupUrl);
             this.logger.addLog('info', '开机指令已发送，等待启动就绪 (最长 5 分钟)', { account: accountName, desktop: dName });
             cmdSent = true;
           } catch (e) {

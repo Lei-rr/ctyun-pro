@@ -516,6 +516,7 @@ export class ProfileManager {
     try {
       const targetObjType = typeof desktop.objType === 'number' ? desktop.objType : 0;
       const dName = desktop.desktopName || desktop.computerName || desktop.name || canonicalDesktopCode;
+      const backupUrl = Array.isArray(desktop.backupurl) && desktop.backupurl.length > 0 ? desktop.backupurl[0] : undefined;
 
       let message = '';
       if (operation === 'on' || operation === 'awake') {
@@ -525,14 +526,14 @@ export class ProfileManager {
         const fallbackOp: 'on' | 'awake' = isSleep ? 'on' : 'awake';
 
         try {
-          message = await client.operateDesktop(requestApiDesktopId, primaryOp, targetObjType);
+          message = await client.operateDesktop(requestApiDesktopId, primaryOp, targetObjType, backupUrl);
         } catch (firstErr) {
           const firstErrMsg = errorText(firstErr);
           if (firstErrMsg.includes('已运行') || firstErrMsg.includes('已经处于') || firstErrMsg.includes('已在运行')) {
             message = '云电脑已处于运行可用状态';
           } else {
             try {
-              message = await client.operateDesktop(requestApiDesktopId, fallbackOp, targetObjType);
+              message = await client.operateDesktop(requestApiDesktopId, fallbackOp, targetObjType, backupUrl);
             } catch (secondErr) {
               // 两路信令均失败时，借 connectDesktop 触发官方云端 goingRetry 拉起
               try {
@@ -545,7 +546,7 @@ export class ProfileManager {
           }
         }
       } else {
-        message = await client.operateDesktop(requestApiDesktopId, operation, targetObjType);
+        message = await client.operateDesktop(requestApiDesktopId, operation, targetObjType, backupUrl);
       }
 
       this.logger.addLog('info', message, { account: accountName, desktop: dName });

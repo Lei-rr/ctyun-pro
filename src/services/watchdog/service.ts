@@ -200,9 +200,30 @@ export class WatchdogService {
       // 运行态下主动接入会触发服务端 exitDesktop 广播踢掉真机用户，因此仅对已休眠/关机实例接管。
       const stateKind = normalizeDesktopState(desktopState);
       const textKind = normalizeUseStatusText(useStatusText);
-      const isStoppedOrSleeping = stateKind === 'stopped' || stateKind === 'suspended' || textKind === 'stopped' || textKind === 'suspended';
+      const isStopped = stateKind === 'stopped' || textKind === 'stopped';
+      const isSleeping = stateKind === 'suspended' || textKind === 'suspended';
+      const isStoppedOrSleeping = isStopped || isSleeping;
 
       if (!isStoppedOrSleeping) {
+        // 如果处于过渡状态 (transition / 唤醒中 / 启动中)
+        if (stateKind === 'transition' || textKind === 'transition') {
+          state.consecutiveBusyCount = 0;
+          this.logger.addLog(
+            'info',
+            `实例启动/唤醒中 (${useStatusText || '过渡态'})，60秒后复检`,
+            { account: accountName, desktop: dName, foldKey: 'watchdog:probe' },
+          );
+          // 安排短间隔复检 (60秒)
+          state.currentIntervalMs = 60000;
+          state.nextProbeTime = Date.now() + 60000;
+          if (state.timer) clearTimeout(state.timer);
+          state.timer = setTimeout(() => {
+            void this.probeAndHeal(accountName, desktopId);
+          }, 60000);
+          this.profileManager.notifyStatusChange();
+          return;
+        }
+
         state.consecutiveBusyCount += 1;
         const nextMin = Math.round(
           Math.min(this.baseIntervalMs * Math.pow(2, state.consecutiveBusyCount), this.maxIntervalMs) / 60000,
