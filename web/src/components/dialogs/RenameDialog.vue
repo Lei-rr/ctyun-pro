@@ -1,21 +1,24 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { useAppStore } from '@/stores/app';
 import { Button } from '@/shared/ui/button';
 import { Input } from '@/shared/ui/input';
 import { AppDialog } from '@/shared/ui/dialog';
 
+// 通用重命名弹窗：账号备注与云电脑名称共用，提交逻辑由父组件注入
 const props = defineProps<{
   open: boolean;
-  desktopCode: string;
-  currentName: string;
+  title: string;
+  description: string;
+  label: string;
+  placeholder: string;
+  initialValue?: string;
+  submit: (value: string) => Promise<void>;
 }>();
 
 const emit = defineEmits<{
   (e: 'update:open', val: boolean): void;
 }>();
 
-const store = useAppStore();
 const inputVal = ref('');
 const loading = ref(false);
 const errorMsg = ref('');
@@ -24,22 +27,23 @@ watch(
   () => props.open,
   (val) => {
     if (val) {
-      inputVal.value = props.currentName || '';
+      inputVal.value = props.initialValue || '';
       errorMsg.value = '';
     }
   },
 );
 
-async function submitRename() {
+async function handleSubmit() {
   const trimmed = inputVal.value.trim();
-  if (!trimmed || !props.desktopCode) return;
+  if (!trimmed) return;
   loading.value = true;
   errorMsg.value = '';
   try {
-    await store.renameDesktop(props.desktopCode, trimmed);
+    // props.submit 需可等待，loading 与错误提示依赖其完成时机
+    await props.submit(trimmed);
     emit('update:open', false);
   } catch (err: any) {
-    errorMsg.value = err.message || '修改失败，请重试';
+    errorMsg.value = err?.message || '修改失败，请重试';
   } finally {
     loading.value = false;
   }
@@ -50,17 +54,17 @@ async function submitRename() {
   <AppDialog
     :open="open"
     @update:open="emit('update:open', $event)"
-    title="修改云电脑名称"
-    description="同步修改天翼云官方控制台显示的云电脑昵称"
+    :title="title"
+    :description="description"
     content-class="sm:max-w-sm"
   >
-    <form @submit.prevent="submitRename" class="space-y-3.5">
+    <form @submit.prevent="handleSubmit" class="space-y-3.5">
       <div class="space-y-1.5">
-        <label class="text-xs font-medium text-foreground">云电脑新名称</label>
+        <label class="text-xs font-medium text-foreground">{{ label }}</label>
         <Input
           type="text"
           v-model="inputVal"
-          placeholder="例如：挂机专用机 / 开发机"
+          :placeholder="placeholder"
           required
           autofocus
           class="h-9"

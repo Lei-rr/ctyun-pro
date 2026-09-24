@@ -158,7 +158,7 @@ export class Protocol {
     while (offset + 6 <= buffer.length) {
       const type = buffer.readUInt16LE(offset);
       const size = buffer.readUInt32LE(offset + 2);
-      if (size < 0 || offset + 6 + size > buffer.length) break;
+      if (offset + 6 + size > buffer.length) break;
 
       if (type !== 0) {
         results.push({ type, data: buffer.subarray(offset + 6, offset + 6 + size) });
