@@ -1,6 +1,6 @@
 {
   "name": "ctyun-pro",
-  "version": "3.0.6",
+  "version": "3.0.7",
   "description": "\u5929\u7ffc\u4e91\u7535\u8111\u591a\u8d26\u53f7\u96c6\u4e2d\u7ba1\u7406\u4e0e\u81ea\u52a8\u505a\u4efb\u52a1\u4fdd\u6d3b\u8fd0\u7ef4\u7cfb\u7edf (\u7eaf\u534f\u8bae\u7248)",
   "type": "module",
   "workspaces": [
