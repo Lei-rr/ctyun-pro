@@ -24,6 +24,9 @@ import type { ManagedAccount, ManagedDesktopState } from '../types.js';
 
 export { type ManagedAccount } from '../types.js';
 
+/** Web 避让心跳续期水位：代理页每 5s 心跳续期，剩余 >285s 视为活跃期（容忍 2 次丢包），不展示恢复倒计时 */
+const WEB_YIELD_COUNTDOWN_THRESHOLD_SEC = 285;
+
 /** 官方桌面数据 → 托管态 (保留既有运行状态与心跳) */
 function mergeDesktopState(d: Desktop, old?: ManagedDesktopState): ManagedDesktopState {
   return {
@@ -404,8 +407,9 @@ export class ProfileManager {
           }
           if (webActive || info || d.status === 'paused') {
             const probeSec = info?.nextProbeSec;
+            // 心跳活跃续期期输出 0(不展示倒计时),规避数字在 300s 附近循环跳动；失联后 remainingSeconds 真实递减
             const remainingSec = webActive
-              ? (webActiveRemaining || 300)
+              ? (webActiveRemaining > WEB_YIELD_COUNTDOWN_THRESHOLD_SEC ? 0 : webActiveRemaining)
               : (typeof probeSec === 'number' && probeSec > 0 ? probeSec : (d.status === 'paused' ? 300 : 0));
 
             next.yieldStatus = {

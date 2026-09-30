@@ -461,7 +461,7 @@ onUnmounted(() => {
                         }"
                         :title="desktop.yieldStatus?.yielding ? (desktop.yieldStatus.reason || '检测到外部官方客户端在线，系统主动避让中') : ''"
                       >
-                        {{ desktop.yieldStatus?.yielding ? `避让中 (${desktop.yieldStatus.remainingSeconds}s)` : (desktop.status === 'paused' ? '暂停探测中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机')))) }}
+                        {{ desktop.yieldStatus?.yielding ? (desktop.yieldStatus.remainingSeconds ? `避让中 (${desktop.yieldStatus.remainingSeconds}s)` : '避让中') : (desktop.status === 'paused' ? '暂停探测中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机')))) }}
                       </Badge>
                     </TableCell>
                     <TableCell class="py-2.5 whitespace-nowrap">
@@ -570,7 +570,7 @@ onUnmounted(() => {
                   }"
                   :title="desktop.yieldStatus?.yielding ? (desktop.yieldStatus.reason || '检测到外部官方客户端在线，系统主动避让中') : ''"
                 >
-                  {{ desktop.yieldStatus?.yielding ? `避让中 (${desktop.yieldStatus.remainingSeconds}s)` : (desktop.status === 'paused' ? '暂停探测中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机')))) }}
+                  {{ desktop.yieldStatus?.yielding ? (desktop.yieldStatus.remainingSeconds ? `避让中 (${desktop.yieldStatus.remainingSeconds}s)` : '避让中') : (desktop.status === 'paused' ? '暂停探测中' : (desktop.status === 'connected' ? '运行中' : (desktop.status === 'connecting' && desktop.useStatusText === '已关机' ? '开机就绪中' : (desktop.useStatusText || '已关机')))) }}
                 </Badge>
               </div>
               <div class="flex items-center justify-between text-xs text-muted-foreground font-mono">
