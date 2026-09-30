@@ -11,6 +11,7 @@ export interface DesktopModel {
   computerName?: string;
   imageName?: string;
   flavorName?: string;
+  prodGroupName?: string;
   status?: string;
   useStatusText?: string;
   ip?: string;

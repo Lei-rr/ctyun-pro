@@ -254,6 +254,7 @@ export class AccountStore {
           useStatusText: d.useStatusText || '空闲',
           imageName: d.imageName || '',
           flavorName: d.flavorName || d.desktopName || '',
+          prodGroupName: d.prodGroupName || '',
           status: 'idle' as const,
           lastHeartbeat: typeof d.lastHeartbeat === 'string' ? d.lastHeartbeat : undefined,
         })),

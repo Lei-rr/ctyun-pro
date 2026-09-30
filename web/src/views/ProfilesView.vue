@@ -144,23 +144,6 @@ function openPointsModal(account: Account) {
   showPointsModal.value = true;
 }
 
-function parseDesktopSpec(desktop: any): string {
-  const flavor = desktop.flavorName || '';
-  const name = desktop.desktopName || '';
-  const specMatch = flavor.match(/(\d+C\d+G)/i) || name.match(/(\d+C\d+G)/i);
-  let spec = specMatch ? specMatch[1].toUpperCase() : '';
-
-  if (!spec) {
-    if (name.includes('旗舰版') || flavor.includes('旗舰版')) spec = '16C32G';
-    else if (name.includes('尊享版') || flavor.includes('尊享版') || name.includes('精英版') || flavor.includes('精英版')) spec = '8C16G';
-    else if (name.includes('标准版') || flavor.includes('标准版')) spec = '4C8G';
-    else if (name.includes('政企') || flavor.includes('政企') || desktop.isPool) spec = '8C16G';
-    else spec = '8C16G';
-  }
-
-  return spec;
-}
-
 // 避让与看门狗秒级平滑自减计时器
 let yieldSecondTimer: any = null;
 
@@ -410,7 +393,7 @@ onUnmounted(() => {
               <TableHeader>
                 <TableRow class="hover:bg-transparent border-border/60">
                   <TableHead class="h-9 text-xs font-medium w-[22%]">云电脑名称</TableHead>
-                  <TableHead class="h-9 text-xs font-medium w-[14%]">硬件规格</TableHead>
+                  <TableHead class="h-9 text-xs font-medium w-[14%]">版本</TableHead>
                   <TableHead class="h-9 text-xs font-medium w-[18%]">实例代码 / ID</TableHead>
                   <TableHead class="h-9 text-xs font-medium w-[13%]">云端状态</TableHead>
                   <TableHead class="h-9 text-xs font-medium w-[13%]">保活长连</TableHead>
@@ -442,7 +425,7 @@ onUnmounted(() => {
                     <TableCell class="py-2.5 whitespace-nowrap">
                       <div class="flex items-center gap-1.5">
                         <Badge variant="outline" class="h-5 px-1.5 text-[10px] font-mono border-primary/30 text-primary">
-                           {{ parseDesktopSpec(desktop) }}
+                           {{ desktop.prodGroupName || desktop.flavorName || '-' }}
                         </Badge>
                       </div>
                     </TableCell>
@@ -556,7 +539,7 @@ onUnmounted(() => {
                     <Pencil class="size-3" />
                   </Button>
                   <Badge variant="outline" class="h-4 px-1.5 text-[10px] font-mono border-primary/40 text-primary shrink-0">
-                     {{ parseDesktopSpec(desktop) }}
+                     {{ desktop.prodGroupName || desktop.flavorName || '-' }}
                   </Badge>
                 </div>
                 <Badge

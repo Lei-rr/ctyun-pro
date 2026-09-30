@@ -43,6 +43,7 @@ function mergeDesktopState(d: Desktop, old?: ManagedDesktopState): ManagedDeskto
     backupurl: d.backupurl,
     imageName: d.imageName || '',
     flavorName: d.flavorName || d.desktopName || '',
+    prodGroupName: d.prodGroupName || '',
     status: old?.status || 'idle',
     lastHeartbeat: typeof old?.lastHeartbeat === 'string' ? old.lastHeartbeat : undefined,
   };
@@ -64,6 +65,7 @@ function toPersistedDesktop(d: ManagedDesktopState): ManagedDesktopState {
     backupurl: d.backupurl,
     imageName: d.imageName,
     flavorName: d.flavorName,
+    prodGroupName: d.prodGroupName,
     status: d.status,
     lastHeartbeat: d.lastHeartbeat,
   };

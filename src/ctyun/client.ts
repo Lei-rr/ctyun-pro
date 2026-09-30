@@ -60,6 +60,7 @@ export interface Desktop {
   desktopInfo?: DesktopInfo;
   imageName?: string;
   flavorName?: string;
+  prodGroupName?: string;
   objType?: number; // 0: 普通单机, 1: 政企桌面池, 2: 抢占式
   objId?: string;
   poolId?: string;
@@ -557,6 +558,7 @@ export class CtYunClient {
           useStatus: item.useStatus,
           imageName: item.imageName || '',
           flavorName: item.flavorName || item.prodGroupName || '',
+          prodGroupName: item.prodGroupName || '',
           objType: item.objType ?? 0,
           objId: String(item.objId || item.desktopId),
           isPool: false,
@@ -580,6 +582,7 @@ export class CtYunClient {
           useStatus: item.useStatus,
           imageName: item.imageName || '',
           flavorName: item.flavorName || item.prodGroupName || '政企版',
+          prodGroupName: item.prodGroupName || '',
           objType: item.objType ?? 1,
           objId: poolId,
           poolId,
@@ -603,6 +606,7 @@ export class CtYunClient {
           useStatus: item.useStatus,
           imageName: item.imageName || '',
           flavorName: item.flavorName || item.prodGroupName || '',
+          prodGroupName: item.prodGroupName || '',
           objType: item.objType ?? 2,
           objId,
           isPool: false,
