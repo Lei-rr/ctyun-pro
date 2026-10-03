@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useAppStore } from '@/stores/app';
-import { RefreshCw } from 'lucide-vue-next';
+import { Loader2, RefreshCw } from 'lucide-vue-next';
 import { Button } from '@/shared/ui/button';
 import { Input } from '@/shared/ui/input';
 import { Switch } from '@/shared/ui/switch';
@@ -163,10 +163,12 @@ const store = useAppStore();
             variant="secondary"
             size="sm"
             class="h-9 px-3 text-xs gap-1 cursor-pointer"
+            :disabled="store.policyRedeemLoading"
             @click="store.manualRedeem(store.policyAccount)"
             title="立即测试执行当前选中的商品兑换"
           >
-            <span>立即兑换</span>
+            <Loader2 v-if="store.policyRedeemLoading" class="size-3.5 animate-spin" />
+            <span>{{ store.policyRedeemLoading ? '兑换中...' : '立即兑换' }}</span>
           </Button>
         </div>
         <div class="flex items-center gap-2">

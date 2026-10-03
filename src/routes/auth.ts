@@ -107,12 +107,25 @@ export function createAuthContext(manager: ProfileManager): AuthContext {
   const isValidToken = (token?: string): boolean => {
     if (!token) return false;
     if (token === 'no-auth' && !manager.adminPassword) return true;
-    if (sessions.has(token)) return true;
+    if (sessions.has(token)) {
+      // 会话仅在启动时清理，运行期惰性校验时效，避免过期 token 长期可用
+      const [cachedTs] = token.split('.');
+      const cachedIssuedAt = parseInt(cachedTs, 10);
+      if (!Number.isFinite(cachedIssuedAt) || Date.now() - cachedIssuedAt > MAX_TOKEN_AGE_MS) {
+        sessions.delete(token);
+        saveSessions();
+        return false;
+      }
+      return true;
+    }
     if (!manager.adminPassword) return false;
 
     const parts = token.split('.');
     if (parts.length !== 2) return false;
     const [ts, sig] = parts;
+    // 无时效校验则旧 token 可凭 HMAC 永久通过并回填会话，与 30 天过期设计冲突
+    const issuedAt = parseInt(ts, 10);
+    if (!Number.isFinite(issuedAt) || Date.now() - issuedAt > MAX_TOKEN_AGE_MS) return false;
     const expectedSig = crypto
       .createHmac('sha256', manager.adminPassword)
       .update(ts)

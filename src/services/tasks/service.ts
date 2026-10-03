@@ -6,7 +6,7 @@ import type { AccountConfig, RedeemConfig } from '../../config.js';
 import type { ManagedAccount, ManagedDesktopState } from '../../types.js';
 import { AiChatTask } from './ai-chat.js';
 import { PointsTask, isDailyTask, TASK_STATUS, type PointsSummary } from './points.js';
-import { RewardRedeemService, DEFAULT_LOCAL_REWARDS, type RewardItem } from '../reward/service.js';
+import { RewardRedeemService, type RewardItem } from '../reward/service.js';
 
 /** 任务与积分业务对外依赖 (由 ProfileManager 注入，避免循环引用) */
 export interface TasksHost {
@@ -25,8 +25,6 @@ export interface TasksHost {
   cacheTodayPoints(accountName: string, points: number, date: string, summary: PointsSummary): void;
   setTodayPoints(accountName: string, points: number): void;
 }
-
-const REWARDS_CACHE_TTL_MS = 6 * 3600 * 1000;
 
 /**
  * 积分任务、AI 对话与积分兑换业务服务
@@ -109,7 +107,12 @@ export class TasksService {
     }
 
     const finalProdId = prodId || rConf.targetProdId;
-    const resolved = await RewardRedeemService.resolveReward(client, finalProdId, this.host.rewardsCache);
+    // 兑换前拉取最新商品目录，确认目标商品仍在售（目录变更/下架时直接拒绝，避免无效下单）
+    const latest = await this.getAvailableRewards(accountName);
+    const resolved = latest.find((i) => Number(i.prodId) === Number(finalProdId));
+    if (!resolved) {
+      throw new Error(`目标商品 ${finalProdId} 不在官方在售列表中，请刷新商品列表后重试`);
+    }
 
     const res = await RewardRedeemService.placeOrder(
       client,
@@ -154,14 +157,15 @@ export class TasksService {
     return `${res.message}${restartNote}`;
   }
 
-  /** 获取积分商城商品目录 (纯内存缓存，6 小时 TTL) */
-  public async getAvailableRewards(accountName?: string, forceRefresh = false): Promise<RewardItem[]> {
-    const cache = this.host.rewardsCache;
-    const targetAccount =
-      accountName || this.host.getAccountNames().find((k) => !!this.host.getClient(k).loginInfo);
+  /** 获取积分商城商品目录（每次向官方实时拉取，不设本地兜底目录） */
+  public async getAvailableRewards(accountName?: string): Promise<RewardItem[]> {
+    // 优先使用指定账号的登录态；其不可用时回退到任意已登录账号（商品目录与账号身份无关，仅借用登录态）
+    const named = accountName ? this.host.getClient(accountName) : undefined;
+    const targetAccount = named?.loginInfo
+      ? accountName
+      : this.host.getAccountNames().find((k) => !!this.host.getClient(k).loginInfo);
 
-    const isStale = Date.now() - this.host.rewardsCacheUpdatedAt > REWARDS_CACHE_TTL_MS;
-    if (targetAccount && (forceRefresh || cache.length === 0 || isStale)) {
+    if (targetAccount) {
       try {
         const client = this.host.getClient(targetAccount);
         if (client?.loginInfo) {
@@ -171,11 +175,10 @@ export class TasksService {
           }
         }
       } catch (err) {
-        this.host.logger.addLog('warn', `获取在线商品列表失败，回退内存缓存: ${errorText(err)}`, {});
+        this.host.logger.addLog('warn', `获取在线商品列表失败，返回当前缓存: ${errorText(err)}`, {});
       }
     }
-    const current = this.host.rewardsCache;
-    return current.length > 0 ? current : DEFAULT_LOCAL_REWARDS;
+    return this.host.rewardsCache;
   }
 
   /** 查询积分与任务，并同步今日已获积分缓存 */

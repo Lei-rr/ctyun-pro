@@ -264,13 +264,20 @@ export class TaskScheduler {
               }
             }
           }
-          // 在线反查商品规格 (获取官方 costPointType / prodType 等准确参数)
+          // 兑换前先拉取最新商品目录，确认目标商品仍在售；拉取失败或不在售则跳过本次兑换
           let resolvedReward = null;
           try {
-            resolvedReward = await RewardRedeemService.resolveReward(client, rConf.targetProdId, this.profileManager.rewardsCache);
+            const latest = await this.profileManager.getAvailableRewards(name);
+            resolvedReward = latest.find((i) => Number(i.prodId) === Number(rConf.targetProdId)) ?? null;
           } catch (e) {
-            // 反查失败不阻断：降级使用本地配置的兑换参数
-            this.logger.addLog('warn', `商品规格在线反查失败，改用本地配置参数: ${errorText(e)}`, { account: name });
+            this.logger.addLog('warn', `兑换前获取最新商品列表失败，跳过本次自动兑换: ${errorText(e)}`, { account: name });
+            continue;
+          }
+          if (!resolvedReward) {
+            this.logger.addLog('warn', `目标商品 ${rConf.targetProdId} 不在官方在售列表中，跳过本次自动兑换`, { account: name });
+            rConf.lastRedeemDate = today;
+            this.profileManager.saveToDisk();
+            continue;
           }
 
           // 九江专属积分(20)商品不参与自动兑换

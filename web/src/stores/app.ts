@@ -4,6 +4,10 @@ import { toast } from 'vue-sonner';
 import { confirmDelete } from '@/shared/ui/confirm';
 import { router } from '@/router';
 
+// 兑换在服务端为异步任务，前端按此节奏轮询终态；最长链路(等订单生效+重启重试)约 225s，留足余量
+const REDEEM_POLL_INTERVAL_MS = 2000;
+const REDEEM_POLL_TIMEOUT_MS = 15 * 60 * 1000;
+
 export interface Desktop {
   id: string;
   desktopCode: string;
@@ -715,81 +719,6 @@ export const useAppStore = defineStore('app', () => {
   const policyDesktops = ref<Desktop[]>([]);
   const policyTargetProdId = ref<number | ''>(17024101);
   const policyRedeemCount = ref(1);
-  const LOCAL_DEFAULT_REWARDS = [
-    {
-      prodId: 17023101,
-      prodName: '8C16G升配包1天',
-      costPoints: 500,
-      prodType: 'pointstplupgrade',
-      costPointType: 1,
-      description: '可将AI云电脑（公众版、政企版）升配至8C16G，最多支持兑换365天；规格升配、重置均会重启AI云电脑，请注意保存数据',
-    },
-    {
-      prodId: 17023111,
-      prodName: '16C32G升配包1天',
-      costPoints: 1000,
-      prodType: 'pointstplupgrade',
-      costPointType: 1,
-      description: '可将AI云电脑（政企版）升配至16C32G，最多支持兑换365天；规格升配、恢复均会重启AI云电脑，请注意保存数据',
-    },
-    {
-      prodId: 17026101,
-      prodName: 'XC云电脑8C16G升配包',
-      costPoints: 500,
-      prodType: 'pointstplupgrade',
-      costPointType: 10,
-      description: 'XC云电脑规格升配包，规格升配会重启AI云电脑，请注意保存数据',
-    },
-    {
-      prodId: 17026111,
-      prodName: 'XC云电脑16C32G升配包',
-      costPoints: 1000,
-      prodType: 'pointstplupgrade',
-      costPointType: 10,
-      description: 'XC云电脑规格升配包，规格升配会重启AI云电脑，请注意保存数据',
-    },
-    {
-      prodId: 17021101,
-      prodName: '天翼AI云手机1个月试用',
-      costPoints: 9000,
-      prodType: 'pointscomputer',
-      costPointType: 1,
-      description: '权益：天翼AI云手机包月不限时，有效期1个月',
-    },
-    {
-      prodId: 17022101,
-      prodName: '游戏AI云电脑包月5小时试用',
-      costPoints: 7500,
-      prodType: 'pointscomputer',
-      costPointType: 1,
-      description: '权益：游戏AI云电脑包月5小时试用，有效期1个月',
-    },
-    {
-      prodId: 17010101,
-      prodName: '专属智库1G存储空间',
-      costPoints: 1000,
-      prodType: 'cpcai',
-      costPointType: 1,
-      description: '权益：基于当前AI应用中心存储空间，叠加1G存储空间，每月限兑5次',
-    },
-    {
-      prodId: 17020101,
-      prodName: 'AI应用中心高级版',
-      costPoints: 1000,
-      prodType: 'cpcai',
-      costPointType: 1,
-      description: '权益：AI应用中心高级版，支持DeepSeek满血版、专属智库等，有效期1个月',
-    },
-    {
-      prodId: 17024101,
-      prodName: '1G数据盘永久扩容',
-      costPoints: 1200,
-      prodType: 'pointsdiskupgrade',
-      costPointType: 1,
-      description: '兑换后，将自动创建1个新数据盘，该盘仅支持积分扩容，最大不超过500GB',
-    },
-  ];
-
   function sortRewardsList(items: any[]) {
     const priorityOrder = [17023101, 17023111, 17026101, 17026111, 17021101, 17022101, 17010101, 17020101, 17024101];
     return [...items].sort((a, b) => {
@@ -815,25 +744,30 @@ export const useAppStore = defineStore('app', () => {
       totalCount?: number;
       totalLimitSize?: number;
     }>
-  >(sortRewardsList(LOCAL_DEFAULT_REWARDS));
+  >([]);
   const policyLoading = ref(false);
 
   const policyRewardsLoading = ref(false);
+  const policyRedeemLoading = ref(false);
 
   async function refreshPolicyRewards() {
     policyRewardsLoading.value = true;
     try {
       const acc = accounts.value.find((a) => a.name === policyAccount.value);
       const res = await fetch(
-        `/api/rewards?profileId=${encodeURIComponent(acc?.name || policyAccount.value)}&refresh=1&_t=${Date.now()}`,
+        `/api/rewards?profileId=${encodeURIComponent(acc?.name || policyAccount.value)}&_t=${Date.now()}`,
         { headers: getHeaders() },
       );
       const json = await res.json();
       if (json.success && Array.isArray(json.data) && json.data.length > 0) {
         policyRewards.value = sortRewardsList(json.data);
-        toast.success('已刷新官方商城最新商品');
+        // 目标商品已不在售时回落到第一项，避免下拉空白
+        if (!policyRewards.value.some((p) => Number(p.prodId) === Number(policyTargetProdId.value))) {
+          policyTargetProdId.value = Number(policyRewards.value[0].prodId);
+        }
+        toast.success('已同步官方商城最新商品');
       } else {
-        toast.info('官方暂未更新，保持现有商品目录');
+        toast.info('官方暂未返回商品数据，保持现有目录');
       }
     } catch {
       toast.error('刷新商品目录失败');
@@ -859,16 +793,21 @@ export const useAppStore = defineStore('app', () => {
     policyDesktops.value = account.desktops || [];
     showPolicyModal.value = true;
 
-    // 弹窗打开时，若尚未加载或商品列表为空，静默拉取服务端持久化的统一商品列表
-    if (policyRewards.value.length === 0) {
-      try {
-        const res = await fetch(`/api/rewards?_t=${Date.now()}`, { headers: getHeaders() });
-        const json = await res.json();
-        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-          policyRewards.value = sortRewardsList(json.data);
+    // 打开弹窗即向服务端同步官方最新商品目录；失败时保留现有列表
+    try {
+      const res = await fetch(
+        `/api/rewards?profileId=${encodeURIComponent(account.name)}&_t=${Date.now()}`,
+        { headers: getHeaders() },
+      );
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+        policyRewards.value = sortRewardsList(json.data);
+        // 配置中保存的目标商品已不在售时回落到第一项，避免下拉空白
+        if (!policyRewards.value.some((p) => Number(p.prodId) === Number(policyTargetProdId.value))) {
+          policyTargetProdId.value = Number(policyRewards.value[0].prodId);
         }
-      } catch {}
-    }
+      }
+    } catch {}
   }
 
   async function savePolicy() {
@@ -936,6 +875,7 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function manualRedeem(accountName: string) {
+    if (policyRedeemLoading.value) return;
     const r = policyRewards.value.find((p) => p.prodId === policyTargetProdId.value);
     const cost = r ? r.costPoints : 500;
     const name = r?.prodName || '官方商品';
@@ -944,6 +884,24 @@ export const useAppStore = defineStore('app', () => {
     const desktopId = policyTargetDesktop.value || undefined;
     const costPointType = r?.costPointType;
 
+    policyRedeemLoading.value = true;
+    // 升配/扩容类商品下单后需等待生效并重启云电脑，全程可能持续较久，用常驻 loading 反馈进展
+    const toastId = toast.loading(`正在执行兑换 [${name}]...`);
+
+    // 长耗时链路(订单生效→重试重启→重启中保活凭据短暂失败)期间订阅实时日志，
+    // 把本账号最新进度顶到 toast 上，避免用户以为卡死而重复点击
+    const stopProgressWatch = watch(
+      () => logs.value[logs.value.length - 1],
+      (last) => {
+        if (!last || last.account !== accountName) return;
+        if (!/兑换|订单生效|重启|凭据/.test(last.message || '')) return;
+        toast.loading(`兑换进行中：${last.message}`, { id: toastId });
+      },
+    );
+
+    // 服务端已异步化：拿到 taskId 后轮询终态，长链路不再占住单次请求
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
+    let polling = false;
     try {
       const res = await fetch(`/api/profiles/${encodeURIComponent(accountName)}/tasks/redeem`, {
         method: 'POST',
@@ -959,14 +917,50 @@ export const useAppStore = defineStore('app', () => {
         }),
       });
       const json = await res.json();
-      if (json.success) {
-        toast.success(json.msg || `成功兑换 [${name}]！`);
-      } else {
-        toast.error(json.msg || '兑换失败');
+      const taskId: string | undefined = json?.data?.taskId;
+      if (!json.success || !taskId) {
+        toast.error(json.msg || '兑换失败', { id: toastId });
+        return;
       }
-      fetchStatus();
+
+      const deadline = Date.now() + REDEEM_POLL_TIMEOUT_MS;
+      await new Promise<void>((resolve) => {
+        pollTimer = setInterval(async () => {
+          if (polling) return;
+          polling = true;
+          try {
+            if (Date.now() > deadline) {
+              toast.error('兑换仍在后台进行，请稍后在任务日志中确认结果', { id: toastId });
+              resolve();
+              return;
+            }
+            const sr = await fetch(`/api/tasks/redeem/${encodeURIComponent(taskId)}`, {
+              headers: getHeaders(),
+            });
+            const sj = await sr.json();
+            const t = sj?.data;
+            if (!t) return;
+            if (t.status === 'success') {
+              toast.success(t.message || `成功兑换 [${name}]！`, { id: toastId });
+              fetchStatus();
+              resolve();
+            } else if (t.status === 'error') {
+              toast.error(t.message || '兑换失败', { id: toastId });
+              resolve();
+            }
+          } catch {
+            // 单次轮询失败不中断，等下一轮
+          } finally {
+            polling = false;
+          }
+        }, REDEEM_POLL_INTERVAL_MS);
+      });
     } catch (e: any) {
-      toast.error(e.message || '兑换请求异常');
+      toast.error(e.message || '兑换请求异常', { id: toastId });
+    } finally {
+      if (pollTimer) clearInterval(pollTimer);
+      stopProgressWatch();
+      policyRedeemLoading.value = false;
     }
   }
 
@@ -1089,6 +1083,7 @@ export const useAppStore = defineStore('app', () => {
     policyRedeemCount,
     policyRewards,
     policyRewardsLoading,
+    policyRedeemLoading,
     refreshPolicyRewards,
     policyLoading,
     openPolicyModal,
@@ -1140,6 +1135,10 @@ export const useAppStore = defineStore('app', () => {
       prodType: string,
       desktopId?: string,
     ) => {
+      // 服务端已异步化：先取 taskId，再轮询终态
+      const toastId = toast.loading('正在执行兑换...');
+      let pollTimer: ReturnType<typeof setInterval> | undefined;
+      let polling = false;
       try {
         const res = await fetch(`/api/profiles/${encodeURIComponent(accountKey)}/tasks/redeem`, {
           method: 'POST',
@@ -1153,17 +1152,49 @@ export const useAppStore = defineStore('app', () => {
           }),
         });
         const json = await res.json();
-        if (json.success) {
-          toast.success(json.msg || '兑换成功！');
-          fetchStatus();
-          return true;
-        } else {
-          toast.error(json.msg || '兑换失败');
+        const taskId: string | undefined = json?.data?.taskId;
+        if (!json.success || !taskId) {
+          toast.error(json.msg || '兑换失败', { id: toastId });
           return false;
         }
+
+        const deadline = Date.now() + REDEEM_POLL_TIMEOUT_MS;
+        return await new Promise<boolean>((resolve) => {
+          pollTimer = setInterval(async () => {
+            if (polling) return;
+            polling = true;
+            try {
+              if (Date.now() > deadline) {
+                toast.error('兑换仍在后台进行，请稍后在任务日志中确认结果', { id: toastId });
+                resolve(false);
+                return;
+              }
+              const sr = await fetch(`/api/tasks/redeem/${encodeURIComponent(taskId)}`, {
+                headers: getHeaders(),
+              });
+              const sj = await sr.json();
+              const t = sj?.data;
+              if (!t) return;
+              if (t.status === 'success') {
+                toast.success(t.message || '兑换成功！', { id: toastId });
+                fetchStatus();
+                resolve(true);
+              } else if (t.status === 'error') {
+                toast.error(t.message || '兑换失败', { id: toastId });
+                resolve(false);
+              }
+            } catch {
+              // 单次轮询失败不中断，等下一轮
+            } finally {
+              polling = false;
+            }
+          }, REDEEM_POLL_INTERVAL_MS);
+        });
       } catch (e: any) {
-        toast.error(e.message || '兑换请求异常');
+        toast.error(e.message || '兑换请求异常', { id: toastId });
         return false;
+      } finally {
+        if (pollTimer) clearInterval(pollTimer);
       }
     },
     async getDesktopDirectUrl(desktopCode: string): Promise<string | null> {

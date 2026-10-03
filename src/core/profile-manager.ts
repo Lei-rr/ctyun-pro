@@ -757,8 +757,8 @@ export class ProfileManager {
     return this.tasksService.redeem(accountName, prodId, costPoints, prodType, desktopId, options);
   }
 
-  public async getAvailableRewards(accountName?: string, forceRefresh = false): Promise<RewardItem[]> {
-    return this.tasksService.getAvailableRewards(accountName, forceRefresh);
+  public async getAvailableRewards(accountName?: string): Promise<RewardItem[]> {
+    return this.tasksService.getAvailableRewards(accountName);
   }
 
   public async getPointsAndTasks(accountName: string): Promise<PointsSummary> {

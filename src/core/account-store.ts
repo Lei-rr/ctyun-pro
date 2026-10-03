@@ -3,7 +3,7 @@ import { Config, DEFAULT_REDEEM_CONFIG, type AccountConfig } from '../config.js'
 import { CtYunClient, type LoginInfo } from '../ctyun/client.js';
 import { AccountRepository } from '../services/account/repository.js';
 import { AccountSanitizer } from '../services/account/sanitizer.js';
-import { DEFAULT_LOCAL_REWARDS, type RewardItem } from '../services/reward/service.js';
+import type { RewardItem } from '../services/reward/service.js';
 import type { PointsSummary } from '../services/tasks/points.js';
 import type { ManagedAccount, ManagedDesktopState } from '../types.js';
 
@@ -26,7 +26,7 @@ export class AccountStore {
 
   public adminPassword = '';
   public webhookUrl = '';
-  public rewardsCache: RewardItem[] = [...DEFAULT_LOCAL_REWARDS];
+  public rewardsCache: RewardItem[] = [];
   public rewardsCacheUpdatedAt = 0;
 
   private repository = new AccountRepository();
@@ -231,7 +231,7 @@ export class AccountStore {
     for (const [name, acc] of data.accounts.entries()) {
       this.accounts.set(name, acc);
     }
-    this.rewardsCache = [...DEFAULT_LOCAL_REWARDS];
+    this.rewardsCache = [];
     this.rewardsCacheUpdatedAt = 0;
 
     const autoStartAccountNames: string[] = [];
