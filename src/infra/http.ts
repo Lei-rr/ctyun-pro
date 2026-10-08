@@ -1,4 +1,41 @@
+import https from 'node:https';
+import { Readable } from 'node:stream';
 import { globalApiGate } from './gate.js';
+
+/** 官方专用网络接入点以 IP 直连下发，证书为 *.ctyun.cn 通配符；Node fetch 不带 SNI 会误报 ERR_TLS_CERT_ALTNAME_INVALID */
+const IP_HOST_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+const IP_TLS_SERVERNAME = 'desk.ctyun.cn';
+
+/** IP 直连请求：改用 https.request 显式设置 servername，行为与 fetch 对齐（string body / 超时 / abort） */
+async function ipHostFetch(url: string | URL | Request, opts: RequestInit, signal: AbortSignal): Promise<Response> {
+  const u = typeof url === 'string' ? new URL(url) : url instanceof URL ? url : new URL(url.url);
+  const headers: Record<string, string> = {};
+  new Headers(opts.headers).forEach((v, k) => (headers[k] = v));
+  const body = typeof opts.body === 'string' || Buffer.isBuffer(opts.body) ? opts.body : undefined;
+  if (body) headers['content-length'] = String(Buffer.byteLength(body as string | Buffer));
+
+  const resp = await new Promise<import('node:http').IncomingMessage>((resolve, reject) => {
+    const req = https.request(
+      {
+        host: u.hostname,
+        port: u.port || 443,
+        path: u.pathname + u.search,
+        method: opts.method || 'GET',
+        headers,
+        servername: IP_TLS_SERVERNAME,
+      },
+      resolve,
+    );
+    req.on('error', reject);
+    signal.addEventListener('abort', () => req.destroy(new Error('aborted')), { once: true });
+    if (body) req.write(body);
+    req.end();
+  });
+
+  const respHeaders = new Headers();
+  for (let i = 0; i + 1 < resp.rawHeaders.length; i += 2) respHeaders.append(resp.rawHeaders[i], resp.rawHeaders[i + 1]);
+  return new Response(Readable.toWeb(resp) as ReadableStream, { status: resp.statusCode || 502, headers: respHeaders });
+}
 
 /** 超时与外部 signal 联动：统一 AbortController 生命周期 */
 function withTimeout(signal: AbortSignal | null | undefined, timeoutMs: number) {
@@ -28,6 +65,10 @@ export async function safeFetch(
   return globalApiGate.schedule(async () => {
     const t = withTimeout(fetchOpts.signal, timeoutMs);
     try {
+      const target = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+      if (IP_HOST_RE.test(new URL(target).hostname)) {
+        return await ipHostFetch(url, fetchOpts, t.signal);
+      }
       return await fetch(url, { ...fetchOpts, signal: t.signal });
     } finally {
       t.done();
