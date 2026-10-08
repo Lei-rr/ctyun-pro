@@ -162,7 +162,7 @@ export interface OrderStatisticsQuery {
 export class CtYunClient {
   public static readonly VERSION = '204000100';
   public static readonly DEVICE_TYPE = '60';
-  public static readonly BASE_URL = 'https://desk.ctyun.cn:8810';
+  public static readonly BASE_URL = 'https://sh9b-deskmgr.ctyun.cn:8810';
   public readonly baseUrl = CtYunClient.BASE_URL;
 
   private deviceCode: string;
@@ -932,7 +932,7 @@ export class CtYunClient {
   }
 
   /** 官方积分中心 (selforder SPA) 的接口根地址 (该 SPA 不启用请求体加密) */
-  public static readonly SELFORDER_URL = 'https://desk.ctyun.cn/selforder';
+  public static readonly SELFORDER_URL = 'https://sh9b-deskmgr.ctyun.cn:8810';
 
   /**
    * 同步用户基础信息 (对齐官方积分中心 /selforder/api/auth/client/syncUserInfo)

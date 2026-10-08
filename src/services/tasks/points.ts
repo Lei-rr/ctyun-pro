@@ -148,7 +148,7 @@ export interface PointDetailItem {
  * 严格对齐 desk.ctyun.cn/selforder/points 官方积分中心数据模型
  */
 export class PointsTask {
-  private static readonly SELFORDER_URL = 'https://desk.ctyun.cn/selforder';
+  private static readonly SELFORDER_URL = 'https://sh9b-deskmgr.ctyun.cn:8810';
 
   private static parseRewardPoints(pointsList: any[] | undefined): { points: TaskPointItem[]; rewardPoints: number } {
     const points: TaskPointItem[] = [];

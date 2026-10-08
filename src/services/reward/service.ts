@@ -122,14 +122,14 @@ export async function queryOrderStatistics(
  * 4. 兑换全流程审计闭环并记录日志
  */
 export class RewardRedeemService {
-  private static readonly DESK_URL = 'https://desk.ctyun.cn';
+  private static readonly DESK_URL = 'https://sh9b-deskmgr.ctyun.cn:8810';
 
   /**
    * 查询官方在线在售积分商品 (严格对齐官方 points.html: prodId=17000000&prodCode=POINTS)
    * 过滤 prodStatus != 2 (非在售) 与已过期商品，并排除九江专属积分(20)商品
    */
   public static async getAvailableRewards(client: CtYunClient): Promise<RewardItem[]> {
-    const url = `${RewardRedeemService.DESK_URL}/selforder/api/selforder/prod/get?prodId=17000000&prodCode=POINTS`;
+    const url = `${RewardRedeemService.DESK_URL}/api/selforder/prod/get?prodId=17000000&prodCode=POINTS`;
     const rewards: RewardItem[] = [];
 
     try {
@@ -361,7 +361,7 @@ export class RewardRedeemService {
       attrs.push({ attrKey: 'bindDesktopId', attrVal: numDesktopId });
     }
 
-    const url = `${RewardRedeemService.DESK_URL}/selforder/api/selforder/paas/placeOrder`;
+    const url = `${RewardRedeemService.DESK_URL}/api/selforder/paas/placeOrder`;
     // 官方参数规则：pointType = costPointType，points = costPoints * 数量
     const payload = {
       busiChannel: '010',

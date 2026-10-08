@@ -168,7 +168,7 @@ export function registerDesktopProxyRoutes(
 </style>
 <div id="ctyun-modern-loader">
   <div class="c-spinner"></div>
-  <div class="c-text">[ CTYUN-PRO ] 正在初始化连接云电脑...</div>
+  <div class="c-text">CTYUN-PRO</div>
 </div>
 <script>
 (function() {
