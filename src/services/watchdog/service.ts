@@ -251,8 +251,8 @@ export class WatchdogService {
         this.logger.addLog('warn', `自愈唤醒失败: ${errorText(startErr)}`, { account: accountName, desktop: dName });
       }
 
-      // 精准接续恢复该桌面的保活长连接
-      this.profileManager.getKeepaliveService().resumeWorkerForDesktop(accountName, desktopCode);
+      // 精准接续恢复该桌面的保活长连接；Worker 不存在时回退整账号重新同步
+      await this.profileManager.resumeDesktopKeepalive(accountName, desktopCode);
     } catch (err) {
       this.logger.addLog('warn', `探针检测失败: ${errorText(err)}`, { account: accountName, desktop: dName });
       // 网络或临时异常仍继续安排下一次

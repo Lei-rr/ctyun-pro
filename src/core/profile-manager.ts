@@ -179,6 +179,16 @@ export class ProfileManager {
       if (this.isWebUserActive(targetCode) || this.isWebUserActive(String(desktopId))) return;
       this.watchdogService.startWatchdog(accountName, targetCode);
     });
+
+    // 启动等待超时 → 同样转交自愈看门狗 (覆盖从未建立连接的桌面: 无让位事件也需接管兜底)
+    this.keepaliveService.on('desktop:startTimeout', ({ accountName, desktopId, desktopCode }) => {
+      const targetCode = String(desktopCode || desktopId || '');
+      const acc = this.store.accounts.get(accountName);
+      if (!acc || acc.autoStart === false) return;
+      if (this.isManualShutdown(targetCode) || this.isManualShutdown(String(desktopId))) return;
+      if (this.isWebUserActive(targetCode) || this.isWebUserActive(String(desktopId))) return;
+      this.watchdogService.startWatchdog(accountName, targetCode);
+    });
   }
 
   public getWatchdogService(): WatchdogService {
@@ -227,7 +237,7 @@ export class ProfileManager {
   /**
    * 恢复指定桌面的保活；Worker 已被移除时回退为整账号重新同步，确保必然恢复
    */
-  private async resumeDesktopKeepalive(accountName: string, desktopCode: string): Promise<void> {
+  public async resumeDesktopKeepalive(accountName: string, desktopCode: string): Promise<void> {
     const acc = this.store.accounts.get(accountName);
     if (!acc || acc.autoStart === false) return;
     const resumed = await this.keepaliveService.resumeWorkerForDesktop(accountName, desktopCode);

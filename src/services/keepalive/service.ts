@@ -215,11 +215,13 @@ export class KeepaliveService extends EventEmitter {
       let isRunning = normalizeUseStatusText(d.useStatusText) === 'running';
       if (!isRunning) {
         const textKind = normalizeUseStatusText(d.useStatusText);
-        const isSleep = textKind === 'suspended';
+        let isSleep = textKind === 'suspended';
         const isOff = textKind === 'stopped';
         let cmdSent = false;
         const backupUrl = Array.isArray(d.backupurl) && d.backupurl.length > 0 ? d.backupurl[0] : undefined;
 
+        // 服务端"已关机"文案可能实为休眠 (官方休眠态同文案)，仅凭文案判定不可靠:
+        // 主指令被拒时按 on<->awake 互补回退，避免休眠实例永不唤醒、关机实例永不启动。
         if (isSleep) {
           this.logger.addLog('info', '云电脑休眠中，正在发送唤醒指令', { account: accountName, desktop: dName });
           try {
@@ -227,8 +229,14 @@ export class KeepaliveService extends EventEmitter {
             this.logger.addLog('info', '唤醒指令已发送，等待启动就绪 (最长 5 分钟)', { account: accountName, desktop: dName });
             cmdSent = true;
           } catch (e) {
-            const err = errorText(e);
-            this.logger.addLog('error', `唤醒失败: ${err}`, { account: accountName, desktop: dName });
+            try {
+              await client.operateDesktop(d.desktopId, 'on', d.objType, backupUrl);
+              this.logger.addLog('info', '唤醒被拒 (实例实为关机)，已回退发送开机指令，等待启动就绪 (最长 5 分钟)', { account: accountName, desktop: dName });
+              isSleep = false;
+              cmdSent = true;
+            } catch (e2) {
+              this.logger.addLog('error', `唤醒失败: ${errorText(e)}；开机回退亦失败: ${errorText(e2)}`, { account: accountName, desktop: dName });
+            }
           }
         } else if (isOff) {
           this.logger.addLog('info', '云电脑已关机，正在发送开机指令', { account: accountName, desktop: dName });
@@ -237,8 +245,14 @@ export class KeepaliveService extends EventEmitter {
             this.logger.addLog('info', '开机指令已发送，等待启动就绪 (最长 5 分钟)', { account: accountName, desktop: dName });
             cmdSent = true;
           } catch (e) {
-            const err = errorText(e);
-            this.logger.addLog('error', `开机失败: ${err}`, { account: accountName, desktop: dName });
+            try {
+              await client.operateDesktop(d.desktopId, 'awake', d.objType, backupUrl);
+              this.logger.addLog('info', '开机被拒 (实例实为休眠)，已回退发送唤醒指令，等待启动就绪 (最长 5 分钟)', { account: accountName, desktop: dName });
+              isSleep = true;
+              cmdSent = true;
+            } catch (e2) {
+              this.logger.addLog('error', `开机失败: ${errorText(e)}；唤醒回退亦失败: ${errorText(e2)}`, { account: accountName, desktop: dName });
+            }
           }
         }
 
@@ -294,7 +308,8 @@ export class KeepaliveService extends EventEmitter {
           }
 
           if (!ready) {
-            this.logger.addLog('warn', '启动等待超时 (5 分钟)，看门狗稍后自动巡检', { account: accountName, desktop: dName });
+            this.logger.addLog('warn', '启动等待超时 (5 分钟)，转交看门狗自动巡检', { account: accountName, desktop: dName });
+            this.emit('desktop:startTimeout', { accountName, desktopId: d.desktopId, desktopCode: d.desktopCode });
             continue;
           }
         }
