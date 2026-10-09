@@ -51,6 +51,7 @@ jobs:
             release-bin/ctyun-pro-linux-amd64
             release-bin/ctyun-pro-linux-arm64
             release-bin/ctyun-pro-windows-x64.exe
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
